@@ -4,6 +4,7 @@ import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
 import { calendarToday } from './calendar'
+import { ChatManager } from './chat/agent'
 import * as tasks from '../core/repo/tasks'
 import * as projects from '../core/repo/projects'
 import * as people from '../core/repo/people'
@@ -133,4 +134,13 @@ export function registerIpc(): void {
     const { files } = exportMarkdown(db, dir)
     return { files, dir }
   })
+
+  const chat = new ChatManager(
+    db,
+    (event) => broadcast('chat:event', event),
+    (entity) => broadcast('db:changed', { entity })
+  )
+  handle('chat:send', (localSessionId, text) => chat.send(localSessionId, text))
+  handle('chat:interrupt', (localSessionId) => chat.interrupt(localSessionId))
+  handle('chat:sessions', () => chat.listSessions())
 }

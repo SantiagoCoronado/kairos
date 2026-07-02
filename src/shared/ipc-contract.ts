@@ -82,7 +82,25 @@ export interface IpcApi {
   'capture:hide': () => void
 
   'export:markdown': () => { files: number; dir: string }
+
+  'chat:send': (localSessionId: string | null, text: string) => { localSessionId: string }
+  'chat:interrupt': (localSessionId: string) => void
+  'chat:sessions': () => ChatSessionInfo[]
 }
+
+export interface ChatSessionInfo {
+  id: string
+  title: string
+  updated_at: string
+}
+
+export type ChatStreamEvent = { localSessionId: string } & (
+  | { kind: 'delta'; text: string }
+  | { kind: 'tool'; name: string }
+  | { kind: 'assistant_done' }
+  | { kind: 'done' }
+  | { kind: 'error'; message: string }
+)
 
 export type CaptureSubmitResult =
   | { ok: true; message: string }
@@ -91,6 +109,7 @@ export type CaptureSubmitResult =
 export interface IpcEvents {
   'db:changed': { entity: import('../core/types').DbEntity }
   'capture:reset': Record<string, never>
+  'chat:event': ChatStreamEvent
 }
 
 export type IpcChannel = keyof IpcApi

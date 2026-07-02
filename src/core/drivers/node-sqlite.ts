@@ -1,9 +1,14 @@
 // node:sqlite adapter — used by the standalone MCP server so it can run on
 // plain Node (>=22.5) with zero native-module rebuilds. Do not import from
 // Electron code; better-sqlite3 is the adapter there.
-import { DatabaseSync, type StatementSync } from 'node:sqlite'
+import type { StatementSync } from 'node:sqlite'
 import type { DbDriver, SqlValue, RunResult } from '../driver'
 import { OPEN_PRAGMAS, runTransaction } from '../driver'
+
+// process.getBuiltinModule instead of a static import: esbuild (tsup) does
+// not recognize the node:sqlite builtin and rewrites the specifier to a
+// nonexistent "sqlite" package when bundling the MCP server.
+const { DatabaseSync } = process.getBuiltinModule('node:sqlite')
 
 export function openNodeSqliteDb(path: string): DbDriver {
   const db = new DatabaseSync(path)

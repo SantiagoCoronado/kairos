@@ -100,6 +100,19 @@ export function upsertPerson(db: DbDriver, input: PersonUpsert, now: Date = new 
   return getPerson(db, id)!
 }
 
+/** Resolve a loose person reference: id, exact name/nickname, then first search hit. */
+export function resolvePersonRef(db: DbDriver, ref: string): Person | undefined {
+  const byId = getPerson(db, ref)
+  if (byId) return byId
+  const exact = db.get<Person>(
+    'SELECT * FROM people WHERE archived_at IS NULL AND (lower(name) = lower(?) OR lower(nickname) = lower(?))',
+    ref,
+    ref
+  )
+  if (exact) return exact
+  return listPeople(db, { search: ref })[0]
+}
+
 export function archivePerson(db: DbDriver, id: string, now: Date = new Date()): void {
   db.run('UPDATE people SET archived_at = ?, updated_at = ? WHERE id = ?', nowIso(now), nowIso(now), id)
 }

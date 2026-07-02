@@ -89,7 +89,7 @@ export type CaptureSubmitResult =
   | { ok: false; message: string }
 
 export interface IpcEvents {
-  'db:changed': { entity: 'tasks' | 'people' | 'interactions' | 'objectives' | 'projects' | 'all' }
+  'db:changed': { entity: import('../core/types').DbEntity }
   'capture:reset': Record<string, never>
 }
 

@@ -143,7 +143,7 @@ export class ChatManager {
           permissionMode: 'default',
           // isolate from the user's global Claude config: without these the
           // CLI also loads user-scope MCP servers (including the standalone
-          // command-center server) and the model calls the wrong twin
+          // kairos server) and the model calls the wrong twin
           settingSources: [],
           strictMcpConfig: true,
           systemPrompt: SYSTEM_PROMPT,

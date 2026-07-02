@@ -92,9 +92,19 @@ export interface IpcApi {
   'settings:authStatus': () => Promise<AuthStatus>
 }
 
+export type ChatProvider = 'claude'
+export type ChatEffort = 'low' | 'medium' | 'high' | 'max'
+
 export interface AppSettings {
   captureHotkey: string
   claudePath: string | null
+  /** 0–60: how much desktop shows through the window (%) */
+  translucency: number
+  chatProvider: ChatProvider
+  /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
+  chatModel: string | null
+  /** reasoning effort; null = model default */
+  chatEffort: ChatEffort | null
 }
 
 export type AuthStatus =

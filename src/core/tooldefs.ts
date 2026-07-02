@@ -10,6 +10,7 @@ import * as projects from './repo/projects'
 import * as objectives from './repo/objectives'
 import { todayAgenda } from './repo/today'
 import { exportMarkdown } from './export/markdown'
+import { readMemory, saveMemory } from './memory'
 
 // Shared tool definitions for BOTH Claude surfaces:
 //  - the standalone stdio MCP server (terminal Claude Code)
@@ -341,6 +342,24 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
         const dir = join(ctx.dataDir, 'export')
         return { ...exportMarkdown(db, dir), dir }
       }
+    },
+    {
+      name: 'memory_read',
+      description:
+        'Read your persistent memory file (durable facts and preferences noted in past conversations).',
+      schema: {},
+      handler: () => ({ content: readMemory(ctx.dataDir) })
+    },
+    {
+      name: 'memory_save',
+      description:
+        'Save a durable fact/preference to persistent memory so future conversations know it. Use append for new facts; replace only to rewrite the whole file (e.g. pruning stale entries).',
+      schema: {
+        content: z.string().describe('markdown to remember; keep it short and factual'),
+        mode: z.enum(['append', 'replace']).optional().describe('default append')
+      },
+      handler: (a: { content: string; mode?: 'append' | 'replace' }) =>
+        saveMemory(ctx.dataDir, a.content, a.mode ?? 'append')
     }
   ]
 }

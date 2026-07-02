@@ -6,8 +6,10 @@
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
   /* brutalist monochrome base, one warm accent for "needs attention" */
-  --color-bg: #0a0a0b;
-  --color-panel: #111113;
+  /* bg + panel carry --bg-alpha so the window-translucency slider can let
+     the desktop show through; raised surfaces stay opaque so cards pop */
+  --color-bg: rgb(10 10 11 / var(--bg-alpha, 1));
+  --color-panel: rgb(17 17 19 / var(--bg-alpha, 1));
   --color-raised: #18181b;
   --color-border: #232327;
   --color-border-strong: #35353b;

@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { ViewId } from './Sidebar'
 import { api } from '../lib/api'
 
 export function CommandPalette({
   onNavigate,
-  onOpenPerson
+  onOpenPerson,
+  onToggleSidebar
 }: {
   onNavigate: (v: ViewId) => void
   onOpenPerson: (id: string) => void
+  onToggleSidebar: () => void
 }): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -124,6 +126,15 @@ export function CommandPalette({
                 }}
               >
                 <FileDown size={14} /> Export Markdown
+              </Item>
+              <Item
+                keywords={['hide', 'show', 'menu', 'collapse']}
+                onSelect={() => {
+                  onToggleSidebar()
+                  close()
+                }}
+              >
+                <PanelLeft size={14} /> Toggle Sidebar
               </Item>
             </Command.Group>
 

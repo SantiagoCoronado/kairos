@@ -21,7 +21,11 @@ export function createMainWindow(): BrowserWindow {
     title: 'Kairos',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 18 },
-    backgroundColor: '#0a0a0b',
+    // transparent so the renderer can dial window translucency via CSS alpha;
+    // at 0% the body paints fully opaque and this is indistinguishable from
+    // a solid window. Must be set at creation — it cannot be toggled later.
+    transparent: true,
+    backgroundColor: '#00000000',
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

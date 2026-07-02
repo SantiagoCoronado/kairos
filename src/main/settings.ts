@@ -1,15 +1,17 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import type { AppSettings } from '../shared/ipc-contract'
 import { DATA_DIR } from './db'
 
-export interface Settings {
-  captureHotkey: string
-  claudePath: string | null
-}
+export type Settings = AppSettings
 
 const DEFAULTS: Settings = {
   captureHotkey: 'Alt+Space',
-  claudePath: null
+  claudePath: null,
+  translucency: 0,
+  chatProvider: 'claude',
+  chatModel: null,
+  chatEffort: null
 }
 
 const FILE = join(DATA_DIR, 'settings.json')
@@ -28,6 +30,7 @@ export function getSettings(): Settings {
 
 export function saveSettings(patch: Partial<Settings>): Settings {
   const next = { ...getSettings(), ...patch }
+  next.translucency = Math.min(60, Math.max(0, next.translucency))
   mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(FILE, JSON.stringify(next, null, 2) + '\n')
   cached = next

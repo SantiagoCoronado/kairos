@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { PanelLeft } from 'lucide-react'
 import { Sidebar, type ViewId } from './components/Sidebar'
 import { CommandPalette } from './components/CommandPalette'
 import { TodayView } from './views/Today'
@@ -6,10 +7,39 @@ import { PeopleView } from './views/People'
 import { TasksView } from './views/Tasks'
 import { ObjectivesView } from './views/Objectives'
 import { ChatView } from './views/Chat'
+import { api } from './lib/api'
+import { applyTranslucency } from './lib/translucency'
+
+const SIDEBAR_KEY = 'kairos.sidebarHidden'
 
 export default function App(): React.JSX.Element {
   const [view, setView] = useState<ViewId>('today')
   const [personId, setPersonId] = useState<string | null>(null)
+  const [sidebarHidden, setSidebarHidden] = useState(
+    () => localStorage.getItem(SIDEBAR_KEY) === '1'
+  )
+
+  useEffect(() => {
+    void api.invoke('settings:get').then((s) => applyTranslucency(s.translucency))
+  }, [])
+
+  const toggleSidebar = (): void => {
+    setSidebarHidden((h) => {
+      localStorage.setItem(SIDEBAR_KEY, h ? '0' : '1')
+      return !h
+    })
+  }
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent): void => {
+      if (e.key === 'b' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        toggleSidebar()
+      }
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [])
 
   const openPerson = (id: string): void => {
     setPersonId(id)
@@ -18,13 +48,19 @@ export default function App(): React.JSX.Element {
 
   return (
     <div className="flex h-full">
-      <Sidebar view={view} onNavigate={setView} />
-      <main className="flex-1 min-w-0 flex flex-col">
-        <div className="drag-region h-11 shrink-0 border-b border-border flex items-center justify-between px-4">
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted">
-            {view}
-          </span>
-          <span className="font-mono text-[10px] text-faint">⌘K</span>
+      {!sidebarHidden && <Sidebar view={view} onNavigate={setView} onHide={toggleSidebar} />}
+      <main className="relative flex-1 min-w-0 flex flex-col">
+        {/* headerless: an invisible strip keeps the window draggable */}
+        <div className="drag-region absolute top-0 inset-x-0 h-6 z-40">
+          {sidebarHidden && (
+            <button
+              onClick={toggleSidebar}
+              title="Show sidebar (⌘B)"
+              className="absolute left-20 top-1.5 text-faint hover:text-text"
+            >
+              <PanelLeft size={14} />
+            </button>
+          )}
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto">
           {view === 'today' && <TodayView onOpenPerson={openPerson} />}
@@ -34,7 +70,7 @@ export default function App(): React.JSX.Element {
           {view === 'chat' && <ChatView />}
         </div>
       </main>
-      <CommandPalette onNavigate={setView} onOpenPerson={openPerson} />
+      <CommandPalette onNavigate={setView} onOpenPerson={openPerson} onToggleSidebar={toggleSidebar} />
     </div>
   )
 }

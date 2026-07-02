@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { DbDriver } from '../../core/driver'
 import { buildToolDefs } from '../../core/tooldefs'
+import { readMemory } from '../../core/memory'
 import { newId, nowIso } from '../../core/ids'
 import type { ChatStreamEvent, ChatSessionInfo } from '../../shared/ipc-contract'
 import { DATA_DIR } from '../db'
@@ -22,7 +23,15 @@ Rules:
 - Use the tools rather than guessing; check today_agenda or followups_due before making claims about what is due.
 - Log interactions and create tasks when asked, then confirm briefly what changed.
 - Be concise. This is a dense desktop panel, not a chat website. No filler, no headers unless listing many items.
-- When asked to plan (a week, a day), read open tasks, due follow-ups, and objectives first, then propose concrete, small actions.`
+- When asked to plan (a week, a day), read open tasks, due follow-ups, and objectives first, then propose concrete, small actions.
+- You have a persistent memory file (memory_read / memory_save). When Santiago shares something durable — a preference, recurring context, how he likes things done — save it with memory_save (mode append). Keep entries short and factual; rewrite the whole file with mode replace only to prune stale entries. Its current content is included below; you do not need memory_read unless you suspect it changed mid-conversation.`
+
+// Memory is re-read every turn so edits (by the user, the MCP twin, or a
+// previous turn) are always reflected.
+function buildSystemPrompt(): string {
+  const memory = readMemory(DATA_DIR).trim()
+  return `${SYSTEM_PROMPT}\n\n## Persistent memory\n${memory || '(empty — nothing saved yet)'}`
+}
 
 type SessionRow = {
   id: string
@@ -114,6 +123,7 @@ export class ChatManager {
 
   private async runTurn(session: SessionRow, text: string): Promise<void> {
     const sid = session.id
+    const settings = getSettings()
     const env: Record<string, string | undefined> = { ...process.env }
     // subscription auth, never API-key billing
     delete env['ANTHROPIC_API_KEY']
@@ -146,7 +156,9 @@ export class ChatManager {
           // kairos server) and the model calls the wrong twin
           settingSources: [],
           strictMcpConfig: true,
-          systemPrompt: SYSTEM_PROMPT,
+          systemPrompt: buildSystemPrompt(),
+          model: settings.chatModel ?? undefined,
+          effort: settings.chatEffort ?? undefined,
           includePartialMessages: true,
           maxTurns: 30,
           cwd: DATA_DIR,

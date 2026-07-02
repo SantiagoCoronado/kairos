@@ -105,4 +105,7 @@ export function registerIpc(): void {
   handle('krs:tasks', (krId) => objectives.tasksForKr(db, krId))
 
   handle('today:get', () => todayAgenda(db))
+
+  // real implementation arrives with the Swift EventKit helper (M8)
+  handle('calendar:today', () => ({ error: 'helper-missing' as const }))
 }

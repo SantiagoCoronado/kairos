@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { writeFileSync } from 'node:fs'
 import { createMainWindow } from './windows/main-window'
 import { registerIpc } from './ipc'
 import { closeDb } from './db'
@@ -15,7 +16,18 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     registerIpc()
-    createMainWindow()
+    const win = createMainWindow()
+
+    // dev-only self-screenshot: DEBUG_SHOT=/path.png [DEBUG_VIEW=tasks] npx electron .
+    const shotPath = process.env['DEBUG_SHOT']
+    if (shotPath && !app.isPackaged) {
+      setTimeout(() => {
+        void win.webContents.capturePage().then((img) => {
+          writeFileSync(shotPath, img.toPNG())
+          console.log(`[debug] screenshot written: ${shotPath}`)
+        })
+      }, 2500)
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow()

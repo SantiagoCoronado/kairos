@@ -75,6 +75,8 @@ export interface IpcApi {
   'krs:tasks': (krId: string) => Task[]
 
   'today:get': () => TodayPayload
+
+  'calendar:today': () => CalendarResult
 }
 
 export interface IpcEvents {

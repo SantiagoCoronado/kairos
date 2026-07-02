@@ -5,6 +5,9 @@ import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
 import { calendarToday } from './calendar'
 import { ChatManager } from './chat/agent'
+import { getSettings, saveSettings } from './settings'
+import { reregisterCaptureHotkey } from './hotkey'
+import { execFile } from 'node:child_process'
 import * as tasks from '../core/repo/tasks'
 import * as projects from '../core/repo/projects'
 import * as people from '../core/repo/people'
@@ -143,4 +146,41 @@ export function registerIpc(): void {
   handle('chat:send', (localSessionId, text) => chat.send(localSessionId, text))
   handle('chat:interrupt', (localSessionId) => chat.interrupt(localSessionId))
   handle('chat:sessions', () => chat.listSessions())
+
+  handle('settings:get', () => getSettings())
+  handle('settings:set', (patch) => {
+    const before = getSettings().captureHotkey
+    const next = saveSettings(patch)
+    if (next.captureHotkey !== before) reregisterCaptureHotkey(next.captureHotkey)
+    return next
+  })
+  handle('settings:authStatus', () => checkAuthStatus())
+}
+
+function checkAuthStatus(): Promise<import('../shared/ipc-contract').AuthStatus> {
+  return new Promise((resolve) => {
+    const env = { ...process.env }
+    delete env['ANTHROPIC_API_KEY']
+    env['PATH'] = [env['PATH'], '/opt/homebrew/bin', '/usr/local/bin'].filter(Boolean).join(':')
+    execFile('claude', ['auth', 'status'], { env, timeout: 15_000 }, (err, stdout) => {
+      if (err) {
+        resolve({ ok: false, message: 'claude CLI not reachable — is Claude Code installed?' })
+        return
+      }
+      try {
+        const s = JSON.parse(stdout) as {
+          loggedIn: boolean
+          email?: string
+          subscriptionType?: string
+        }
+        resolve(
+          s.loggedIn
+            ? { ok: true, email: s.email ?? '?', subscriptionType: s.subscriptionType ?? '?' }
+            : { ok: false, message: 'not logged in — run `claude login` in a terminal' }
+        )
+      } catch {
+        resolve({ ok: false, message: 'could not parse `claude auth status` output' })
+      }
+    })
+  })
 }

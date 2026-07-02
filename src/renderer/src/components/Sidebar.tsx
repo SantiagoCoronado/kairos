@@ -1,4 +1,6 @@
-import { Sun, Users, CheckSquare, Target, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings } from 'lucide-react'
+import { SettingsModal } from './SettingsModal'
 
 export type ViewId = 'today' | 'people' | 'tasks' | 'objectives' | 'chat'
 
@@ -17,6 +19,7 @@ export function Sidebar({
   view: ViewId
   onNavigate: (v: ViewId) => void
 }): React.JSX.Element {
+  const [showSettings, setShowSettings] = useState(false)
   return (
     <aside className="w-52 shrink-0 border-r border-border bg-panel flex flex-col">
       {/* space for macOS traffic lights */}
@@ -35,11 +38,19 @@ export function Sidebar({
           </button>
         ))}
       </nav>
-      <div className="px-4 py-3 border-t border-border">
+      <div className="px-4 py-3 border-t border-border flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
           command center
         </span>
+        <button
+          className="text-faint hover:text-text"
+          title="Settings"
+          onClick={() => setShowSettings(true)}
+        >
+          <Settings size={13} />
+        </button>
       </div>
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </aside>
   )
 }

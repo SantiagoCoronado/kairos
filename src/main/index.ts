@@ -1,7 +1,8 @@
 import { app, globalShortcut } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { createMainWindow } from './windows/main-window'
-import { createCaptureWindow, toggleCaptureWindow } from './windows/capture-window'
+import { createCaptureWindow } from './windows/capture-window'
+import { registerCaptureHotkey } from './hotkey'
 import { registerIpc } from './ipc'
 import { closeDb } from './db'
 
@@ -32,14 +33,7 @@ if (!gotLock) {
 
     // pre-create hidden so first summon is instant
     createCaptureWindow()
-    const registered = globalShortcut.register('Alt+Space', toggleCaptureWindow)
-    if (!registered) {
-      // shortcut taken (Raycast/Spotlight remaps are common) — try a fallback
-      const fallback = globalShortcut.register('CommandOrControl+Shift+Space', toggleCaptureWindow)
-      console.warn(
-        `[capture] Alt+Space unavailable; ${fallback ? 'using Ctrl/Cmd+Shift+Space' : 'no hotkey registered'}`
-      )
-    }
+    registerCaptureHotkey()
 
     // createMainWindow() reuses the live window; the hidden capture window
     // would defeat a getAllWindows().length === 0 check

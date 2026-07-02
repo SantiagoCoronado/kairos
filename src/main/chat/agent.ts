@@ -7,6 +7,7 @@ import { buildToolDefs } from '../../core/tooldefs'
 import { newId, nowIso } from '../../core/ids'
 import type { ChatStreamEvent, ChatSessionInfo } from '../../shared/ipc-contract'
 import { DATA_DIR } from '../db'
+import { getSettings } from '../settings'
 
 // The chat panel is an optional layer: the app never depends on it.
 // Auth rides the user's Claude Code subscription (`claude login`); an
@@ -208,6 +209,7 @@ export class ChatManager {
 
 function resolveClaudeBinary(): string | undefined {
   const candidates = [
+    getSettings().claudePath,
     process.env['CLAUDE_CODE_PATH'],
     join(homedir(), '.local/bin/claude'),
     '/opt/homebrew/bin/claude',

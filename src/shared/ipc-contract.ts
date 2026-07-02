@@ -86,7 +86,20 @@ export interface IpcApi {
   'chat:send': (localSessionId: string | null, text: string) => { localSessionId: string }
   'chat:interrupt': (localSessionId: string) => void
   'chat:sessions': () => ChatSessionInfo[]
+
+  'settings:get': () => AppSettings
+  'settings:set': (patch: Partial<AppSettings>) => AppSettings
+  'settings:authStatus': () => Promise<AuthStatus>
 }
+
+export interface AppSettings {
+  captureHotkey: string
+  claudePath: string | null
+}
+
+export type AuthStatus =
+  | { ok: true; email: string; subscriptionType: string }
+  | { ok: false; message: string }
 
 export interface ChatSessionInfo {
   id: string

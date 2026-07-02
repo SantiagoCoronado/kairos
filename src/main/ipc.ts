@@ -1,6 +1,8 @@
 import { ipcMain, BrowserWindow } from 'electron'
+import { join } from 'node:path'
 import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
-import { getDb } from './db'
+import { getDb, DATA_DIR } from './db'
+import { exportMarkdown } from '../core/export/markdown'
 import * as tasks from '../core/repo/tasks'
 import * as projects from '../core/repo/projects'
 import * as people from '../core/repo/people'
@@ -8,6 +10,8 @@ import * as interactions from '../core/repo/interactions'
 import * as followups from '../core/repo/followups'
 import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
+import { executeCapture } from '../core/capture'
+import { hideCaptureWindow } from './windows/capture-window'
 
 function handle<K extends keyof IpcApi>(
   channel: K,
@@ -108,4 +112,25 @@ export function registerIpc(): void {
 
   // real implementation arrives with the Swift EventKit helper (M8)
   handle('calendar:today', () => ({ error: 'helper-missing' as const }))
+
+  handle('capture:submit', (raw) => {
+    const result = executeCapture(db, raw)
+    if (!result.ok) return { ok: false as const, message: result.message }
+    broadcast('db:changed', { entity: result.kind === 'task' ? 'tasks' : 'interactions' })
+    if (result.kind === 'interaction') broadcast('db:changed', { entity: 'people' })
+    return {
+      ok: true as const,
+      message:
+        result.kind === 'task'
+          ? `Task: ${result.task.title}${result.task.due_date ? ` (due ${result.task.due_date})` : ''}`
+          : `Logged for ${result.person.name}`
+    }
+  })
+  handle('capture:hide', () => hideCaptureWindow())
+
+  handle('export:markdown', () => {
+    const dir = join(DATA_DIR, 'export')
+    const { files } = exportMarkdown(db, dir)
+    return { files, dir }
+  })
 }

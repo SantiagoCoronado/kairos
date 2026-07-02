@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { ViewId } from './Sidebar'
 import { api } from '../lib/api'
@@ -113,6 +113,17 @@ export function CommandPalette({
               </Item>
               <Item onSelect={() => go('chat')} keywords={['claude', 'ai']}>
                 <Sparkles size={14} /> Chat
+              </Item>
+            </Command.Group>
+
+            <Command.Group heading={<GroupLabel>actions</GroupLabel>}>
+              <Item
+                keywords={['backup', 'obsidian']}
+                onSelect={() => {
+                  void api.invoke('export:markdown').then(close)
+                }}
+              >
+                <FileDown size={14} /> Export Markdown
               </Item>
             </Command.Group>
 

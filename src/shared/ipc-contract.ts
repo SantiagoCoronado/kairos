@@ -77,10 +77,20 @@ export interface IpcApi {
   'today:get': () => TodayPayload
 
   'calendar:today': () => CalendarResult
+
+  'capture:submit': (raw: string) => CaptureSubmitResult
+  'capture:hide': () => void
+
+  'export:markdown': () => { files: number; dir: string }
 }
+
+export type CaptureSubmitResult =
+  | { ok: true; message: string }
+  | { ok: false; message: string }
 
 export interface IpcEvents {
   'db:changed': { entity: 'tasks' | 'people' | 'interactions' | 'objectives' | 'projects' | 'all' }
+  'capture:reset': Record<string, never>
 }
 
 export type IpcChannel = keyof IpcApi

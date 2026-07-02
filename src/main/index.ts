@@ -1,6 +1,7 @@
-import { app, BrowserWindow } from 'electron'
+import { app, globalShortcut } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { createMainWindow } from './windows/main-window'
+import { createCaptureWindow, toggleCaptureWindow } from './windows/capture-window'
 import { registerIpc } from './ipc'
 import { closeDb } from './db'
 
@@ -29,10 +30,25 @@ if (!gotLock) {
       }, 2500)
     }
 
+    // pre-create hidden so first summon is instant
+    createCaptureWindow()
+    const registered = globalShortcut.register('Alt+Space', toggleCaptureWindow)
+    if (!registered) {
+      // shortcut taken (Raycast/Spotlight remaps are common) — try a fallback
+      const fallback = globalShortcut.register('CommandOrControl+Shift+Space', toggleCaptureWindow)
+      console.warn(
+        `[capture] Alt+Space unavailable; ${fallback ? 'using Ctrl/Cmd+Shift+Space' : 'no hotkey registered'}`
+      )
+    }
+
+    // createMainWindow() reuses the live window; the hidden capture window
+    // would defeat a getAllWindows().length === 0 check
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+      createMainWindow()
     })
   })
+
+  app.on('will-quit', () => globalShortcut.unregisterAll())
 
   app.on('window-all-closed', () => {
     // Stay alive in the dock like a proper mac app; quit via Cmd+Q.

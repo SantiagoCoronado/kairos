@@ -14,7 +14,7 @@ import { getSettings } from '../settings'
 // exported ANTHROPIC_API_KEY would silently switch billing to the API
 // account, so it is stripped from the child env.
 
-const SYSTEM_PROMPT = `You are the assistant inside Command Center, Santiago's personal local CRM + task manager + objective tracker (macOS app, local SQLite).
+const SYSTEM_PROMPT = `You are the assistant inside Kairos, Santiago's personal local CRM + task manager + objective tracker (macOS app, local SQLite).
 
 You have tools over his real data: people (with follow-up cadences and interaction logs), tasks/projects, and quarterly objectives with key results. Areas partition everything into 'personal' and 'work'.
 
@@ -49,7 +49,7 @@ export class ChatManager {
 
     const defs = buildToolDefs(db, { dataDir: DATA_DIR, onMutate })
     this.server = createSdkMcpServer({
-      name: 'commandcenter',
+      name: 'kairos',
       version: '0.1.0',
       tools: defs.map((d) =>
         tool(d.name, d.description, d.schema, async (args) => {
@@ -69,7 +69,7 @@ export class ChatManager {
         })
       )
     })
-    this.allowedTools = defs.map((d) => `mcp__commandcenter__${d.name}`)
+    this.allowedTools = defs.map((d) => `mcp__kairos__${d.name}`)
   }
 
   listSessions(): ChatSessionInfo[] {
@@ -126,7 +126,7 @@ export class ChatManager {
       const q = query({
         prompt: text,
         options: {
-          mcpServers: { commandcenter: this.server },
+          mcpServers: { kairos: this.server },
           allowedTools: this.allowedTools,
           disallowedTools: [
             'Bash',
@@ -178,7 +178,7 @@ export class ChatManager {
             this.emit({
               localSessionId: sid,
               kind: 'tool',
-              name: (ev.content_block.name ?? 'tool').replace('mcp__commandcenter__', '')
+              name: (ev.content_block.name ?? 'tool').replace('mcp__kairos__', '')
             })
           }
         } else if (msg.type === 'assistant') {

@@ -40,7 +40,7 @@ export function Sidebar({
       </nav>
       <div className="px-4 py-3 border-t border-border flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
-          command center
+          kairos
         </span>
         <button
           className="text-faint hover:text-text"

@@ -1,7 +1,7 @@
 {
-  "name": "command-center",
+  "name": "kairos",
   "version": "0.1.0",
-  "description": "Local-first personal command center: CRM, tasks, objectives",
+  "description": "Kairos - local-first personal command center: CRM, tasks, objectives",
   "main": "./out/main/index.js",
   "author": "Santiago Coronado",
   "license": "MIT",

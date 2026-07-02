@@ -1,5 +1,5 @@
-appId: com.santiago.commandcenter
-productName: Command Center
+appId: com.santiago.kairos
+productName: Kairos
 directories:
   buildResources: build
   output: dist

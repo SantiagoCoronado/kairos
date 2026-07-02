@@ -1,6 +1,6 @@
-# Command Center
+# Kairos
 
-Local-first macOS command center: personal CRM, task management, and OKR-style
+Kairos — the opportune moment. A local-first macOS command center: personal CRM, task management, and OKR-style
 objectives for both personal life and work. Dark, keyboard-driven, one SQLite
 file you own. Claude is an optional layer — the app is fully usable without it.
 
@@ -12,10 +12,10 @@ file you own. Claude is an optional layer — the app is fully usable without it
 - **Objectives** — quarterly OKRs with key results, progress bars, linked tasks
 - **⌘K** — command palette: navigate, create tasks/people, jump to a person, export
 - **Alt+Space** — global quick capture from anywhere: `ship the deck @work !1 due:fri`, `p Anna had coffee`
-- **Export** — one-way Markdown mirror at `~/CommandCenter/export/` (Obsidian/git friendly)
+- **Export** — one-way Markdown mirror at `~/Kairos/export/` (Obsidian/git friendly)
 
-Data lives in `~/CommandCenter/data.db` (SQLite, WAL). Settings in
-`~/CommandCenter/settings.json`.
+Data lives in `~/Kairos/data.db` (SQLite, WAL). Settings in
+`~/Kairos/settings.json`.
 
 ## Claude integration (both optional)
 
@@ -26,7 +26,7 @@ Data lives in `~/CommandCenter/data.db` (SQLite, WAL). Settings in
 
    ```sh
    npm run build:mcp
-   claude mcp add --scope user command-center -- node <repo>/dist-mcp/index.mjs
+   claude mcp add --scope user kairos -- node <repo>/dist-mcp/index.mjs
    ```
 
    Then in any `claude` session: "what follow-ups are due?", "add a task to…".

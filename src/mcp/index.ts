@@ -3,7 +3,7 @@
 // same WAL database the app has open. stdout carries ONLY protocol frames;
 // all logging goes to stderr.
 //
-// Register: claude mcp add --scope user command-center -- node <repo>/dist-mcp/index.js
+// Register: claude mcp add --scope user kairos -- node <repo>/dist-mcp/index.js
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -15,13 +15,13 @@ import { migrate } from '../core/migrations'
 import { stderrLogger } from '../core/logger'
 import { buildToolDefs } from '../core/tooldefs'
 
-const dataDir = process.env['COMMAND_CENTER_DIR'] ?? join(homedir(), 'CommandCenter')
+const dataDir = process.env['KAIROS_DIR'] ?? join(homedir(), 'Kairos')
 mkdirSync(dataDir, { recursive: true })
 
 const db = openNodeSqliteDb(join(dataDir, 'data.db'))
 migrate(db, stderrLogger)
 
-const server = new McpServer({ name: 'command-center', version: '0.1.0' })
+const server = new McpServer({ name: 'kairos', version: '0.1.0' })
 
 for (const tool of buildToolDefs(db, { dataDir, onMutate: () => {} })) {
   server.registerTool(
@@ -43,4 +43,4 @@ for (const tool of buildToolDefs(db, { dataDir, onMutate: () => {} })) {
 }
 
 await server.connect(new StdioServerTransport())
-stderrLogger.info(`command-center MCP server ready (db: ${join(dataDir, 'data.db')})`)
+stderrLogger.info(`kairos MCP server ready (db: ${join(dataDir, 'data.db')})`)

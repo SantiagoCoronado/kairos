@@ -18,7 +18,7 @@ export function createMainWindow(): BrowserWindow {
     height: 820,
     minWidth: 960,
     minHeight: 600,
-    title: 'Command Center',
+    title: 'Kairos',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 18 },
     backgroundColor: '#0a0a0b',

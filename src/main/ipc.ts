@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
+import { calendarToday } from './calendar'
 import * as tasks from '../core/repo/tasks'
 import * as projects from '../core/repo/projects'
 import * as people from '../core/repo/people'
@@ -110,8 +111,7 @@ export function registerIpc(): void {
 
   handle('today:get', () => todayAgenda(db))
 
-  // real implementation arrives with the Swift EventKit helper (M8)
-  handle('calendar:today', () => ({ error: 'helper-missing' as const }))
+  handle('calendar:today', () => calendarToday())
 
   handle('capture:submit', (raw) => {
     const result = executeCapture(db, raw)

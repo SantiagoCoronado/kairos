@@ -8,7 +8,7 @@
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
-    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/patch-dev-electron-plist.js",
     "build": "electron-vite build && npm run build:mcp",
     "build:mcp": "tsup",
     "typecheck": "tsc --noEmit",

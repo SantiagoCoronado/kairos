@@ -8,6 +8,9 @@ files:
   - package.json
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
+extraResources:
+  - from: resources/calendar-helper
+    to: calendar-helper
 npmRebuild: true
 mac:
   identity: null # ad-hoc signing; personal app

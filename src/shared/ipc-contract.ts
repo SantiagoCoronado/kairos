@@ -76,7 +76,7 @@ export interface IpcApi {
 
   'today:get': () => TodayPayload
 
-  'calendar:today': () => CalendarResult
+  'calendar:today': () => Promise<CalendarResult>
 
   'capture:submit': (raw: string) => CaptureSubmitResult
   'capture:hide': () => void

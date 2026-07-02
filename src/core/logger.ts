@@ -15,6 +15,12 @@ export const noopLogger: Logger = {
   error: () => {}
 }
 
+export const consoleLogger: Logger = {
+  info: (m) => console.log(`[core] ${m}`),
+  warn: (m) => console.warn(`[core] ${m}`),
+  error: (m) => console.error(`[core] ${m}`)
+}
+
 export const stderrLogger: Logger = {
   info: (m) => process.stderr.write(`[info] ${m}\n`),
   warn: (m) => process.stderr.write(`[warn] ${m}\n`),

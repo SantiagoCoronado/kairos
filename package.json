@@ -19,10 +19,6 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
-    "cmdk": "^1.1.1",
-    "lucide-react": "^1.23.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
     "ulid": "^3.0.2"
   },
   "devDependencies": {
@@ -40,6 +36,10 @@
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vite": "^7.3.6",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "lucide-react": "^1.23.0",
+    "cmdk": "^1.1.1"
   }
 }

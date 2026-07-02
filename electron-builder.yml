@@ -1,0 +1,20 @@
+appId: com.santiago.commandcenter
+productName: Command Center
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+npmRebuild: true
+mac:
+  identity: null # ad-hoc signing; personal app
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: arm64
+  extendInfo:
+    NSCalendarsUsageDescription: Command Center shows today's events on your dashboard.
+    NSCalendarsFullAccessUsageDescription: Command Center shows today's events on your dashboard.

@@ -1,8 +1,30 @@
 import { useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 
 export type ViewId = 'today' | 'people' | 'tasks' | 'objectives' | 'chat'
+
+/** Sidebar toggle pinned next to the traffic lights (12px bubbles from x=18,
+ *  centerline y=24). Must be rendered INSIDE a .drag-region element — the
+ *  `.drag-region button` rule is what excludes it from the native drag area;
+ *  a floating element overlapping the region does not reliably punch a hole. */
+export function SidebarToggle({
+  hidden,
+  onToggle
+}: {
+  hidden: boolean
+  onToggle: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      onClick={onToggle}
+      title={hidden ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'}
+      className="absolute left-[86px] top-[11px] h-[26px] w-[26px] rounded-md flex items-center justify-center text-muted hover:text-text hover:bg-raised transition-colors"
+    >
+      <PanelLeft size={15} strokeWidth={1.75} />
+    </button>
+  )
+}
 
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
@@ -14,16 +36,20 @@ const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
 
 export function Sidebar({
   view,
-  onNavigate
+  onNavigate,
+  onHide
 }: {
   view: ViewId
   onNavigate: (v: ViewId) => void
+  onHide: () => void
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   return (
     <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col">
       {/* space for macOS traffic lights */}
-      <div className="drag-region h-11 shrink-0" />
+      <div className="drag-region h-11 shrink-0 relative">
+        <SidebarToggle hidden={false} onToggle={onHide} />
+      </div>
       <nav className="flex-1 px-2 py-2 space-y-0.5">
         {NAV.map(({ id, label, icon: Icon }) => (
           <button

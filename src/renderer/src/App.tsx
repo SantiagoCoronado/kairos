@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { PanelLeft } from 'lucide-react'
-import { Sidebar, type ViewId } from './components/Sidebar'
+import { Sidebar, SidebarToggle, type ViewId } from './components/Sidebar'
 import { CommandPalette } from './components/CommandPalette'
 import { TodayView } from './views/Today'
 import { PeopleView } from './views/People'
@@ -48,22 +47,17 @@ export default function App(): React.JSX.Element {
 
   return (
     <div className="flex h-full">
-      {/* sidebar toggle pinned next to the traffic lights (12px bubbles from
-          x=18, centerline y=24) — same spot regardless of sidebar state */}
-      <button
-        onClick={toggleSidebar}
-        title={sidebarHidden ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'}
-        className="no-drag fixed left-[86px] top-[11px] z-50 h-[26px] w-[26px] rounded-md flex items-center justify-center text-muted hover:text-text hover:bg-raised transition-colors"
-      >
-        <PanelLeft size={15} strokeWidth={1.75} />
-      </button>
-      {!sidebarHidden && <Sidebar view={view} onNavigate={setView} />}
+      {!sidebarHidden && <Sidebar view={view} onNavigate={setView} onHide={toggleSidebar} />}
       <main className="relative flex-1 min-w-0 flex flex-col bg-bg">
         {/* headerless, but the window must stay draggable. With the sidebar
             hidden the traffic lights float over this column, so reserve a
-            real titlebar row; otherwise an invisible strip is enough. */}
+            real titlebar row (carrying the toggle at the same window
+            coordinates the sidebar renders it); otherwise an invisible
+            strip is enough. */}
         {sidebarHidden ? (
-          <div className="drag-region h-12 shrink-0" />
+          <div className="drag-region h-12 shrink-0 relative">
+            <SidebarToggle hidden onToggle={toggleSidebar} />
+          </div>
         ) : (
           <div className="drag-region absolute top-0 inset-x-0 h-6 z-40" />
         )}

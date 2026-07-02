@@ -66,6 +66,9 @@ textarea,
 .drag-region input {
   -webkit-app-region: no-drag;
 }
+.no-drag {
+  -webkit-app-region: no-drag;
+}
 
 ::-webkit-scrollbar {
   width: 8px;

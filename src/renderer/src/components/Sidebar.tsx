@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeftClose } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 
 export type ViewId = 'today' | 'people' | 'tasks' | 'objectives' | 'chat'
@@ -14,12 +14,10 @@ const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
 
 export function Sidebar({
   view,
-  onNavigate,
-  onHide
+  onNavigate
 }: {
   view: ViewId
   onNavigate: (v: ViewId) => void
-  onHide: () => void
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   return (
@@ -44,22 +42,13 @@ export function Sidebar({
         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-faint">
           kairos
         </span>
-        <div className="flex items-center gap-3">
-          <button
-            className="text-faint hover:text-text"
-            title="Hide sidebar (⌘B)"
-            onClick={onHide}
-          >
-            <PanelLeftClose size={13} />
-          </button>
-          <button
-            className="text-faint hover:text-text"
-            title="Settings"
-            onClick={() => setShowSettings(true)}
-          >
-            <Settings size={13} />
-          </button>
-        </div>
+        <button
+          className="text-faint hover:text-text"
+          title="Settings"
+          onClick={() => setShowSettings(true)}
+        >
+          <Settings size={13} />
+        </button>
       </div>
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </aside>

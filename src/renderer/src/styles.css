@@ -1,0 +1,67 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /* brutalist monochrome base, one warm accent for "needs attention" */
+  --color-bg: #0a0a0b;
+  --color-panel: #111113;
+  --color-raised: #18181b;
+  --color-border: #232327;
+  --color-border-strong: #35353b;
+  --color-text: #e8e8ea;
+  --color-muted: #8a8a92;
+  --color-faint: #55555c;
+  --color-accent: #e2b25a;
+  --color-danger: #e0685e;
+  --color-ok: #7fb47f;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+body.capture-body {
+  background: transparent;
+}
+
+input,
+textarea,
+[contenteditable] {
+  user-select: text;
+}
+
+/* macOS hiddenInset titlebar: make the top strip draggable */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.drag-region button,
+.drag-region input {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

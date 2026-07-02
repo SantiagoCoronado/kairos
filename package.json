@@ -1,0 +1,45 @@
+{
+  "name": "command-center",
+  "version": "0.1.0",
+  "description": "Local-first personal command center: CRM, tasks, objectives",
+  "main": "./out/main/index.js",
+  "author": "Santiago Coronado",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "build": "electron-vite build && npm run build:mcp",
+    "build:mcp": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "helper:build": "bash scripts/build-calendar-helper.sh",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "dist": "npm run helper:build && electron-vite build && electron-builder --mac"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "cmdk": "^1.1.1",
+    "lucide-react": "^1.23.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "ulid": "^3.0.2"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.1.0",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.2",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.9"
+  }
+}

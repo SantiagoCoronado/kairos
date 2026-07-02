@@ -50,18 +50,22 @@ export default function App(): React.JSX.Element {
     <div className="flex h-full">
       {!sidebarHidden && <Sidebar view={view} onNavigate={setView} onHide={toggleSidebar} />}
       <main className="relative flex-1 min-w-0 flex flex-col">
-        {/* headerless: an invisible strip keeps the window draggable */}
-        <div className="drag-region absolute top-0 inset-x-0 h-6 z-40">
-          {sidebarHidden && (
+        {/* headerless, but the window must stay draggable. With the sidebar
+            hidden the traffic lights float over this column, so reserve a
+            real titlebar row; otherwise an invisible strip is enough. */}
+        {sidebarHidden ? (
+          <div className="drag-region h-11 shrink-0 flex items-center">
             <button
               onClick={toggleSidebar}
               title="Show sidebar (⌘B)"
-              className="absolute left-20 top-1.5 text-faint hover:text-text"
+              className="ml-20 text-faint hover:text-text"
             >
               <PanelLeft size={14} />
             </button>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="drag-region absolute top-0 inset-x-0 h-6 z-40" />
+        )}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {view === 'today' && <TodayView onOpenPerson={openPerson} />}
           {view === 'people' && <PeopleView selectedId={personId} onSelect={setPersonId} />}

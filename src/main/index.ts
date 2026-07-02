@@ -20,14 +20,21 @@ if (!gotLock) {
     registerIpc()
     const win = createMainWindow()
 
-    // dev-only self-screenshot: DEBUG_SHOT=/path.png [DEBUG_VIEW=tasks] npx electron .
+    // dev-only self-screenshot: DEBUG_SHOT=/path.png [DEBUG_HIDE_SIDEBAR=1] npx electron .
     const shotPath = process.env['DEBUG_SHOT']
     if (shotPath && !app.isPackaged) {
       setTimeout(() => {
-        void win.webContents.capturePage().then((img) => {
-          writeFileSync(shotPath, img.toPNG())
-          console.log(`[debug] screenshot written: ${shotPath}`)
-        })
+        const prep = process.env['DEBUG_HIDE_SIDEBAR']
+          ? win.webContents.executeJavaScript(
+              `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }))`
+            )
+          : Promise.resolve()
+        void prep
+          .then(() => win.webContents.capturePage())
+          .then((img) => {
+            writeFileSync(shotPath, img.toPNG())
+            console.log(`[debug] screenshot written: ${shotPath}`)
+          })
       }, 2500)
     }
 

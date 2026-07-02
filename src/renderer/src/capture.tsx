@@ -37,7 +37,7 @@ function Capture(): React.JSX.Element {
 
   return (
     <div className="h-screen p-2">
-      <div className="h-full rounded-xl border border-border-strong bg-panel/95 shadow-2xl flex items-center gap-3 px-4">
+      <div className="h-full rounded-xl border border-border-strong bg-overlay/95 shadow-2xl flex items-center gap-3 px-4">
         <Zap size={16} className={flash?.ok ? 'text-ok' : 'text-accent'} />
         <input
           ref={inputRef}

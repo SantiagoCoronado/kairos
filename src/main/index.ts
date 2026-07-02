@@ -25,9 +25,14 @@ if (!gotLock) {
     if (shotPath && !app.isPackaged) {
       setTimeout(() => {
         const prep = process.env['DEBUG_HIDE_SIDEBAR']
-          ? win.webContents.executeJavaScript(
-              `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }))`
-            )
+          ? win.webContents
+              .executeJavaScript(
+                `if (document.querySelector('aside'))
+                   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }))`
+              )
+              // give React a beat to re-render and the compositor to paint
+              .then(() => new Promise((r) => setTimeout(r, 400)))
+              .catch((err) => console.error('[debug] sidebar toggle failed:', err))
           : Promise.resolve()
         void prep
           .then(() => win.webContents.capturePage())

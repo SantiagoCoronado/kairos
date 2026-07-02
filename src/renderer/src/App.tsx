@@ -49,18 +49,19 @@ export default function App(): React.JSX.Element {
   return (
     <div className="flex h-full">
       {!sidebarHidden && <Sidebar view={view} onNavigate={setView} onHide={toggleSidebar} />}
-      <main className="relative flex-1 min-w-0 flex flex-col">
+      <main className="relative flex-1 min-w-0 flex flex-col bg-bg">
         {/* headerless, but the window must stay draggable. With the sidebar
             hidden the traffic lights float over this column, so reserve a
             real titlebar row; otherwise an invisible strip is enough. */}
         {sidebarHidden ? (
-          <div className="drag-region h-11 shrink-0 flex items-center">
+          <div className="drag-region h-12 shrink-0 relative">
+            {/* traffic lights: 12px bubbles from x=18, centerline y=24 */}
             <button
               onClick={toggleSidebar}
               title="Show sidebar (⌘B)"
-              className="ml-20 text-faint hover:text-text"
+              className="absolute left-[86px] top-[11px] h-[26px] w-[26px] rounded-md flex items-center justify-center text-muted hover:text-text hover:bg-raised transition-colors"
             >
-              <PanelLeft size={14} />
+              <PanelLeft size={15} strokeWidth={1.75} />
             </button>
           </div>
         ) : (

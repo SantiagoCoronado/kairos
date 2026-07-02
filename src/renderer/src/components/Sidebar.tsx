@@ -23,7 +23,7 @@ export function Sidebar({
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   return (
-    <aside className="w-52 shrink-0 border-r border-border bg-panel flex flex-col">
+    <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col">
       {/* space for macOS traffic lights */}
       <div className="drag-region h-11 shrink-0" />
       <nav className="flex-1 px-2 py-2 space-y-0.5">

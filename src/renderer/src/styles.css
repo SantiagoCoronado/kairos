@@ -6,11 +6,17 @@
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
   /* brutalist monochrome base, one warm accent for "needs attention" */
-  /* bg + panel carry --bg-alpha so the window-translucency slider can let
-     the desktop show through; raised surfaces stay opaque so cards pop */
+  /* Translucency model: every pixel gets exactly ONE translucent base layer
+     (--color-bg, carrying --bg-alpha) — the body paints nothing and each
+     top-level column paints its own base, so the sidebar and the main area
+     let the desktop through equally. Nested surfaces (cards, bubbles,
+     inputs) are faint white "lifts" that add almost no opacity, so they
+     read the same at any translucency. Floating chrome (modals, palette,
+     quick capture) uses the opaque --color-overlay. */
   --color-bg: rgb(10 10 11 / var(--bg-alpha, 1));
-  --color-panel: rgb(17 17 19 / var(--bg-alpha, 1));
-  --color-raised: #18181b;
+  --color-panel: rgb(255 255 255 / 0.035);
+  --color-raised: rgb(255 255 255 / 0.06);
+  --color-overlay: #17171a;
   --color-border: #232327;
   --color-border-strong: #35353b;
   --color-text: #e8e8ea;
@@ -28,7 +34,8 @@ body,
 }
 
 body {
-  background: var(--color-bg);
+  /* no paint here — each top-level column paints its own single base layer */
+  background: transparent;
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 13px;
@@ -37,8 +44,12 @@ body {
   overflow: hidden;
 }
 
-body.capture-body {
-  background: transparent;
+/* sidebar = panel tint composited on the same single base layer the main
+   column uses, so both transmit the desktop identically */
+.surface-sidebar {
+  background:
+    linear-gradient(var(--color-panel), var(--color-panel)),
+    var(--color-bg);
 }
 
 input,

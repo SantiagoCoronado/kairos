@@ -54,7 +54,7 @@ export function CommandPalette({
       <div className="w-[560px]" onMouseDown={(e) => e.stopPropagation()}>
         <Command
           shouldFilter={true}
-          className="bg-panel border border-border-strong rounded-xl shadow-2xl overflow-hidden"
+          className="bg-overlay border border-border-strong rounded-xl shadow-2xl overflow-hidden"
         >
           <Command.Input
             autoFocus

@@ -50,7 +50,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
       onMouseDown={onClose}
     >
       <div
-        className="w-[480px] bg-panel border border-border-strong rounded-xl shadow-2xl p-5 space-y-5"
+        className="w-[480px] bg-overlay border border-border-strong rounded-xl shadow-2xl p-5 space-y-5"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">

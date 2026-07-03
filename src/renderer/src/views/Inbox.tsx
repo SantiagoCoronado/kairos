@@ -169,20 +169,26 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     const pending = action()
     void (async () => {
       await fold
-      if (next) openThread(next)
-      else closeThread()
-      const res = await pending
-      if (res.ok) {
-        setHiddenIds((prev) => new Set(prev).add(t.id))
-      } else {
-        setActionError(res.message)
-        setTimeout(() => setActionError(null), 5000)
-      }
+      // the row is at zero height now — drop it optimistically so nothing
+      // lingers while the provider call finishes in the background
+      setHiddenIds((prev) => new Set(prev).add(t.id))
       setLeavingIds((prev) => {
         const s = new Set(prev)
         s.delete(t.id)
         return s
       })
+      if (next) openThread(next)
+      else closeThread()
+      const res = await pending
+      if (!res.ok) {
+        setHiddenIds((prev) => {
+          const s = new Set(prev)
+          s.delete(t.id)
+          return s
+        })
+        setActionError(res.message)
+        setTimeout(() => setActionError(null), 5000)
+      }
     })()
   }
 

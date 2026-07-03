@@ -276,7 +276,7 @@ function ConnectionsSection({
                   <span className="text-faint"> · {a.status.replace('_', ' ')}</span>
                 )}
               </span>
-              {a.status === 'needs_auth' && a.provider !== 'whatsapp' && (
+              {(a.status === 'needs_auth' || a.status === 'error') && a.provider !== 'whatsapp' && (
                 <Button variant="ghost" className="!py-0.5 text-[11px]" onClick={() => connect(a.provider as 'gmail' | 'slack')}>
                   reconnect
                 </Button>

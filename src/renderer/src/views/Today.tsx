@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, Sparkles } from 'lucide-react'
+import { CalendarDays, RefreshCw, Sparkles } from 'lucide-react'
 import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
@@ -21,6 +21,15 @@ export function TodayView({
   const { data: usage, reload: reloadUsage } = useInvoke('usage:claudeToday', [], [])
   const { data: stats, reload: reloadStats } = useInvoke('usage:claudeStats', [], [])
   const { data: limits, reload: reloadLimits } = useInvoke('usage:claudeLimits', [], [])
+
+  const [syncing, setSyncing] = useState(false)
+  const resyncUsage = (): void => {
+    setSyncing(true)
+    reloadUsage()
+    reloadStats()
+    reloadLimits()
+    setTimeout(() => setSyncing(false), 600)
+  }
 
   // usage comes from files on disk / the network, not the db — timer refresh
   useEffect(() => {
@@ -123,7 +132,18 @@ export function TodayView({
       )}
 
       {settings?.showClaudeUsage && usage && usage.messages > 0 && (
-        <Section title="claude usage">
+        <Section
+          title="claude usage"
+          action={
+            <button
+              onClick={resyncUsage}
+              title="Resync usage"
+              className="text-faint hover:text-muted -my-1 p-1"
+            >
+              <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+            </button>
+          }
+        >
           <div className="flex items-center gap-3 py-1.5">
             <Sparkles size={13} className="text-faint shrink-0" />
             <span className="text-[13px]">
@@ -335,22 +355,27 @@ function UsageHeatmap({ days }: { days: { date: string; tokens: number }[] }): R
 function Section({
   title,
   tone,
+  action,
   children
 }: {
   title: string
   tone?: 'danger'
+  action?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   return (
     <div className="border border-border rounded-lg bg-panel px-4 py-3">
-      <span
-        className={cn(
-          'font-mono text-[10px] uppercase tracking-[0.18em]',
-          tone === 'danger' ? 'text-danger' : 'text-faint'
-        )}
-      >
-        {title}
-      </span>
+      <div className="flex items-center justify-between">
+        <span
+          className={cn(
+            'font-mono text-[10px] uppercase tracking-[0.18em]',
+            tone === 'danger' ? 'text-danger' : 'text-faint'
+          )}
+        >
+          {title}
+        </span>
+        {action}
+      </div>
       <div className="mt-1">{children}</div>
     </div>
   )

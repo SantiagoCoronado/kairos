@@ -116,19 +116,27 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     setPinned(null)
   }, [accountId, unreadOnly, box, search])
 
+  // While a fold is playing, the list renders from a frozen copy of itself:
+  // any re-render that moves or drops the animating row's DOM node cancels
+  // the CSS transition mid-flight (the "snap"), so data updates simply wait
+  // out the ~240ms. The freeze lifts the moment no row is leaving.
+  const frozen = useRef<CommsThreadListItem[] | null>(null)
   const displayThreads = useMemo(() => {
     if (!threads) return threads
+    if (leaving.size === 0) {
+      frozen.current = null
+    } else if (frozen.current) {
+      return frozen.current
+    }
     // acted-on threads stay hidden until the refetch drops them (no flicker)
     let list = hiddenIds.size ? threads.filter((t) => !hiddenIds.has(t.id)) : threads
-    // folding rows and the open thread survive refetches via their snapshots
-    const keep = [...leaving.values(), ...(pinned ? [pinned] : [])].filter(
-      (s) => !hiddenIds.has(s.id) && !list.some((t) => t.id === s.id)
-    )
-    if (keep.length) {
-      list = [...list, ...keep].sort((a, b) =>
+    // the open thread survives filter refetches via its snapshot
+    if (pinned && !hiddenIds.has(pinned.id) && !list.some((t) => t.id === pinned.id)) {
+      list = [...list, pinned].sort((a, b) =>
         (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
       )
     }
+    if (leaving.size > 0) frozen.current = list
     return list
   }, [threads, pinned, leaving, hiddenIds])
 

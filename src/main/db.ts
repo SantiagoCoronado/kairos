@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import type { DbDriver } from '../core/driver'
 import { openBetterSqliteDb } from '../core/drivers/better-sqlite3'
 import { migrate } from '../core/migrations'
-import { consoleLogger } from '../core/logger'
+import { scopedLogger } from './logger'
 
 export const DATA_DIR = join(homedir(), 'Kairos')
 export const DB_PATH = join(DATA_DIR, 'data.db')
@@ -15,7 +15,7 @@ export function getDb(): DbDriver {
   if (!db) {
     mkdirSync(DATA_DIR, { recursive: true })
     db = openBetterSqliteDb(DB_PATH)
-    migrate(db, consoleLogger)
+    migrate(db, scopedLogger('db'))
   }
   return db
 }

@@ -58,6 +58,30 @@ export function Select({
   )
 }
 
+/** Borderless edit-in-place input: uncontrolled, remounts on value change, saves on blur/Enter. */
+export function InlineText({
+  value,
+  className,
+  onSave
+}: {
+  value: string
+  className?: string
+  onSave: (v: string) => void
+}): React.JSX.Element {
+  return (
+    <input
+      className={cn('bg-transparent focus:outline-none focus:border-b focus:border-border-strong', className)}
+      defaultValue={value}
+      key={value}
+      onBlur={(e) => {
+        const v = e.target.value.trim()
+        if (v && v !== value) onSave(v)
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+    />
+  )
+}
+
 export function Chip({
   children,
   tone = 'muted',
@@ -72,7 +96,7 @@ export function Chip({
     <Tag
       onClick={onClick}
       className={cn(
-        'inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10.5px] tracking-wide',
+        'inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10.5px] tracking-wide select-none',
         tone === 'muted' && 'bg-raised text-muted',
         tone === 'accent' && 'bg-accent/15 text-accent',
         tone === 'danger' && 'bg-danger/15 text-danger',
@@ -95,7 +119,7 @@ export function Segmented<T extends string>({
   onChange: (v: T) => void
 }): React.JSX.Element {
   return (
-    <div className="inline-flex rounded-md border border-border overflow-hidden">
+    <div className="inline-flex rounded-md border border-border overflow-hidden select-none">
       {options.map((o) => (
         <button
           key={o.value}

@@ -5,6 +5,7 @@ import type {
   ObjectivePatch,
   NewObjective,
   KeyResult,
+  KrPatch,
   Task,
   Area,
   ObjectiveStatus
@@ -30,7 +31,7 @@ export function listObjectives(
     params.push(f.status)
   }
   const objectives = db.all<Objective>(
-    `SELECT * FROM objectives ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY period DESC, area, title`,
+    `SELECT * FROM objectives ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY period DESC, sort_order, area, title`,
     ...params
   )
   return objectives.map((o) => withKRs(db, o))
@@ -64,8 +65,8 @@ export function createObjective(
   const id = newId()
   db.transaction(() => {
     db.run(
-      `INSERT INTO objectives (id, title, description, area, period, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO objectives (id, title, description, area, period, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM objectives), ?, ?)`,
       id,
       input.title,
       input.description ?? '',
@@ -118,6 +119,41 @@ export function updateObjective(
   return getObjective(db, id)!
 }
 
+export function deleteObjective(db: DbDriver, id: string): void {
+  // key_results and task_key_results rows cascade via FKs; tasks are untouched
+  db.run('DELETE FROM objectives WHERE id = ?', id)
+}
+
+/**
+ * Drag-and-drop move: place `id` immediately before `beforeId` in manual
+ * order (or at the end when beforeId is null). Renumbers the whole table in
+ * one transaction.
+ */
+export function moveObjectiveBefore(
+  db: DbDriver,
+  id: string,
+  beforeId: string | null,
+  now: Date = new Date()
+): void {
+  db.transaction(() => {
+    const rows = db.all<{ id: string }>('SELECT id FROM objectives ORDER BY sort_order, id')
+    if (!rows.some((r) => r.id === id)) throw new Error(`objective not found: ${id}`)
+    const ids = rows.map((r) => r.id).filter((x) => x !== id)
+    const at = beforeId === null ? ids.length : ids.indexOf(beforeId)
+    if (at < 0) throw new Error(`objective not found: ${beforeId}`)
+    ids.splice(at, 0, id)
+    ids.forEach((oid, i) => db.run('UPDATE objectives SET sort_order = ? WHERE id = ?', i + 1, oid))
+    db.run('UPDATE objectives SET updated_at = ? WHERE id = ?', nowIso(now), id)
+  })
+}
+
+/** Distinct periods present in the DB, newest first — drives the filter chips. */
+export function listPeriods(db: DbDriver): string[] {
+  return db
+    .all<{ period: string }>('SELECT DISTINCT period FROM objectives ORDER BY period DESC')
+    .map((r) => r.period)
+}
+
 export function addKeyResult(
   db: DbDriver,
   objectiveId: string,
@@ -161,6 +197,35 @@ export function updateKrProgress(
   const kr = db.get<KeyResult>('SELECT * FROM key_results WHERE id = ?', krId)
   if (!kr) throw new Error(`key result not found: ${krId}`)
   return kr
+}
+
+export function updateKeyResult(
+  db: DbDriver,
+  krId: string,
+  patch: KrPatch,
+  now: Date = new Date()
+): KeyResult {
+  const existing = db.get<KeyResult>('SELECT * FROM key_results WHERE id = ?', krId)
+  if (!existing) throw new Error(`key result not found: ${krId}`)
+  const next = {
+    ...existing,
+    ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined))
+  }
+  db.run(
+    'UPDATE key_results SET title=?, unit=?, start_value=?, target_value=?, current_value=?, updated_at=? WHERE id=?',
+    next.title,
+    next.unit,
+    next.start_value,
+    next.target_value,
+    next.current_value,
+    nowIso(now),
+    krId
+  )
+  return db.get<KeyResult>('SELECT * FROM key_results WHERE id = ?', krId)!
+}
+
+export function deleteKeyResult(db: DbDriver, krId: string): void {
+  db.run('DELETE FROM key_results WHERE id = ?', krId)
 }
 
 export function linkTaskToKr(db: DbDriver, taskId: string, krId: string): void {

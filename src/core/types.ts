@@ -58,6 +58,7 @@ export interface Task {
   person_id: string | null
   due_date: string | null // YYYY-MM-DD
   completed_at: string | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -69,6 +70,7 @@ export interface Objective {
   area: Area
   period: string // e.g. '2026-Q3'
   status: ObjectiveStatus
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -140,6 +142,8 @@ export interface NewInteraction {
   occurred_at?: string
 }
 
+export type TaskSort = 'manual' | 'due' | 'priority'
+
 export interface TaskFilter {
   status?: TaskStatus | TaskStatus[]
   area?: Area
@@ -147,6 +151,7 @@ export interface TaskFilter {
   person_id?: string
   due_before?: string // YYYY-MM-DD inclusive
   search?: string
+  sort?: TaskSort
 }
 
 export interface NewTask {
@@ -190,6 +195,14 @@ export interface ObjectivePatch {
   area?: Area
   period?: string
   status?: ObjectiveStatus
+}
+
+export interface KrPatch {
+  title?: string
+  unit?: string
+  start_value?: number
+  target_value?: number
+  current_value?: number
 }
 
 export interface PersonDetail {

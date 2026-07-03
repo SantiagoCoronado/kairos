@@ -34,6 +34,36 @@ describe('migrations', () => {
     const rows = db.all<{ version: number }>('SELECT version FROM schema_migrations')
     expect(rows).toHaveLength(migrations.length)
   })
+
+  it('003 backfills sort_order preserving the pre-003 visible order', () => {
+    // simulate a DB that stopped at migration 002 with existing tasks
+    const old = openNodeSqliteDb(':memory:')
+    old.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );`)
+    old.exec(migrations[0])
+    old.exec(migrations[1])
+    old.run('INSERT INTO schema_migrations (version) VALUES (1), (2)')
+    const ins = (id: string, title: string, due: string | null, priority: number): void => {
+      old.run(
+        `INSERT INTO tasks (id, title, status, priority, due_date, created_at, updated_at)
+         VALUES (?, ?, 'todo', ?, ?, '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z')`,
+        id,
+        title,
+        priority,
+        due
+      )
+    }
+    ins('t1', 'no due', null, 2)
+    ins('t2', 'due soon', '2026-07-02', 3)
+    ins('t3', 'due later', '2026-08-01', 1)
+
+    migrate(old)
+    // pre-003 order was: due soon, due later, no due — manual sort must match
+    expect(tasks.listTasks(old).map((t) => t.title)).toEqual(['due soon', 'due later', 'no due'])
+    old.close()
+  })
 })
 
 describe('tasks', () => {
@@ -62,6 +92,47 @@ describe('tasks', () => {
     const t = tasks.createTask(db, { title: 'rack the mac mini', project_id: p.id }, T0)
     db.run('DELETE FROM projects WHERE id = ?', p.id)
     expect(tasks.getTask(db, t.id)?.project_id).toBeNull()
+  })
+
+  it('manual sort is the default: newest on top, moveTaskBefore reorders', () => {
+    const a = tasks.createTask(db, { title: 'a' }, T0)
+    const b = tasks.createTask(db, { title: 'b' }, T0)
+    const c = tasks.createTask(db, { title: 'c' }, T0)
+    expect(a.sort_order).toBeGreaterThan(b.sort_order)
+    expect(b.sort_order).toBeGreaterThan(c.sort_order)
+    expect(tasks.listTasks(db).map((t) => t.title)).toEqual(['c', 'b', 'a'])
+
+    // drag c below b (place c before a)
+    tasks.moveTaskBefore(db, c.id, a.id, T0)
+    expect(tasks.listTasks(db).map((t) => t.title)).toEqual(['b', 'c', 'a'])
+    // drag b to the end
+    tasks.moveTaskBefore(db, b.id, null, T0)
+    expect(tasks.listTasks(db).map((t) => t.title)).toEqual(['c', 'a', 'b'])
+    expect(() => tasks.moveTaskBefore(db, a.id, 'nope', T0)).toThrow()
+    expect(() => tasks.moveTaskBefore(db, 'nope', a.id, T0)).toThrow()
+  })
+
+  it('manual order survives edits', () => {
+    const a = tasks.createTask(db, { title: 'a' }, T0)
+    tasks.createTask(db, { title: 'b' }, T0)
+    tasks.updateTask(db, a.id, { title: 'a2', priority: 1 }, T0)
+    expect(tasks.getTask(db, a.id)?.sort_order).toBe(a.sort_order)
+  })
+
+  it('sort=due and sort=priority override manual order', () => {
+    tasks.createTask(db, { title: 'late', due_date: '2026-08-01', priority: 1 }, T0)
+    tasks.createTask(db, { title: 'soon', due_date: '2026-07-02', priority: 3 }, T0)
+    tasks.createTask(db, { title: 'nodate', priority: 2 }, T0)
+    expect(tasks.listTasks(db, { sort: 'due' }).map((t) => t.title)).toEqual([
+      'soon',
+      'late',
+      'nodate'
+    ])
+    expect(tasks.listTasks(db, { sort: 'priority' }).map((t) => t.title)).toEqual([
+      'late',
+      'nodate',
+      'soon'
+    ])
   })
 })
 
@@ -172,6 +243,70 @@ describe('objectives', () => {
     // idempotent link
     objectives.linkTaskToKr(db, t.id, o.key_results[0].id)
     expect(objectives.tasksForKr(db, o.key_results[0].id)).toHaveLength(1)
+  })
+
+  it('deleteObjective cascades KRs and task links, leaves tasks intact', () => {
+    const o = objectives.createObjective(
+      db,
+      { title: 'x', period: '2026-Q3', key_results: [{ title: 'kr' }] },
+      T0
+    )
+    const t = tasks.createTask(db, { title: 'linked work' }, T0)
+    objectives.linkTaskToKr(db, t.id, o.key_results[0].id)
+
+    objectives.deleteObjective(db, o.id)
+    expect(objectives.getObjective(db, o.id)).toBeUndefined()
+    expect(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM key_results')?.n).toBe(0)
+    expect(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM task_key_results')?.n).toBe(0)
+    expect(tasks.getTask(db, t.id)).toBeDefined()
+  })
+
+  it('updateKeyResult patches fields and recomputes progress; deleteKeyResult removes', () => {
+    const o = objectives.createObjective(
+      db,
+      { title: 'x', period: '2026-Q3', key_results: [{ title: 'kr', target_value: 100 }] },
+      T0
+    )
+    const kr = objectives.updateKeyResult(
+      db,
+      o.key_results[0].id,
+      { title: 'renamed', target_value: 50, unit: 'pts', current_value: 25 },
+      T0
+    )
+    expect(kr.title).toBe('renamed')
+    expect(kr.target_value).toBe(50)
+    expect(kr.unit).toBe('pts')
+    expect(objectives.getObjective(db, o.id)!.progress).toBeCloseTo(0.5)
+    expect(() => objectives.updateKeyResult(db, 'nope', { title: 'x' }, T0)).toThrow()
+
+    objectives.deleteKeyResult(db, kr.id)
+    expect(objectives.getObjective(db, o.id)!.key_results).toHaveLength(0)
+  })
+
+  it('unlinkTaskFromKr removes only the link', () => {
+    const o = objectives.createObjective(
+      db,
+      { title: 'x', period: '2026-Q3', key_results: [{ title: 'kr' }] },
+      T0
+    )
+    const t = tasks.createTask(db, { title: 'work' }, T0)
+    objectives.linkTaskToKr(db, t.id, o.key_results[0].id)
+    objectives.unlinkTaskFromKr(db, t.id, o.key_results[0].id)
+    expect(objectives.tasksForKr(db, o.key_results[0].id)).toHaveLength(0)
+    expect(tasks.getTask(db, t.id)).toBeDefined()
+  })
+
+  it('listPeriods is distinct and newest-first; moveObjectiveBefore reorders within a period', () => {
+    const a = objectives.createObjective(db, { title: 'a', period: '2026-Q3' }, T0)
+    const b = objectives.createObjective(db, { title: 'b', period: '2026-Q3' }, T0)
+    objectives.createObjective(db, { title: 'old', period: '2026-Q1' }, T0)
+    expect(objectives.listPeriods(db)).toEqual(['2026-Q3', '2026-Q1'])
+
+    expect(objectives.listObjectives(db).map((o) => o.title)).toEqual(['a', 'b', 'old'])
+    objectives.moveObjectiveBefore(db, b.id, a.id, T0)
+    expect(objectives.listObjectives(db).map((o) => o.title)).toEqual(['b', 'a', 'old'])
+    objectives.moveObjectiveBefore(db, b.id, null, T0)
+    expect(objectives.listObjectives(db).map((o) => o.title)).toEqual(['a', 'b', 'old'])
   })
 })
 

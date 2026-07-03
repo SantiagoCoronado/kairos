@@ -48,7 +48,7 @@ export function Sidebar({
   const [showSettings, setShowSettings] = useState(false)
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
   return (
-    <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col">
+    <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col select-none">
       {/* space for macOS traffic lights */}
       <div className="drag-region h-11 shrink-0 relative">
         <SidebarToggle hidden={false} onToggle={onHide} />

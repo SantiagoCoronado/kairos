@@ -6,6 +6,7 @@ import type {
   TaskFilter,
   NewTask,
   TaskPatch,
+  KrPatch,
   Project,
   NewProject,
   ProjectStatus,
@@ -26,6 +27,7 @@ import type {
 import type {
   CommsAccount,
   CommsThread,
+  CommsThreadListItem,
   CommsMessage,
   CommsProvider,
   ThreadFilter
@@ -46,11 +48,15 @@ export type CalendarResult =
 
 export interface IpcApi {
   'app:ping': () => string
+  /** append a renderer-side event to ~/Kairos/logs/app.log */
+  'log:renderer': (level: 'info' | 'warn' | 'error', message: string) => void
 
   'tasks:list': (f: TaskFilter) => Task[]
   'tasks:create': (input: NewTask) => Task
   'tasks:update': (id: string, patch: TaskPatch) => Task
   'tasks:delete': (id: string) => void
+  /** place a task before another in manual order (null = move to end) */
+  'tasks:reorder': (id: string, beforeId: string | null) => void
 
   'projects:list': (f: { status?: ProjectStatus; area?: Area }) => Project[]
   'projects:create': (input: NewProject) => Project
@@ -73,12 +79,20 @@ export interface IpcApi {
   }) => ObjectiveWithKRs[]
   'objectives:create': (input: NewObjective) => ObjectiveWithKRs
   'objectives:update': (id: string, patch: ObjectivePatch) => ObjectiveWithKRs
+  'objectives:delete': (id: string) => void
+  /** place an objective before another in manual order (null = move to end) */
+  'objectives:reorder': (id: string, beforeId: string | null) => void
+  /** distinct periods present in the DB, newest first */
+  'objectives:periods': () => string[]
   'krs:add': (
     objectiveId: string,
     kr: { title: string; unit?: string; start_value?: number; target_value?: number }
   ) => KeyResult
+  'krs:update': (id: string, patch: KrPatch) => KeyResult
   'krs:updateProgress': (id: string, value: number) => KeyResult
+  'krs:delete': (id: string) => void
   'krs:linkTask': (krId: string, taskId: string) => void
+  'krs:unlinkTask': (krId: string, taskId: string) => void
   'krs:tasks': (krId: string) => Task[]
 
   'today:get': () => TodayPayload
@@ -93,6 +107,8 @@ export interface IpcApi {
   'chat:send': (localSessionId: string | null, text: string) => { localSessionId: string }
   'chat:interrupt': (localSessionId: string) => void
   'chat:sessions': () => ChatSessionInfo[]
+  /** one-shot AI reply draft for a comms thread — only ever called on user command */
+  'chat:draft': (input: ChatDraftInput) => Promise<ChatDraftResult>
 
   'settings:get': () => AppSettings
   'settings:set': (patch: Partial<AppSettings>) => AppSettings
@@ -100,11 +116,17 @@ export interface IpcApi {
 
   'comms:accounts': () => CommsAccount[]
   'comms:unreadTotal': () => number
-  'comms:threads': (f: ThreadFilter) => CommsThread[]
+  'comms:threads': (f: ThreadFilter) => CommsThreadListItem[]
   /** every thread of one account, incl. inactive/disabled — for channel opt-in UI */
   'comms:accountThreads': (accountId: string) => CommsThread[]
   'comms:messages': (threadId: string) => CommsMessage[]
   'comms:markRead': (threadId: string) => void
+  /** archive/unarchive; gmail propagates remotely, others are local-only */
+  'comms:archiveThread': (threadId: string, archived: boolean) => Promise<CommsArchiveResult>
+  /** gmail only: trash the thread remotely and remove it locally */
+  'comms:deleteThread': (threadId: string) => Promise<CommsArchiveResult>
+  /** place an account before another in the rail (null = move to end) */
+  'comms:reorderAccount': (id: string, beforeId: string | null) => void
   'comms:send': (input: CommsSendInput) => Promise<CommsSendResult>
   'comms:syncNow': (accountId?: string) => void
   'comms:linkSender': (provider: CommsProvider, handle: string, personId: string) => void
@@ -126,6 +148,16 @@ export interface CommsSendInput {
 }
 
 export type CommsSendResult = { ok: true; outboxId: string } | { ok: false; message: string }
+
+export type CommsArchiveResult = { ok: true } | { ok: false; message: string }
+
+export interface ChatDraftInput {
+  threadId: string
+  /** optional user guidance, e.g. "decline politely" */
+  instruction?: string
+}
+
+export type ChatDraftResult = { ok: true; draft: string } | { ok: false; message: string }
 
 export type CommsConnectResult = { ok: true; account: CommsAccount } | { ok: false; message: string }
 

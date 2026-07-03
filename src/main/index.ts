@@ -5,6 +5,34 @@ import { createCaptureWindow } from './windows/capture-window'
 import { registerCaptureHotkey } from './hotkey'
 import { registerIpc, getCommsManager } from './ipc'
 import { closeDb } from './db'
+import { logLine } from './logger'
+
+// crash forensics — everything lands in ~/Kairos/logs/app.log
+process.on('uncaughtException', (err) => {
+  logLine('error', 'main', `uncaughtException: ${err.stack ?? err.message}`)
+})
+process.on('unhandledRejection', (reason) => {
+  logLine('error', 'main', `unhandledRejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`)
+})
+app.on('render-process-gone', (_e, _wc, details) => {
+  logLine('error', 'main', `render-process-gone: ${details.reason} (exitCode ${details.exitCode})`)
+})
+app.on('child-process-gone', (_e, details) => {
+  if (details.reason !== 'clean-exit')
+    logLine('warn', 'main', `child-process-gone: ${details.type} ${details.reason}`)
+})
+
+// stall watchdog: better-sqlite3 runs synchronously on this thread, so a
+// long transaction freezes every IPC reply and the UI looks dead. Log it.
+{
+  let last = Date.now()
+  setInterval(() => {
+    const now = Date.now()
+    const lag = now - last - 1000
+    if (lag > 1000) logLine('warn', 'main', `main thread stalled ~${lag}ms — UI was unresponsive`)
+    last = now
+  }, 1000)
+}
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -17,6 +45,7 @@ if (!gotLock) {
   })
 
   app.whenReady().then(() => {
+    logLine('info', 'main', `app start v${app.getVersion()} (packaged: ${app.isPackaged})`)
     registerIpc()
     getCommsManager()?.start()
     const win = createMainWindow()
@@ -63,6 +92,7 @@ if (!gotLock) {
   })
 
   app.on('will-quit', () => {
+    logLine('info', 'main', 'app quit')
     getCommsManager()?.stop()
     closeDb()
   })

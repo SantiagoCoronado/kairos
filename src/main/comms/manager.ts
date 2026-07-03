@@ -57,6 +57,10 @@ export class CommsSyncManager {
       if (repo.applyContactNames(this.db, account.id, res.contacts)) changed = true
     }
     if (changed) this.notifyChanged()
+    // second pass over the wire: resolve address-book phones to @lid chats
+    for (const conn of this.wa.values()) {
+      void conn.resolveContacts(res.contacts).catch(() => {})
+    }
   }
 
   stop(): void {

@@ -80,6 +80,8 @@ export class WhatsAppConnection {
   private names = new Map<string, string>()
   /** names already swept into the DB, so applyNames stays incremental */
   private appliedNames = new Map<string, string>()
+  /** address-book phones already looked up via onWhatsApp this session */
+  private queriedPhones = new Set<string>()
 
   constructor(
     private db: DbDriver,
@@ -251,6 +253,59 @@ export class WhatsAppConnection {
       has_attachments: hasAttachment,
       is_read: asRead
     })
+  }
+
+  /**
+   * Bridge the macOS address book into @lid chats: WhatsApp's USync lookup
+   * (the same one the official client uses to find contacts) maps a phone
+   * number to its account — including the lid — so lid-keyed threads can be
+   * named even though they never expose a phone number themselves.
+   */
+  async resolveContacts(contacts: { name: string; phones: string[] }[]): Promise<void> {
+    if (!this.sock || this.stopped) return
+    // only worth network roundtrips while unnamed lid chats exist
+    const hasPlaceholderLid = repo
+      .listAccountThreads(this.db, this.accountId)
+      .some((t) => isLidJid(t.external_id) && repo.isPlaceholderTitle(t.title))
+    if (!hasPlaceholderLid) return
+
+    const byCanonical = new Map<string, string>()
+    const pending: string[] = []
+    for (const c of contacts) {
+      for (const p of c.phones) {
+        const digits = p.replace(/\D/g, '')
+        if (digits.length < 8 || this.queriedPhones.has(digits)) continue
+        this.queriedPhones.add(digits)
+        byCanonical.set(repo.canonicalPhoneDigits(digits), c.name)
+        pending.push(digits)
+      }
+    }
+    if (pending.length === 0) return
+
+    const CHUNK = 50
+    let learned = false
+    for (let i = 0; i < pending.length && !this.stopped; i += CHUNK) {
+      const chunk = pending.slice(i, i + CHUNK)
+      try {
+        const results = (await this.sock.onWhatsApp(...chunk.map((d) => `+${d}`))) ?? []
+        for (const r of results) {
+          if (!r.exists || !r.jid) continue
+          const canon = repo.canonicalPhoneDigits(jidUser(String(r.jid)))
+          const name =
+            byCanonical.get(canon) ??
+            [...byCanonical].find(([d]) => d.endsWith(canon) || canon.endsWith(d))?.[1]
+          if (!name) continue
+          this.names.set(String(r.jid), name)
+          const lid = (r as { lid?: string }).lid
+          if (lid) this.names.set(lid.includes('@') ? String(lid) : `${lid}@lid`, name)
+          learned = true
+        }
+      } catch {
+        break // USync rejected (rate limit?) — retry next sweep for the rest
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+    if (learned) this.applyNames()
   }
 
   async send(item: OutboxItem): Promise<string> {

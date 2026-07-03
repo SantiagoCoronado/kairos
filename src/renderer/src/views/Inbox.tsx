@@ -90,7 +90,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   // exclude it — otherwise opening an unread email makes it vanish mid-read
   const [pinned, setPinned] = useState<CommsThreadListItem | null>(null)
   // archive/delete exit choreography (see removeWithAnimation)
-  const [leavingId, setLeavingId] = useState<string | null>(null)
+  const [leavingIds, setLeavingIds] = useState<ReadonlySet<string>>(new Set())
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
   const [mode, setMode] = useState<'threads' | 'channels' | 'compose'>('threads')
@@ -149,32 +149,40 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   }
 
   /**
-   * Archive/delete UX: the next conversation opens instantly, the row slides
-   * out while the provider call runs in the background, and the row stays
-   * hidden until the refetch actually drops it (no flicker). On failure the
-   * row slides back in and a transient banner explains why.
+   * Archive/delete UX: the row folds away in one motion (the pane swap waits
+   * for the fold, so building the next email never steals animation frames),
+   * the provider call runs in parallel, and the row stays hidden until the
+   * refetch actually drops it (no flicker). On failure the row slides back in
+   * and a transient banner explains why. Exits are independent, so rapid
+   * triage never waits on the network.
    */
   const removeWithAnimation = (
     t: CommsThreadListItem,
     action: () => Promise<{ ok: true } | { ok: false; message: string }>
   ): void => {
-    if (leavingId) return // one exit at a time
-    const list = displayThreads ?? []
+    if (leavingIds.has(t.id)) return
+    const list = (displayThreads ?? []).filter((x) => !leavingIds.has(x.id))
     const idx = list.findIndex((x) => x.id === t.id)
     const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1] ?? null) : null
-    setLeavingId(t.id)
-    if (next) openThread(next)
-    else closeThread()
+    setLeavingIds((prev) => new Set(prev).add(t.id))
+    const fold = new Promise((r) => setTimeout(r, 230))
+    const pending = action()
     void (async () => {
-      // network and animation run in parallel; whichever is slower gates the swap
-      const [res] = await Promise.all([action(), new Promise((r) => setTimeout(r, 300))])
+      await fold
+      if (next) openThread(next)
+      else closeThread()
+      const res = await pending
       if (res.ok) {
         setHiddenIds((prev) => new Set(prev).add(t.id))
       } else {
         setActionError(res.message)
         setTimeout(() => setActionError(null), 5000)
       }
-      setLeavingId(null)
+      setLeavingIds((prev) => {
+        const s = new Set(prev)
+        s.delete(t.id)
+        return s
+      })
     })()
   }
 
@@ -191,10 +199,9 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   const deleteThread = (t: CommsThreadListItem): void =>
     removeWithAnimation(t, () => api.invoke('comms:deleteThread', t.id))
 
-  /** mark unread and return to the list — "leave it for later" */
+  /** mark unread but keep it open — the badge flips, reading continues */
   const markUnread = (t: CommsThreadListItem): void => {
     void api.invoke('comms:markUnread', t.id)
-    closeThread()
   }
 
   const selectAccount = (id: string | null): void => {
@@ -414,7 +421,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                   thread={t}
                   showProvider={accountId === null}
                   active={threadId === t.id}
-                  leaving={leavingId === t.id}
+                  leaving={leavingIds.has(t.id)}
                   onClick={() => openThread(t)}
                 />
               ))}
@@ -971,6 +978,7 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
       sandbox="allow-same-origin"
       srcDoc={doc}
       onLoad={onLoad}
+      loading="lazy"
       style={{ height }}
       className="w-full block"
       title="email"

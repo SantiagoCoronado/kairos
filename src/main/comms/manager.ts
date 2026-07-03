@@ -11,6 +11,7 @@ import {
   syncGmailAccount,
   sendGmail,
   modifyGmailThread,
+  modifyGmailMessage,
   trashGmailThread,
   GmailAuthError
 } from './gmail'
@@ -188,6 +189,20 @@ export class CommsSyncManager {
     if (!account || account.status !== 'connected') return
     void modifyGmailThread(this.db, account, thread.external_id, { removeLabelIds: ['UNREAD'] }).catch(
       (err) => this.onGmailModifyError(account.id, 'mark-read', err)
+    )
+  }
+
+  /** Mark unread locally right away; re-add UNREAD in Gmail in the background. */
+  markUnread(threadId: string): void {
+    const thread = repo.getThread(this.db, threadId)
+    if (!thread) return
+    const externalId = repo.markThreadUnread(this.db, threadId)
+    this.notifyChanged()
+    if (!externalId || thread.provider !== 'gmail') return
+    const account = repo.getAccount(this.db, thread.account_id)
+    if (!account || account.status !== 'connected') return
+    void modifyGmailMessage(this.db, account, externalId, { addLabelIds: ['UNREAD'] }).catch(
+      (err) => this.onGmailModifyError(account.id, 'mark-unread', err)
     )
   }
 

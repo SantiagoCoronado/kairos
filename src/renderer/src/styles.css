@@ -96,3 +96,47 @@ textarea,
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* subtle content entrance (thread pane on open) */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.fade-in {
+  animation: fade-in-up 160ms ease-out;
+}
+
+/* thread row exit: one continuous fold — slide, fade and collapse share a
+   single curve so it reads as one motion. max-height matches the real
+   two-line row height so the collapse starts immediately. The selection
+   highlight is ours; suppress the browser focus ring (it pops onto the
+   last-clicked row as soon as an arrow key is pressed). */
+.thread-row {
+  /* barely above the real two-line row height — a taller cap adds a dead
+     zone where the collapse animates without moving anything */
+  max-height: 3.5rem;
+  overflow: hidden;
+  transition:
+    opacity 160ms ease-out,
+    transform 220ms cubic-bezier(0.3, 0, 0.2, 1),
+    max-height 220ms cubic-bezier(0.3, 0, 0.2, 1),
+    padding 220ms cubic-bezier(0.3, 0, 0.2, 1),
+    border-width 220ms cubic-bezier(0.3, 0, 0.2, 1);
+}
+.thread-row:focus,
+.thread-row:focus-visible {
+  outline: none;
+}
+/* border-width must hit 0 as well: with border-box sizing, max-height can
+   never shrink below the border, which left a 1px sliver behind the fold */
+.thread-row-leaving {
+  opacity: 0;
+  transform: translateX(14px);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  pointer-events: none;
+}

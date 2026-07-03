@@ -420,6 +420,32 @@ export function applyGmailLabelEvent(
   return row.thread_id
 }
 
+/**
+ * Mark a thread unread again: flag its newest inbound message so the thread
+ * resurfaces with unread_count 1 (not the whole history). Returns that
+ * message's external id (for the remote label add), or null if none exists.
+ */
+export function markThreadUnread(db: DbDriver, threadId: string, now: Date = new Date()): string | null {
+  const msg = db.get<{ id: string; external_id: string }>(
+    'SELECT id, external_id FROM comms_messages WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC LIMIT 1',
+    threadId
+  )
+  if (!msg) return null
+  db.transaction(() => {
+    db.run('UPDATE comms_messages SET is_read = 0 WHERE id = ?', msg.id)
+    db.run(
+      `UPDATE comms_threads SET
+         unread_count = (SELECT COUNT(*) FROM comms_messages WHERE thread_id = ? AND is_read = 0 AND is_me = 0),
+         updated_at = ?
+       WHERE id = ?`,
+      threadId,
+      nowIso(now),
+      threadId
+    )
+  })
+  return msg.external_id
+}
+
 /** Remove a thread locally (messages cascade via FK). */
 export function deleteThread(db: DbDriver, threadId: string): void {
   db.run('DELETE FROM comms_threads WHERE id = ?', threadId)

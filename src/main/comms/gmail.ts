@@ -197,6 +197,25 @@ async function gmailFetch(
   return (await res.json()) as Record<string, unknown>
 }
 
+/** Add/remove labels on one message (mark-unread targets just the newest). */
+export async function modifyGmailMessage(
+  db: DbDriver,
+  account: CommsAccount,
+  messageExternalId: string,
+  change: { addLabelIds?: string[]; removeLabelIds?: string[] }
+): Promise<void> {
+  try {
+    await gmailFetch(db, account, `/messages/${messageExternalId}/modify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(change)
+    })
+  } catch (err) {
+    if (err instanceof GmailNotFound) return
+    throw err
+  }
+}
+
 /** Move a whole thread to Gmail's trash (recoverable there for 30 days). */
 export async function trashGmailThread(
   db: DbDriver,

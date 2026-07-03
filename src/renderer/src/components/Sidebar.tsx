@@ -54,10 +54,11 @@ export function Sidebar({
         <SidebarToggle hidden={false} onToggle={onHide} />
       </div>
       <nav className="flex-1 px-2 py-2 space-y-0.5">
-        {NAV.map(({ id, label, icon: Icon }) => (
+        {NAV.map(({ id, label, icon: Icon }, i) => (
           <button
             key={id}
             onClick={() => onNavigate(id)}
+            title={`${label} (⌘${i + 1})`}
             className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-left transition-colors ${
               view === id ? 'bg-raised text-text' : 'text-muted hover:text-text hover:bg-raised/50'
             }`}

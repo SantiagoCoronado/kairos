@@ -4,6 +4,7 @@ import type {
   CommsAccountStatus,
   CommsMessage,
   CommsThread,
+  CommsThreadListItem,
   AccountUpsert,
   ThreadUpsert,
   MessageUpsert,
@@ -18,7 +19,7 @@ import { newId, nowIso } from '../ids'
 // ---------- accounts ----------
 
 export function listAccounts(db: DbDriver): CommsAccount[] {
-  return db.all<CommsAccount>('SELECT * FROM comms_accounts ORDER BY created_at')
+  return db.all<CommsAccount>('SELECT * FROM comms_accounts ORDER BY sort_order, created_at')
 }
 
 export function getAccount(db: DbDriver, id: string): CommsAccount | undefined {
@@ -44,8 +45,8 @@ export function upsertAccount(db: DbDriver, input: AccountUpsert, now: Date = ne
   }
   const id = newId()
   db.run(
-    `INSERT INTO comms_accounts (id, provider, external_id, display_name, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO comms_accounts (id, provider, external_id, display_name, status, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM comms_accounts), ?, ?)`,
     id,
     input.provider,
     input.external_id,
@@ -55,6 +56,25 @@ export function upsertAccount(db: DbDriver, input: AccountUpsert, now: Date = ne
     ts
   )
   return getAccount(db, id)!
+}
+
+/** Reorder an account before `beforeId` (null = end). Renumbers the whole table. */
+export function moveAccountBefore(
+  db: DbDriver,
+  id: string,
+  beforeId: string | null,
+  now: Date = new Date()
+): void {
+  db.transaction(() => {
+    const rows = db.all<{ id: string }>('SELECT id FROM comms_accounts ORDER BY sort_order, id')
+    if (!rows.some((r) => r.id === id)) throw new Error(`account not found: ${id}`)
+    const ids = rows.map((r) => r.id).filter((x) => x !== id)
+    const at = beforeId === null ? ids.length : ids.indexOf(beforeId)
+    if (at < 0) throw new Error(`account not found: ${beforeId}`)
+    ids.splice(at, 0, id)
+    ids.forEach((aid, i) => db.run('UPDATE comms_accounts SET sort_order = ? WHERE id = ?', i + 1, aid))
+    db.run('UPDATE comms_accounts SET updated_at = ? WHERE id = ?', nowIso(now), id)
+  })
 }
 
 export function setAccountStatus(
@@ -181,7 +201,7 @@ export function upsertThread(db: DbDriver, input: ThreadUpsert, now: Date = new 
   return getThread(db, id)!
 }
 
-export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThread[] {
+export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThreadListItem[] {
   const where: string[] = ['t.last_message_at IS NOT NULL']
   const params: SqlValue[] = []
   if (!f.includeDisabled) where.push('t.sync_enabled = 1')
@@ -193,6 +213,8 @@ export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThread[] {
     where.push('t.provider = ?')
     params.push(f.provider)
   }
+  const box = f.box ?? 'inbox'
+  if (box !== 'all') where.push(`t.is_archived = ${box === 'archived' ? 1 : 0}`)
   if (f.unreadOnly) where.push('t.unread_count > 0')
   if (f.search) {
     where.push('(t.title LIKE ? OR t.snippet LIKE ?)')
@@ -200,8 +222,17 @@ export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThread[] {
     params.push(q, q)
   }
   params.push(f.limit ?? 200)
-  return db.all<CommsThread>(
-    `SELECT t.* FROM comms_threads t WHERE ${where.join(' AND ')}
+  // person join: the linked person of the latest inbound message; the
+  // correlated subquery runs only over the returned rows via idx_comms_messages_thread
+  return db.all<CommsThreadListItem>(
+    `SELECT t.*, p.id AS person_id, p.name AS person_name
+     FROM comms_threads t
+     LEFT JOIN people p ON p.id = (
+       SELECT m.person_id FROM comms_messages m
+       WHERE m.thread_id = t.id AND m.is_me = 0 AND m.person_id IS NOT NULL
+       ORDER BY m.sent_at DESC LIMIT 1
+     )
+     WHERE ${where.join(' AND ')}
      ORDER BY t.last_message_at DESC LIMIT ?`,
     ...params
   )
@@ -335,10 +366,112 @@ export function markThreadRead(db: DbDriver, threadId: string, now: Date = new D
   })
 }
 
+/** Archive/unarchive a thread; gmail messages mirror the flag so local state matches the remote modify. */
+export function setThreadArchived(
+  db: DbDriver,
+  threadId: string,
+  archived: boolean,
+  now: Date = new Date()
+): void {
+  db.transaction(() => {
+    db.run(
+      'UPDATE comms_threads SET is_archived = ?, updated_at = ? WHERE id = ?',
+      archived ? 1 : 0,
+      nowIso(now),
+      threadId
+    )
+    db.run(
+      "UPDATE comms_messages SET is_inbox = ? WHERE thread_id = ? AND provider = 'gmail'",
+      archived ? 0 : 1,
+      threadId
+    )
+  })
+}
+
+/**
+ * Apply a Gmail history label event to one message by (account_id, external_id).
+ * Returns the affected thread id, or null when the message predates the
+ * backfill window (skip — nothing to update).
+ */
+export function applyGmailLabelEvent(
+  db: DbDriver,
+  accountId: string,
+  messageExternalId: string,
+  patch: { read?: boolean; inbox?: boolean }
+): string | null {
+  const row = db.get<{ id: string; thread_id: string }>(
+    'SELECT id, thread_id FROM comms_messages WHERE account_id = ? AND external_id = ?',
+    accountId,
+    messageExternalId
+  )
+  if (!row) return null
+  const sets: string[] = []
+  const params: SqlValue[] = []
+  if (patch.read !== undefined) {
+    sets.push('is_read = ?')
+    params.push(patch.read ? 1 : 0)
+  }
+  if (patch.inbox !== undefined) {
+    sets.push('is_inbox = ?')
+    params.push(patch.inbox ? 1 : 0)
+  }
+  if (sets.length === 0) return null
+  db.run(`UPDATE comms_messages SET ${sets.join(', ')} WHERE id = ?`, ...params, row.id)
+  return row.thread_id
+}
+
+/** Remove a thread locally (messages cascade via FK). */
+export function deleteThread(db: DbDriver, threadId: string): void {
+  db.run('DELETE FROM comms_threads WHERE id = ?', threadId)
+}
+
+/**
+ * Fill body_html on an already-synced message that predates HTML capture —
+ * re-syncs skip existing rows, so this is the only path that upgrades them.
+ * Never overwrites an existing body_html. Returns true if a row changed.
+ */
+export function fillMessageHtml(
+  db: DbDriver,
+  accountId: string,
+  externalId: string,
+  html: string
+): boolean {
+  return (
+    db.run(
+      'UPDATE comms_messages SET body_html = ? WHERE account_id = ? AND external_id = ? AND body_html IS NULL',
+      html,
+      accountId,
+      externalId
+    ).changes > 0
+  )
+}
+
+/** Recount a thread's unread_count and (gmail) is_archived from its messages. */
+export function recomputeThreadState(db: DbDriver, threadId: string, now: Date = new Date()): void {
+  db.transaction(() => {
+    db.run(
+      `UPDATE comms_threads SET
+         unread_count = (SELECT COUNT(*) FROM comms_messages WHERE thread_id = ? AND is_read = 0 AND is_me = 0),
+         updated_at = ?
+       WHERE id = ?`,
+      threadId,
+      nowIso(now),
+      threadId
+    )
+    db.run(
+      `UPDATE comms_threads SET is_archived = NOT EXISTS (
+         SELECT 1 FROM comms_messages WHERE thread_id = ? AND is_inbox = 1
+       ) WHERE id = ? AND provider = 'gmail'`,
+      threadId,
+      threadId
+    )
+  })
+}
+
 export function unreadTotal(db: DbDriver): number {
   return (
     db.get<{ n: number }>(
-      'SELECT COALESCE(SUM(unread_count), 0) AS n FROM comms_threads WHERE sync_enabled = 1'
+      'SELECT COALESCE(SUM(unread_count), 0) AS n FROM comms_threads WHERE sync_enabled = 1 AND is_archived = 0'
     )?.n ?? 0
   )
 }
@@ -450,8 +583,8 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
     const res = db.run(
       `INSERT INTO comms_messages
          (id, thread_id, account_id, provider, external_id, sender_name, sender_handle,
-          is_me, person_id, sent_at, body_text, has_attachments, is_read, raw_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          is_me, person_id, sent_at, body_text, body_html, has_attachments, is_read, is_inbox, raw_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(account_id, external_id) DO NOTHING`,
       newId(),
       input.thread_id,
@@ -464,12 +597,19 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
       personId,
       input.sent_at,
       input.body_text ?? '',
+      input.body_html ?? null,
       input.has_attachments ? 1 : 0,
       input.is_me || input.is_read ? 1 : 0,
+      input.is_inbox === false ? 0 : 1,
       input.raw_json ?? null,
       nowIso(now)
     )
     if (res.changes === 0) return false
+
+    // new inbox mail resurfaces an archived thread (matches Gmail semantics)
+    if (input.is_inbox !== false) {
+      db.run('UPDATE comms_threads SET is_archived = 0 WHERE id = ? AND is_archived = 1', input.thread_id)
+    }
 
     const thread = getThread(db, input.thread_id)
     if (thread && (!thread.last_message_at || input.sent_at >= thread.last_message_at)) {

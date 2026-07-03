@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
+import type { CommsAccount, CommsThread } from './comms-types'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate } from './migrations'
+import { migrate, migrations } from './migrations'
 import * as comms from './repo/comms'
 import * as people from './repo/people'
 
@@ -260,6 +261,214 @@ describe('contact name matching', () => {
     // named threads never get overwritten by later sweeps
     comms.applyContactNames(db, a.id, [{ name: 'Wrong Person', phones: ['+52 55 1598 8976'] }], T0)
     expect(comms.getThread(db, vero.id)!.title).toBe('Veronica Coronado')
+  })
+})
+
+describe('migration 005', () => {
+  it('backfills is_inbox from raw_json labelIds and is_archived per thread', () => {
+    // simulate a DB that stopped at migration 004 with synced gmail mail
+    const old = openNodeSqliteDb(':memory:')
+    old.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );`)
+    for (let i = 0; i < 4; i++) old.exec(migrations[i])
+    old.run('INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4)')
+    const ts = T0.toISOString()
+    old.run(
+      `INSERT INTO comms_accounts (id, provider, external_id, display_name, created_at, updated_at)
+       VALUES ('a1', 'gmail', 'me@example.com', 'me', ?, ?)`,
+      ts, ts
+    )
+    const mkThread = (id: string): void => {
+      old.run(
+        `INSERT INTO comms_threads (id, account_id, provider, external_id, kind, last_message_at, created_at, updated_at)
+         VALUES (?, 'a1', 'gmail', ?, 'email', ?, ?, ?)`,
+        id, `ext-${id}`, ts, ts, ts
+      )
+    }
+    const mkMsg = (id: string, threadId: string, rawJson: string | null): void => {
+      old.run(
+        `INSERT INTO comms_messages (id, thread_id, account_id, provider, external_id, sent_at, body_text, raw_json, created_at)
+         VALUES (?, ?, 'a1', 'gmail', ?, ?, 'the word INBOX in a body changes nothing', ?, ?)`,
+        id, threadId, `ext-${id}`, ts, rawJson, ts
+      )
+    }
+    mkThread('t-in')
+    mkThread('t-arch')
+    mkMsg('m1', 't-in', JSON.stringify({ headers: {}, labelIds: ['INBOX', 'UNREAD'] }))
+    mkMsg('m2', 't-arch', JSON.stringify({ headers: {}, labelIds: [] }))
+    mkMsg('m3', 't-arch', 'not json {')
+    mkMsg('m4', 't-arch', null)
+
+    migrate(old)
+
+    const inbox = Object.fromEntries(
+      old.all<{ id: string; is_inbox: number }>('SELECT id, is_inbox FROM comms_messages')
+        .map((r) => [r.id, r.is_inbox])
+    )
+    expect(inbox).toEqual({ m1: 1, m2: 0, m3: 0, m4: 0 })
+    expect(old.get<{ is_archived: number }>("SELECT is_archived FROM comms_threads WHERE id = 't-in'")!.is_archived).toBe(0)
+    expect(old.get<{ is_archived: number }>("SELECT is_archived FROM comms_threads WHERE id = 't-arch'")!.is_archived).toBe(1)
+    expect(old.get<{ sort_order: number }>('SELECT sort_order FROM comms_accounts')!.sort_order).toBe(1)
+    old.close()
+  })
+})
+
+describe('account ordering', () => {
+  const mk = (email: string, at: Date): CommsAccount =>
+    comms.upsertAccount(db, { provider: 'gmail', external_id: email, display_name: email }, at)
+
+  it('lists by sort_order and appends new accounts at the end', () => {
+    const a = mk('a@x.com', T0)
+    const b = mk('b@x.com', later(1))
+    const c = mk('c@x.com', later(2))
+    expect(comms.listAccounts(db).map((x) => x.id)).toEqual([a.id, b.id, c.id])
+  })
+
+  it('moveAccountBefore reorders and throws on unknown ids', () => {
+    const a = mk('a@x.com', T0)
+    const b = mk('b@x.com', later(1))
+    const c = mk('c@x.com', later(2))
+    comms.moveAccountBefore(db, c.id, a.id, later(3))
+    expect(comms.listAccounts(db).map((x) => x.id)).toEqual([c.id, a.id, b.id])
+    comms.moveAccountBefore(db, c.id, null, later(4))
+    expect(comms.listAccounts(db).map((x) => x.id)).toEqual([a.id, b.id, c.id])
+    expect(() => comms.moveAccountBefore(db, 'nope', null)).toThrow()
+    expect(() => comms.moveAccountBefore(db, a.id, 'nope')).toThrow()
+  })
+})
+
+describe('archive', () => {
+  const seed = (): { a: CommsAccount; t: CommsThread } => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+    return { a, t }
+  }
+
+  it('setThreadArchived flips the thread and mirrors gmail message is_inbox', () => {
+    const { t } = seed()
+    comms.setThreadArchived(db, t.id, true, later(1))
+    expect(comms.getThread(db, t.id)!.is_archived).toBe(1)
+    expect(comms.listMessages(db, t.id)[0].is_inbox).toBe(0)
+    expect(comms.listThreads(db, {})).toHaveLength(0)
+    expect(comms.listThreads(db, { box: 'archived' })).toHaveLength(1)
+    expect(comms.listThreads(db, { box: 'all' })).toHaveLength(1)
+    comms.setThreadArchived(db, t.id, false, later(2))
+    expect(comms.getThread(db, t.id)!.is_archived).toBe(0)
+    expect(comms.listMessages(db, t.id)[0].is_inbox).toBe(1)
+  })
+
+  it('archived threads do not count toward unreadTotal', () => {
+    const { t } = seed()
+    expect(comms.unreadTotal(db)).toBe(1)
+    comms.setThreadArchived(db, t.id, true, later(1))
+    expect(comms.unreadTotal(db)).toBe(0)
+  })
+
+  it('new inbox mail resurfaces an archived thread; archived mail does not', () => {
+    const { a, t } = seed()
+    comms.setThreadArchived(db, t.id, true, later(1))
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm2', sent_at: later(2).toISOString(), body_text: 'sent copy', is_inbox: false
+    }, later(2))
+    expect(comms.getThread(db, t.id)!.is_archived).toBe(1)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm3', sent_at: later(3).toISOString(), body_text: 'new reply'
+    }, later(3))
+    expect(comms.getThread(db, t.id)!.is_archived).toBe(0)
+  })
+
+  it('applyGmailLabelEvent + recomputeThreadState track remote read/archive', () => {
+    const { a, t } = seed()
+    // remote read
+    expect(comms.applyGmailLabelEvent(db, a.id, 'm1', { read: true })).toBe(t.id)
+    comms.recomputeThreadState(db, t.id, later(1))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(0)
+    // remote archive
+    comms.applyGmailLabelEvent(db, a.id, 'm1', { inbox: false })
+    comms.recomputeThreadState(db, t.id, later(2))
+    expect(comms.getThread(db, t.id)!.is_archived).toBe(1)
+    // remote un-archive
+    comms.applyGmailLabelEvent(db, a.id, 'm1', { inbox: true })
+    comms.recomputeThreadState(db, t.id, later(3))
+    expect(comms.getThread(db, t.id)!.is_archived).toBe(0)
+    // unknown message (pre-backfill) is a no-op
+    expect(comms.applyGmailLabelEvent(db, a.id, 'ghost', { read: true })).toBeNull()
+  })
+})
+
+describe('deleteThread', () => {
+  it('removes the thread and cascades its messages', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sent_at: T0.toISOString(), body_text: 'bye'
+    }, T0)
+    comms.deleteThread(db, t.id)
+    expect(comms.getThread(db, t.id)).toBeUndefined()
+    expect(db.all('SELECT * FROM comms_messages')).toHaveLength(0)
+  })
+})
+
+describe('fillMessageHtml', () => {
+  it('fills missing body_html without touching read state, never overwrites', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sent_at: T0.toISOString(), body_text: 'plain only'
+    }, T0)
+    expect(comms.fillMessageHtml(db, a.id, 'm1', '<p>hi</p>')).toBe(true)
+    const [msg] = comms.listMessages(db, t.id)
+    expect(msg.body_html).toBe('<p>hi</p>')
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1) // unchanged
+    // already filled → no overwrite
+    expect(comms.fillMessageHtml(db, a.id, 'm1', '<p>other</p>')).toBe(false)
+    expect(comms.listMessages(db, t.id)[0].body_html).toBe('<p>hi</p>')
+    // unknown message → no-op
+    expect(comms.fillMessageHtml(db, a.id, 'ghost', '<p>x</p>')).toBe(false)
+  })
+})
+
+describe('thread person join', () => {
+  it('returns the linked person of the latest inbound sender', () => {
+    const anna = people.upsertPerson(db, { name: 'Anna', email: 'anna@example.com' }, T0)
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sender_handle: 'anna@example.com',
+      sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+    // my own reply later must not shadow the inbound sender
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm2', is_me: true, sent_at: later(1).toISOString(), body_text: 'reply'
+    }, later(1))
+    const [row] = comms.listThreads(db, {})
+    expect(row.person_id).toBe(anna.id)
+    expect(row.person_name).toBe('Anna')
+  })
+
+  it('returns null person for unlinked threads', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sender_handle: 'stranger@example.com',
+      sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+    const [row] = comms.listThreads(db, {})
+    expect(row.person_id).toBeNull()
+    expect(row.person_name).toBeNull()
   })
 })
 

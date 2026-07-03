@@ -17,6 +17,7 @@ import type { OutboxItem } from '../../core/comms-types'
 import type { CommsEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
 import { DATA_DIR } from '../db'
+import { logLine } from '../logger'
 
 const WA_DIR = join(DATA_DIR, 'wa')
 
@@ -195,6 +196,7 @@ export class WhatsAppConnection {
   /** Retitle placeholder threads and fix placeholder sender names from the name book. */
   private applyNames(): void {
     if (this.names.size === 0) return
+    const started = Date.now()
     let changed = false
     this.db.transaction(() => {
       for (const thread of repo.listAccountThreads(this.db, this.accountId)) {
@@ -211,6 +213,8 @@ export class WhatsAppConnection {
         if (repo.updateSenderNames(this.db, this.accountId, jidUser(jid), name) > 0) changed = true
       }
     })
+    const ms = Date.now() - started
+    if (ms > 200) logLine('warn', 'comms', `wa applyNames swept ${this.names.size} names in ${ms}ms`)
     if (changed) this.opts.onChanged()
   }
 

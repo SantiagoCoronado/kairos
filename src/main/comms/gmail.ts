@@ -6,11 +6,12 @@ import * as repo from '../../core/repo/comms'
 import { getSettings } from '../settings'
 import { runLoopbackFlow } from './oauth'
 import { saveTokens, loadTokens } from './credentials'
-import { buildMime, toBase64Url } from './mime'
+import { buildMime, textToHtml, toBase64Url } from './mime'
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
-const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send openid email'
+// modify (a superset of readonly) lets Kairos mark read / archive remotely
+const SCOPES = 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send openid email'
 const BACKFILL_QUERY = 'newer_than:30d -in:spam -in:trash'
 const BACKFILL_CAP = 500
 const FETCH_CONCURRENCY = 4
@@ -185,8 +186,48 @@ async function gmailFetch(
     })
   }
   if (res.status === 404) throw new GmailNotFound(path)
-  if (!res.ok) throw new Error(`Gmail API ${path} → ${res.status}`)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    // token predates the gmail.modify scope — user must re-consent once
+    if (res.status === 403 && /insufficient|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(body)) {
+      throw new GmailAuthError('Gmail permissions changed — reconnect this account to enable archive and read sync')
+    }
+    throw new Error(`Gmail API ${path} → ${res.status}`)
+  }
   return (await res.json()) as Record<string, unknown>
+}
+
+/** Move a whole thread to Gmail's trash (recoverable there for 30 days). */
+export async function trashGmailThread(
+  db: DbDriver,
+  account: CommsAccount,
+  threadExternalId: string
+): Promise<void> {
+  try {
+    await gmailFetch(db, account, `/threads/${threadExternalId}/trash`, { method: 'POST' })
+  } catch (err) {
+    if (err instanceof GmailNotFound) return // already gone remotely
+    throw err
+  }
+}
+
+/** Add/remove labels on every message of a thread (mark read, archive, unarchive). */
+export async function modifyGmailThread(
+  db: DbDriver,
+  account: CommsAccount,
+  threadExternalId: string,
+  change: { addLabelIds?: string[]; removeLabelIds?: string[] }
+): Promise<void> {
+  try {
+    await gmailFetch(db, account, `/threads/${threadExternalId}/modify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(change)
+    })
+  } catch (err) {
+    if (err instanceof GmailNotFound) return // thread deleted remotely — nothing to modify
+    throw err
+  }
 }
 
 export class GmailNotFound extends Error {}
@@ -237,12 +278,12 @@ function hasAttachment(part: GmailPart | undefined): boolean {
   return (part.parts ?? []).some(hasAttachment)
 }
 
-function extractBody(msg: GmailMessage): string {
+function extractBodies(msg: GmailMessage): { text: string; html: string | null } {
+  const htmlPart = findPart(msg.payload, 'text/html')
+  const html = htmlPart?.body?.data ? decodeB64Url(htmlPart.body.data).slice(0, 500_000) : null
   const plain = findPart(msg.payload, 'text/plain')
-  if (plain?.body?.data) return decodeB64Url(plain.body.data)
-  const html = findPart(msg.payload, 'text/html')
-  if (html?.body?.data) return stripHtml(decodeB64Url(html.body.data))
-  return ''
+  if (plain?.body?.data) return { text: decodeB64Url(plain.body.data), html }
+  return { text: html ? stripHtml(html) : '', html }
 }
 
 const stripReplyPrefix = (subject: string): string =>
@@ -260,7 +301,8 @@ export function ingestGmailMessage(db: DbDriver, account: CommsAccount, msg: Gma
     kind: 'email',
     title: stripReplyPrefix(subject) || '(no subject)'
   })
-  return repo.upsertMessage(db, {
+  const bodies = extractBodies(msg)
+  const added = repo.upsertMessage(db, {
     thread_id: thread.id,
     account_id: account.id,
     provider: 'gmail',
@@ -269,9 +311,11 @@ export function ingestGmailMessage(db: DbDriver, account: CommsAccount, msg: Gma
     sender_handle: from.email,
     is_me: isMe,
     sent_at: new Date(Number(msg.internalDate ?? Date.now())).toISOString(),
-    body_text: extractBody(msg).slice(0, 100_000),
+    body_text: bodies.text.slice(0, 100_000),
+    body_html: bodies.html,
     has_attachments: hasAttachment(msg.payload),
     is_read: !(msg.labelIds ?? []).includes('UNREAD'),
+    is_inbox: (msg.labelIds ?? []).includes('INBOX'),
     raw_json: JSON.stringify({
       headers: {
         from: header(msg, 'From'),
@@ -284,6 +328,9 @@ export function ingestGmailMessage(db: DbDriver, account: CommsAccount, msg: Gma
       labelIds: msg.labelIds ?? []
     })
   })
+  // pre-existing rows were stored before HTML capture — upgrade them in place
+  if (!added && bodies.html) repo.fillMessageHtml(db, account.id, msg.id, bodies.html)
+  return added
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -330,26 +377,64 @@ async function backfill(db: DbDriver, account: CommsAccount): Promise<number> {
   return fetchAndIngest(db, account, ids.slice(0, BACKFILL_CAP))
 }
 
+interface GmailLabelEvent {
+  message: { id: string }
+  labelIds?: string[]
+}
+interface GmailHistoryEntry {
+  messagesAdded?: { message: { id: string } }[]
+  labelsAdded?: GmailLabelEvent[]
+  labelsRemoved?: GmailLabelEvent[]
+}
+
 async function incremental(db: DbDriver, account: CommsAccount, historyId: string): Promise<number> {
   const ids = new Set<string>()
+  // remote read/archive state flows in via label history; last event per message wins
+  const labelPatches = new Map<string, { read?: boolean; inbox?: boolean }>()
+  const applyLabels = (events: GmailLabelEvent[] | undefined, added: boolean): void => {
+    for (const e of events ?? []) {
+      const labels = e.labelIds ?? []
+      const patch = labelPatches.get(e.message.id) ?? {}
+      if (labels.includes('UNREAD')) patch.read = !added
+      if (labels.includes('INBOX')) patch.inbox = added
+      labelPatches.set(e.message.id, patch)
+    }
+  }
   let latest = historyId
   let pageToken: string | undefined
   do {
-    const p = new URLSearchParams({ startHistoryId: historyId, historyTypes: 'messageAdded' })
+    const p = new URLSearchParams({ startHistoryId: historyId })
+    // append (never comma-join) — the API takes repeated historyTypes params
+    p.append('historyTypes', 'messageAdded')
+    p.append('historyTypes', 'labelAdded')
+    p.append('historyTypes', 'labelRemoved')
     if (pageToken) p.set('pageToken', pageToken)
     const page = await gmailFetch(db, account, `/history?${p}`)
-    for (const h of (page['history'] as
-      | { messagesAdded?: { message: { id: string } }[] }[]
-      | undefined) ?? []) {
+    for (const h of (page['history'] as GmailHistoryEntry[] | undefined) ?? []) {
       for (const ma of h.messagesAdded ?? []) ids.add(ma.message.id)
+      applyLabels(h.labelsAdded, true)
+      applyLabels(h.labelsRemoved, false)
     }
     latest = String(page['historyId'] ?? latest)
     pageToken = page['nextPageToken'] as string | undefined
   } while (pageToken)
 
   const added = await fetchAndIngest(db, account, [...ids])
+
+  let labelChanges = 0
+  const touchedThreads = new Set<string>()
+  for (const [messageId, patch] of labelPatches) {
+    if (ids.has(messageId)) continue // full fetch already carried final labels
+    const threadId = repo.applyGmailLabelEvent(db, account.id, messageId, patch)
+    if (threadId) {
+      touchedThreads.add(threadId)
+      labelChanges++
+    }
+  }
+  for (const threadId of touchedThreads) repo.recomputeThreadState(db, threadId)
+
   repo.patchSyncState(db, account.id, { historyId: latest })
-  return added
+  return added + labelChanges
 }
 
 /** One sync pass. Returns the number of newly ingested messages. */
@@ -442,6 +527,7 @@ export async function sendGmail(db: DbDriver, account: CommsAccount, item: Outbo
     cc: to.cc,
     subject,
     bodyText: item.body_text,
+    bodyHtml: textToHtml(item.body_text),
     inReplyTo
   })
   const body: Record<string, string> = { raw: toBase64Url(raw) }

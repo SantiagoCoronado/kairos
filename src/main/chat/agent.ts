@@ -6,7 +6,13 @@ import type { DbDriver } from '../../core/driver'
 import { buildToolDefs } from '../../core/tooldefs'
 import { readMemory } from '../../core/memory'
 import { newId, nowIso } from '../../core/ids'
-import type { ChatStreamEvent, ChatSessionInfo } from '../../shared/ipc-contract'
+import type {
+  ChatStreamEvent,
+  ChatSessionInfo,
+  ChatDraftInput,
+  ChatDraftResult
+} from '../../shared/ipc-contract'
+import * as comms from '../../core/repo/comms'
 import { DATA_DIR } from '../db'
 import { getSettings } from '../settings'
 
@@ -121,16 +127,89 @@ export class ChatManager {
     return row
   }
 
+  /**
+   * One-shot reply draft for a comms thread. No session, no tools, maxTurns 1
+   * — a single model call. Only ever invoked from the composer's Draft button.
+   */
+  async draftReply({ threadId, instruction }: ChatDraftInput): Promise<ChatDraftResult> {
+    const thread = comms.getThread(this.db, threadId)
+    if (!thread) return { ok: false, message: 'unknown thread' }
+    const account = comms.getAccount(this.db, thread.account_id)
+    if (!account) return { ok: false, message: 'unknown account' }
+    if (!resolveClaudeBinary()) {
+      return { ok: false, message: 'Claude Code binary not found — set its path in Settings' }
+    }
+
+    const messages = comms.listMessages(this.db, threadId).slice(-12)
+    if (messages.length === 0) return { ok: false, message: 'nothing to reply to yet' }
+    const lastInbound = [...messages].reverse().find((m) => !m.is_me)
+    const person = lastInbound?.person_id
+      ? this.db.get<{ name: string }>('SELECT name FROM people WHERE id = ?', lastInbound.person_id)
+      : undefined
+
+    const transcript = messages
+      .map((m) => {
+        const who = m.is_me ? 'me' : m.sender_name || m.sender_handle || 'them'
+        const body = m.body_text.length > 1500 ? `${m.body_text.slice(0, 1500)}…` : m.body_text
+        return `[${who}] (${m.sent_at}): ${body}`
+      })
+      .join('\n\n')
+
+    const prompt = [
+      `Conversation on ${thread.provider} — "${thread.title}":`,
+      transcript,
+      person ? `The other participant is ${person.name} (a saved contact).` : '',
+      `Write only the reply body, as ${account.display_name}. Match the thread's language, tone and register. No subject line, no quoted history, no signature unless the thread uses one, no preamble or explanation — output the reply text and nothing else.`,
+      instruction ? `Instruction from the user: ${instruction}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+
+    const settings = getSettings()
+    try {
+      const q = query({
+        prompt,
+        options: {
+          permissionMode: 'default',
+          settingSources: [],
+          strictMcpConfig: true,
+          systemPrompt:
+            'You draft replies inside Kairos, a personal messaging app. You return only the message body the user will send — no commentary.',
+          model: settings.chatModel ?? undefined,
+          effort: settings.chatEffort ?? undefined,
+          maxTurns: 1,
+          cwd: DATA_DIR,
+          env: buildChildEnv() as Record<string, string>,
+          pathToClaudeCodeExecutable: resolveClaudeBinary()
+        }
+      })
+      let draft = ''
+      let failed: string | null = null
+      for await (const msg of q) {
+        if (msg.type === 'assistant') {
+          for (const block of msg.message.content) {
+            if (block.type === 'text') draft += block.text
+          }
+        } else if (msg.type === 'result' && msg.subtype !== 'success') {
+          failed = `draft ended: ${msg.subtype}`
+        }
+      }
+      if (failed) return { ok: false, message: failed }
+      if (!draft.trim()) return { ok: false, message: 'the model returned an empty draft' }
+      return { ok: true, draft: draft.trim() }
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err)
+      const hint = /login|auth|credential|api key|401|403/i.test(raw)
+        ? ' — run `claude login` in a terminal, and make sure ANTHROPIC_API_KEY is not exported.'
+        : ''
+      return { ok: false, message: raw + hint }
+    }
+  }
+
   private async runTurn(session: SessionRow, text: string): Promise<void> {
     const sid = session.id
     const settings = getSettings()
-    const env: Record<string, string | undefined> = { ...process.env }
-    // subscription auth, never API-key billing
-    delete env['ANTHROPIC_API_KEY']
-    // GUI apps launched from Finder don't inherit the shell PATH
-    env['PATH'] = [env['PATH'], '/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '.local/bin')]
-      .filter(Boolean)
-      .join(':')
+    const env = buildChildEnv()
 
     try {
       const q = query({
@@ -217,6 +296,17 @@ export class ChatManager {
       this.db.run('UPDATE chat_sessions SET updated_at = ? WHERE id = ?', nowIso(), sid)
     }
   }
+}
+
+/** Child env for SDK runs: subscription auth (never API-key billing), Finder-safe PATH. */
+function buildChildEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env }
+  delete env['ANTHROPIC_API_KEY']
+  // GUI apps launched from Finder don't inherit the shell PATH
+  env['PATH'] = [env['PATH'], '/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '.local/bin')]
+    .filter(Boolean)
+    .join(':')
+  return env
 }
 
 function resolveClaudeBinary(): string | undefined {

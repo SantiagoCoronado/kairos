@@ -6,10 +6,18 @@ import type { DbDriver } from '../../core/driver'
 import type { CommsAccount } from '../../core/comms-types'
 import type { CommsEvent, CommsSendInput, CommsSendResult } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
-import { connectGmail, syncGmailAccount, sendGmail, GmailAuthError } from './gmail'
+import {
+  connectGmail,
+  syncGmailAccount,
+  sendGmail,
+  modifyGmailThread,
+  trashGmailThread,
+  GmailAuthError
+} from './gmail'
 import { connectSlack, syncSlackAccount, sendSlack, SlackAuthError } from './slack'
 import { WhatsAppConnection, deleteWaAuthState } from './whatsapp'
 import { loadMacContacts } from '../contacts'
+import { logLine } from '../logger'
 
 const GMAIL_INTERVAL_MS = 60_000
 const SLACK_INTERVAL_MS = 90_000
@@ -51,11 +59,14 @@ export class CommsSyncManager {
   private async applyContactNames(): Promise<void> {
     const res = await loadMacContacts()
     if ('error' in res) return // no permission / helper missing: quietly skip
+    const started = Date.now()
     let changed = false
     for (const account of repo.listAccounts(this.db)) {
       if (account.provider !== 'whatsapp') continue
       if (repo.applyContactNames(this.db, account.id, res.contacts)) changed = true
     }
+    const ms = Date.now() - started
+    if (ms > 200) logLine('warn', 'comms', `contacts sweep took ${ms}ms (${res.contacts.length} contacts)`)
     if (changed) this.notifyChanged()
     // second pass over the wire: resolve address-book phones to @lid chats
     for (const conn of this.wa.values()) {
@@ -150,6 +161,74 @@ export class CommsSyncManager {
       if (account.status === 'disabled' || account.status === 'needs_auth') continue
       this.scheduleSync(account.id, 0)
     }
+  }
+
+  // ---------- read / archive ----------
+
+  private onGmailModifyError(accountId: string, action: string, err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof GmailAuthError) {
+      repo.setAccountStatus(this.db, accountId, 'needs_auth', message)
+      this.emit({ kind: 'sync', accountId, status: 'needs_auth', message })
+      this.notifyChanged()
+    } else {
+      logLine('warn', 'comms', `gmail ${action} failed: ${message}`)
+    }
+    return message
+  }
+
+  /** Mark read locally right away; propagate to Gmail in the background. */
+  markRead(threadId: string): void {
+    const thread = repo.getThread(this.db, threadId)
+    if (!thread) return
+    repo.markThreadRead(this.db, threadId)
+    this.notifyChanged()
+    if (thread.provider !== 'gmail') return
+    const account = repo.getAccount(this.db, thread.account_id)
+    if (!account || account.status !== 'connected') return
+    void modifyGmailThread(this.db, account, thread.external_id, { removeLabelIds: ['UNREAD'] }).catch(
+      (err) => this.onGmailModifyError(account.id, 'mark-read', err)
+    )
+  }
+
+  /** Archive/unarchive. Gmail archives remotely first; other providers are local-only. */
+  async setThreadArchived(
+    threadId: string,
+    archived: boolean
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const thread = repo.getThread(this.db, threadId)
+    if (!thread) return { ok: false, message: 'unknown thread' }
+    if (thread.provider === 'gmail') {
+      const account = repo.getAccount(this.db, thread.account_id)
+      if (!account) return { ok: false, message: 'unknown account' }
+      try {
+        await modifyGmailThread(this.db, account, thread.external_id, {
+          [archived ? 'removeLabelIds' : 'addLabelIds']: ['INBOX']
+        })
+      } catch (err) {
+        return { ok: false, message: this.onGmailModifyError(account.id, 'archive', err) }
+      }
+    }
+    repo.setThreadArchived(this.db, threadId, archived)
+    this.notifyChanged()
+    return { ok: true }
+  }
+
+  /** Email-only delete: trash the thread in Gmail, then drop it locally. */
+  async deleteThread(threadId: string): Promise<{ ok: true } | { ok: false; message: string }> {
+    const thread = repo.getThread(this.db, threadId)
+    if (!thread) return { ok: false, message: 'unknown thread' }
+    if (thread.provider !== 'gmail') return { ok: false, message: 'only emails can be deleted' }
+    const account = repo.getAccount(this.db, thread.account_id)
+    if (!account) return { ok: false, message: 'unknown account' }
+    try {
+      await trashGmailThread(this.db, account, thread.external_id)
+    } catch (err) {
+      return { ok: false, message: this.onGmailModifyError(account.id, 'trash', err) }
+    }
+    repo.deleteThread(this.db, threadId)
+    this.notifyChanged()
+    return { ok: true }
   }
 
   // ---------- connect / disconnect ----------

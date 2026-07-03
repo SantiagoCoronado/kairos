@@ -188,6 +188,60 @@ CREATE TABLE comms_outbox (
   sent_at      TEXT
 );
 CREATE INDEX idx_comms_outbox_status ON comms_outbox(status, created_at);
+`,
+  // 003 — manual ordering for tasks and objectives
+  // backfill mirrors the pre-existing default ORDER BY so upgraded DBs keep
+  // their visible order exactly
+  `
+ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+UPDATE tasks SET sort_order = (
+  SELECT rn FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      ORDER BY
+        CASE status WHEN 'in_progress' THEN 0 WHEN 'todo' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
+        due_date IS NULL, due_date, priority, created_at DESC
+    ) AS rn FROM tasks
+  ) ranked WHERE ranked.id = tasks.id
+);
+CREATE INDEX idx_tasks_sort ON tasks(sort_order);
+
+ALTER TABLE objectives ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+UPDATE objectives SET sort_order = (
+  SELECT rn FROM (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY period DESC, area, title) AS rn FROM objectives
+  ) ranked WHERE ranked.id = objectives.id
+);
+`,
+  // 004 — sender lookups: the WhatsApp name sweep updates messages by
+  // (account_id, sender_handle) once per learned contact; without this index
+  // each update was a full table scan and froze the main thread for seconds
+  `
+CREATE INDEX idx_comms_messages_sender ON comms_messages(account_id, sender_handle);
+`,
+  // 005 — inbox batch: manual account ordering, HTML email bodies, and
+  // Gmail INBOX/archive state. Backfills derive from the labelIds already
+  // stored in raw_json; non-gmail rows keep the inbox defaults.
+  `
+ALTER TABLE comms_accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+UPDATE comms_accounts SET sort_order = (
+  SELECT rn FROM (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY created_at) AS rn FROM comms_accounts
+  ) ranked WHERE ranked.id = comms_accounts.id
+);
+
+ALTER TABLE comms_messages ADD COLUMN body_html TEXT;
+ALTER TABLE comms_messages ADD COLUMN is_inbox INTEGER NOT NULL DEFAULT 1;
+UPDATE comms_messages SET is_inbox = 0
+WHERE provider = 'gmail' AND NOT (
+  raw_json IS NOT NULL AND json_valid(raw_json)
+  AND EXISTS (SELECT 1 FROM json_each(raw_json, '$.labelIds') WHERE value = 'INBOX')
+);
+
+ALTER TABLE comms_threads ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0;
+UPDATE comms_threads SET is_archived = 1
+WHERE provider = 'gmail' AND NOT EXISTS (
+  SELECT 1 FROM comms_messages m WHERE m.thread_id = comms_threads.id AND m.is_inbox = 1
+);
 `
 ]
 

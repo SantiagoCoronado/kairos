@@ -17,6 +17,7 @@ export interface CommsAccount {
   /** JSON: gmail {historyId}, slack {channelsFetchedAt}, whatsapp {} */
   sync_state: string
   last_sync_at: string | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -36,8 +37,16 @@ export interface CommsThread {
   sync_enabled: number
   /** slack: latest fetched ts */
   sync_cursor: string | null
+  /** gmail: no message carries INBOX; slack/whatsapp: local-only flag */
+  is_archived: number
   created_at: string
   updated_at: string
+}
+
+/** Thread list row: thread + the linked person of its latest inbound sender. */
+export interface CommsThreadListItem extends CommsThread {
+  person_id: string | null
+  person_name: string | null
 }
 
 export interface CommsMessage {
@@ -54,8 +63,12 @@ export interface CommsMessage {
   person_id: string | null
   sent_at: string
   body_text: string
+  /** gmail: raw text/html part when present */
+  body_html: string | null
   has_attachments: number
   is_read: number
+  /** gmail: message carries the INBOX label; others always 1 */
+  is_inbox: number
   raw_json: string | null
   created_at: string
 }
@@ -86,6 +99,8 @@ export interface ThreadFilter {
   provider?: CommsProvider
   unreadOnly?: boolean
   search?: string
+  /** archive bucket to show (default 'inbox') */
+  box?: 'inbox' | 'archived' | 'all'
   /** include threads with sync disabled (default false) */
   includeDisabled?: boolean
   limit?: number
@@ -117,8 +132,11 @@ export interface MessageUpsert {
   is_me?: boolean
   sent_at: string
   body_text?: string
+  body_html?: string | null
   has_attachments?: boolean
   is_read?: boolean
+  /** gmail: message carries INBOX (default true) */
+  is_inbox?: boolean
   raw_json?: string | null
 }
 

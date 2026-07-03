@@ -19,13 +19,28 @@ import { executeCapture } from '../core/capture'
 import { hideCaptureWindow } from './windows/capture-window'
 import * as comms from '../core/repo/comms'
 import { CommsSyncManager } from './comms/manager'
+import { logLine } from './logger'
+
+const SLOW_IPC_MS = 300
 
 function handle<K extends keyof IpcApi>(
   channel: K,
   fn: (...args: Parameters<IpcApi[K]>) => ReturnType<IpcApi[K]>
 ): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ipcMain.handle(channel, (_event, ...args) => (fn as any)(...args))
+  ipcMain.handle(channel, async (_event, ...args) => {
+    const started = Date.now()
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return await (fn as any)(...args)
+    } catch (err) {
+      logLine('error', 'ipc', `${channel} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
+      throw err
+    } finally {
+      const ms = Date.now() - started
+      if (ms > SLOW_IPC_MS && channel !== 'log:renderer')
+        logLine('warn', 'ipc', `slow ${channel}: ${ms}ms`)
+    }
+  })
 }
 
 export function broadcast<K extends keyof IpcEvents>(channel: K, payload: IpcEvents[K]): void {
@@ -44,6 +59,7 @@ export function registerIpc(): void {
   const db = getDb()
 
   handle('app:ping', () => 'pong')
+  handle('log:renderer', (level, message) => logLine(level, 'renderer', message.slice(0, 4000)))
 
   handle('tasks:list', (f) => tasks.listTasks(db, f))
   handle('tasks:create', (input) => {
@@ -58,6 +74,10 @@ export function registerIpc(): void {
   })
   handle('tasks:delete', (id) => {
     tasks.deleteTask(db, id)
+    broadcast('db:changed', { entity: 'tasks' })
+  })
+  handle('tasks:reorder', (id, beforeId) => {
+    tasks.moveTaskBefore(db, id, beforeId)
     broadcast('db:changed', { entity: 'tasks' })
   })
 
@@ -105,8 +125,23 @@ export function registerIpc(): void {
     broadcast('db:changed', { entity: 'objectives' })
     return o
   })
+  handle('objectives:delete', (id) => {
+    objectives.deleteObjective(db, id)
+    broadcast('db:changed', { entity: 'objectives' })
+    broadcast('db:changed', { entity: 'tasks' }) // task-KR links cascade
+  })
+  handle('objectives:reorder', (id, beforeId) => {
+    objectives.moveObjectiveBefore(db, id, beforeId)
+    broadcast('db:changed', { entity: 'objectives' })
+  })
+  handle('objectives:periods', () => objectives.listPeriods(db))
   handle('krs:add', (objectiveId, kr) => {
     const k = objectives.addKeyResult(db, objectiveId, kr)
+    broadcast('db:changed', { entity: 'objectives' })
+    return k
+  })
+  handle('krs:update', (id, patch) => {
+    const k = objectives.updateKeyResult(db, id, patch)
     broadcast('db:changed', { entity: 'objectives' })
     return k
   })
@@ -115,8 +150,16 @@ export function registerIpc(): void {
     broadcast('db:changed', { entity: 'objectives' })
     return k
   })
+  handle('krs:delete', (id) => {
+    objectives.deleteKeyResult(db, id)
+    broadcast('db:changed', { entity: 'objectives' })
+  })
   handle('krs:linkTask', (krId, taskId) => {
     objectives.linkTaskToKr(db, taskId, krId)
+    broadcast('db:changed', { entity: 'objectives' })
+  })
+  handle('krs:unlinkTask', (krId, taskId) => {
+    objectives.unlinkTaskFromKr(db, taskId, krId)
     broadcast('db:changed', { entity: 'objectives' })
   })
   handle('krs:tasks', (krId) => objectives.tasksForKr(db, krId))
@@ -154,6 +197,7 @@ export function registerIpc(): void {
   handle('chat:send', (localSessionId, text) => chat.send(localSessionId, text))
   handle('chat:interrupt', (localSessionId) => chat.interrupt(localSessionId))
   handle('chat:sessions', () => chat.listSessions())
+  handle('chat:draft', (input) => chat.draftReply(input))
 
   const manager = new CommsSyncManager(
     db,
@@ -168,7 +212,13 @@ export function registerIpc(): void {
   handle('comms:accountThreads', (accountId) => comms.listAccountThreads(db, accountId))
   handle('comms:messages', (threadId) => comms.listMessages(db, threadId))
   handle('comms:markRead', (threadId) => {
-    comms.markThreadRead(db, threadId)
+    manager.markRead(threadId) // local immediately; gmail propagation in background
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('comms:archiveThread', (threadId, archived) => manager.setThreadArchived(threadId, archived))
+  handle('comms:deleteThread', (threadId) => manager.deleteThread(threadId))
+  handle('comms:reorderAccount', (id, beforeId) => {
+    comms.moveAccountBefore(db, id, beforeId)
     broadcast('db:changed', { entity: 'comms' })
   })
   handle('comms:send', (input) => manager.sendNow(input))

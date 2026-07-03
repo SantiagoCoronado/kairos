@@ -317,6 +317,50 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
       }
     },
     {
+      name: 'objective_update',
+      description: 'Edit an objective: title, description, area, period, or status.',
+      schema: {
+        id: z.string(),
+        title: z.string().optional(),
+        description: z.string().optional(),
+        area: area.optional(),
+        period: z.string().optional().describe('e.g. 2026-Q3'),
+        status: z.enum(['active', 'achieved', 'dropped']).optional()
+      },
+      handler: ({ id, ...patch }: { id: string } & Parameters<typeof objectives.updateObjective>[2]) => {
+        const o = objectives.updateObjective(db, id, patch)
+        ctx.onMutate('objectives')
+        return o
+      }
+    },
+    {
+      name: 'objective_delete',
+      description: 'Delete an objective and its key results. Linked tasks are kept.',
+      schema: { id: z.string() },
+      handler: (a: { id: string }) => {
+        objectives.deleteObjective(db, a.id)
+        ctx.onMutate('objectives')
+        return { deleted: true }
+      }
+    },
+    {
+      name: 'kr_update',
+      description: "Edit a key result's title, unit, start/target/current values.",
+      schema: {
+        id: z.string(),
+        title: z.string().optional(),
+        unit: z.string().optional(),
+        start_value: z.number().optional(),
+        target_value: z.number().optional(),
+        current_value: z.number().optional()
+      },
+      handler: ({ id, ...patch }: { id: string } & Parameters<typeof objectives.updateKeyResult>[2]) => {
+        const kr = objectives.updateKeyResult(db, id, patch)
+        ctx.onMutate('objectives')
+        return kr
+      }
+    },
+    {
       name: 'kr_update_progress',
       description: "Set a key result's current value.",
       schema: { id: z.string(), value: z.number() },

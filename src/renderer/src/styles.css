@@ -27,6 +27,12 @@
   --color-ok: #7fb47f;
 }
 
+html {
+  /* render native widgets (date-picker calendar, select dropdowns,
+     scrollbars) in dark mode instead of Chromium's white defaults */
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
@@ -40,8 +46,16 @@ body {
   font-family: var(--font-sans);
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
-  user-select: none;
+  /* content is selectable/copyable; UI chrome opts out below */
+  user-select: text;
   overflow: hidden;
+}
+
+/* chrome never selects — dragging across it must not start a selection */
+button,
+select,
+label {
+  user-select: none;
 }
 
 /* sidebar = panel tint composited on the same single base layer the main
@@ -61,6 +75,7 @@ textarea,
 /* macOS hiddenInset titlebar: make the top strip draggable */
 .drag-region {
   -webkit-app-region: drag;
+  user-select: none;
 }
 .drag-region button,
 .drag-region input {

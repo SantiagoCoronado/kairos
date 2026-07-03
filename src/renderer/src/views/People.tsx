@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Archive, BellOff, Plus } from 'lucide-react'
 import type { Person, Area, InteractionKind, FollowupDue } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
-import { Input, Button, Select, Chip, Segmented, EmptyState, cn } from '../components/ui'
+import { Input, Button, Select, Chip, Segmented, EmptyState, InlineText, cn } from '../components/ui'
 
 const KINDS: InteractionKind[] = ['coffee', 'call', 'message', 'email', 'meeting', 'other']
 
@@ -305,28 +305,5 @@ function Field({
         }}
       />
     </div>
-  )
-}
-
-function InlineText({
-  value,
-  className,
-  onSave
-}: {
-  value: string
-  className?: string
-  onSave: (v: string) => void
-}): React.JSX.Element {
-  return (
-    <input
-      className={cn('bg-transparent focus:outline-none focus:border-b focus:border-border-strong', className)}
-      defaultValue={value}
-      key={value}
-      onBlur={(e) => {
-        const v = e.target.value.trim()
-        if (v && v !== value) onSave(v)
-      }}
-      onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-    />
   )
 }

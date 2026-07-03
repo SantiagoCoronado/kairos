@@ -20,6 +20,11 @@ interface GmailTokens {
   refresh_token: string
   /** epoch ms */
   expires_at: number
+  /** the OAuth client that issued the refresh token — refreshes must use this
+   *  exact client, even if Settings later holds a different one (tokens older
+   *  than this field fall back to Settings) */
+  client_id?: string
+  client_secret?: string
 }
 
 /** thrown when the account needs the user to re-run the consent flow */
@@ -63,6 +68,10 @@ async function exchangeToken(body: Record<string, string>): Promise<Record<strin
   if (!res.ok) {
     const code = String(json['error'] ?? res.status)
     if (code === 'invalid_grant') throw new GmailAuthError('Google refresh token revoked or expired')
+    if (code === 'unauthorized_client' || code === 'invalid_client' || code === 'deleted_client')
+      throw new GmailAuthError(
+        'OAuth client mismatch — this account was connected with different Google credentials. Reconnect it.'
+      )
     throw new Error(`Google token endpoint error: ${code}`)
   }
   return json
@@ -102,7 +111,9 @@ export async function connectGmail(db: DbDriver): Promise<CommsAccount> {
   const tokens: GmailTokens = {
     access_token: String(tok['access_token']),
     refresh_token: String(tok['refresh_token']),
-    expires_at: Date.now() + Number(tok['expires_in'] ?? 3600) * 1000
+    expires_at: Date.now() + Number(tok['expires_in'] ?? 3600) * 1000,
+    client_id: clientId,
+    client_secret: clientSecret
   }
 
   const profileRes = await fetch(`${API}/profile`, {
@@ -130,7 +141,11 @@ async function ensureAccessToken(db: DbDriver, account: CommsAccount): Promise<G
   if (!tokens) throw new GmailAuthError('no stored credentials')
   if (Date.now() < tokens.expires_at - 60_000) return tokens
 
-  const { clientId, clientSecret } = requireClient()
+  // refresh with the client that issued the token, not whatever is currently
+  // in Settings — swapping Settings credentials must not break other accounts
+  let clientId = tokens.client_id
+  let clientSecret = tokens.client_secret
+  if (!clientId || !clientSecret) ({ clientId, clientSecret } = requireClient())
   const tok = await exchangeToken({
     client_id: clientId,
     client_secret: clientSecret,
@@ -140,7 +155,9 @@ async function ensureAccessToken(db: DbDriver, account: CommsAccount): Promise<G
   const next: GmailTokens = {
     access_token: String(tok['access_token']),
     refresh_token: tokens.refresh_token,
-    expires_at: Date.now() + Number(tok['expires_in'] ?? 3600) * 1000
+    expires_at: Date.now() + Number(tok['expires_in'] ?? 3600) * 1000,
+    client_id: clientId,
+    client_secret: clientSecret
   }
   saveTokens(db, account.id, next)
   return next

@@ -4,7 +4,7 @@
 export type Area = 'personal' | 'work'
 
 /** entities announced in change notifications (IPC db:changed) */
-export type DbEntity = 'tasks' | 'people' | 'interactions' | 'objectives' | 'projects' | 'all'
+export type DbEntity = 'tasks' | 'people' | 'interactions' | 'objectives' | 'projects' | 'comms' | 'all'
 
 export type InteractionKind = 'call' | 'message' | 'email' | 'meeting' | 'coffee' | 'other'
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled'

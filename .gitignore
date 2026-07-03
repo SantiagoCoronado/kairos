@@ -5,3 +5,4 @@ dist-mcp/
 resources/calendar-helper
 *.log
 .DS_Store
+resources/contacts-helper

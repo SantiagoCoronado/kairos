@@ -11,7 +11,11 @@ const DEFAULTS: Settings = {
   translucency: 0,
   chatProvider: 'claude',
   chatModel: null,
-  chatEffort: null
+  chatEffort: null,
+  googleClientId: null,
+  googleClientSecret: null,
+  slackClientId: null,
+  slackClientSecret: null
 }
 
 const FILE = join(DATA_DIR, 'settings.json')

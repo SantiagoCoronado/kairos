@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
+import { useInvoke } from '../lib/api'
 
-export type ViewId = 'today' | 'people' | 'tasks' | 'objectives' | 'chat'
+export type ViewId = 'today' | 'inbox' | 'people' | 'tasks' | 'objectives' | 'chat'
 
 /** Sidebar toggle pinned next to the traffic lights (12px bubbles from x=18,
  *  centerline y=24). Must be rendered INSIDE a .drag-region element — the
@@ -28,6 +29,7 @@ export function SidebarToggle({
 
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'people', label: 'People', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare },
   { id: 'objectives', label: 'Objectives', icon: Target },
@@ -44,6 +46,7 @@ export function Sidebar({
   onHide: () => void
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
+  const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
   return (
     <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col">
       {/* space for macOS traffic lights */}
@@ -60,7 +63,12 @@ export function Sidebar({
             }`}
           >
             <Icon size={15} strokeWidth={1.75} />
-            <span className="text-[13px]">{label}</span>
+            <span className="text-[13px] flex-1">{label}</span>
+            {id === 'inbox' && (unread ?? 0) > 0 && (
+              <span className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
+                {unread! > 99 ? '99+' : unread}
+              </span>
+            )}
           </button>
         ))}
       </nav>

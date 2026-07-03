@@ -11,6 +11,8 @@ import * as objectives from './repo/objectives'
 import { todayAgenda } from './repo/today'
 import { exportMarkdown } from './export/markdown'
 import { readMemory, saveMemory } from './memory'
+import * as comms from './repo/comms'
+import type { CommsProvider } from './comms-types'
 
 // Shared tool definitions for BOTH Claude surfaces:
 //  - the standalone stdio MCP server (terminal Claude Code)
@@ -34,6 +36,13 @@ export interface ToolDef {
 const area = z.enum(['personal', 'work'])
 const taskStatus = z.enum(['todo', 'in_progress', 'done', 'cancelled'])
 const interactionKind = z.enum(['call', 'message', 'email', 'meeting', 'coffee', 'other'])
+const commsProvider = z.enum(['gmail', 'slack', 'whatsapp'])
+
+/** keep tool output lean: drop raw_json and cap the body */
+function trimMessage<T extends { raw_json?: string | null; body_text: string }>(m: T): Omit<T, 'raw_json'> {
+  const { raw_json: _raw, ...rest } = m
+  return { ...rest, body_text: m.body_text.slice(0, 2000) }
+}
 
 function mustResolvePerson(db: DbDriver, ref: string): Person {
   const p = people.resolvePersonRef(db, ref)
@@ -360,6 +369,107 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
       },
       handler: (a: { content: string; mode?: 'append' | 'replace' }) =>
         saveMemory(ctx.dataDir, a.content, a.mode ?? 'append')
+    },
+    {
+      name: 'comms_accounts_list',
+      description:
+        'List connected communication accounts (gmail/slack/whatsapp) with their sync status. Message sync only runs while the Kairos app is open.',
+      schema: {},
+      handler: () =>
+        comms.listAccounts(db).map(({ id, provider, display_name, status, error, last_sync_at }) => ({
+          id,
+          provider,
+          display_name,
+          status,
+          error,
+          last_sync_at
+        }))
+    },
+    {
+      name: 'comms_search',
+      description:
+        'Search synced messages (email/slack/whatsapp) by text. Returns messages with their thread id, thread title, and account. Use comms_thread_get to read the surrounding conversation.',
+      schema: {
+        query: z.string().describe('substring to match in body, sender name, or thread title'),
+        provider: commsProvider.optional(),
+        person: z.string().optional().describe('person id or name — only their messages'),
+        limit: z.number().int().min(1).max(100).optional().describe('default 20')
+      },
+      handler: (a: { query: string; provider?: CommsProvider; person?: string; limit?: number }) => {
+        const person = a.person ? mustResolvePerson(db, a.person) : undefined
+        return comms
+          .searchMessages(db, a.query, { provider: a.provider, personId: person?.id, limit: a.limit })
+          .map(trimMessage)
+      }
+    },
+    {
+      name: 'comms_thread_get',
+      description: 'One conversation (email thread / slack channel / whatsapp chat) with its recent messages, oldest first.',
+      schema: {
+        thread_id: z.string(),
+        limit: z.number().int().min(1).max(200).optional().describe('default 50 most recent')
+      },
+      handler: (a: { thread_id: string; limit?: number }) => {
+        const thread = comms.getThread(db, a.thread_id)
+        if (!thread) throw new Error(`No thread with id "${a.thread_id}". Use comms_search first.`)
+        return {
+          thread: {
+            id: thread.id,
+            provider: thread.provider,
+            kind: thread.kind,
+            title: thread.title,
+            account_id: thread.account_id
+          },
+          messages: comms.listMessages(db, thread.id, a.limit ?? 50).map(trimMessage)
+        }
+      }
+    },
+    {
+      name: 'comms_send',
+      description:
+        'Send a message as the user. IMPORTANT: show the user the exact draft and recipient and get their approval BEFORE calling this; then pass confirm_send: true. account_id must come from comms_accounts_list. Reply into a conversation with thread_id, or send a new email with to + subject. The message is queued and delivers within seconds while the Kairos app is running (otherwise on next app launch).',
+      schema: {
+        account_id: z.string(),
+        thread_id: z.string().optional().describe('reply into this conversation'),
+        to: z.array(z.string()).optional().describe('new email only: recipient addresses'),
+        subject: z.string().optional().describe('new email only'),
+        body: z.string(),
+        confirm_send: z.literal(true).describe('must be true — confirms the user approved this exact draft')
+      },
+      handler: (a: {
+        account_id: string
+        thread_id?: string
+        to?: string[]
+        subject?: string
+        body: string
+        confirm_send: true
+      }) => {
+        const account = comms.getAccount(db, a.account_id)
+        if (!account) throw new Error(`No account "${a.account_id}". Use comms_accounts_list.`)
+        if (a.thread_id) {
+          const thread = comms.getThread(db, a.thread_id)
+          if (!thread) throw new Error(`No thread "${a.thread_id}".`)
+          if (thread.account_id !== account.id) throw new Error('thread belongs to a different account')
+        } else if (account.provider === 'gmail') {
+          if (!a.to?.length || !a.subject) throw new Error('a new email needs `to` and `subject`')
+        } else {
+          throw new Error(`${account.provider} sends need a thread_id`)
+        }
+        const item = comms.enqueueOutbox(db, {
+          account_id: account.id,
+          thread_id: a.thread_id ?? null,
+          provider: account.provider,
+          to_json: JSON.stringify(account.provider === 'gmail' ? { to: a.to, subject: a.subject } : {}),
+          body_text: a.body,
+          source: 'agent'
+        })
+        ctx.onMutate('comms')
+        return {
+          queued: true,
+          outbox_id: item.id,
+          note: 'delivers within seconds while the Kairos app is running; otherwise on next app launch'
+        }
+      }
     }
   ]
 }

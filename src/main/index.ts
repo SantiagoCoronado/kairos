@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { createMainWindow } from './windows/main-window'
 import { createCaptureWindow } from './windows/capture-window'
 import { registerCaptureHotkey } from './hotkey'
-import { registerIpc } from './ipc'
+import { registerIpc, getCommsManager } from './ipc'
 import { closeDb } from './db'
 
 const gotLock = app.requestSingleInstanceLock()
@@ -18,6 +18,7 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     registerIpc()
+    getCommsManager()?.start()
     const win = createMainWindow()
 
     // dev-only self-screenshot: DEBUG_SHOT=/path.png [DEBUG_HIDE_SIDEBAR=1] npx electron .
@@ -61,5 +62,8 @@ if (!gotLock) {
     if (process.platform !== 'darwin') app.quit()
   })
 
-  app.on('will-quit', () => closeDb())
+  app.on('will-quit', () => {
+    getCommsManager()?.stop()
+    closeDb()
+  })
 }

@@ -100,6 +100,94 @@ CREATE TABLE chat_sessions (
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
+`,
+  // 002 — communications module (gmail / slack / whatsapp)
+  `
+CREATE TABLE comms_accounts (
+  id            TEXT PRIMARY KEY,
+  provider      TEXT NOT NULL CHECK (provider IN ('gmail','slack','whatsapp')),
+  external_id   TEXT NOT NULL,
+  display_name  TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'connected'
+                CHECK (status IN ('connected','needs_auth','error','disabled')),
+  error         TEXT,
+  sync_state    TEXT NOT NULL DEFAULT '{}',
+  last_sync_at  TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  UNIQUE (provider, external_id)
+);
+
+CREATE TABLE comms_credentials (
+  account_id  TEXT PRIMARY KEY REFERENCES comms_accounts(id) ON DELETE CASCADE,
+  cipher      TEXT NOT NULL
+);
+
+CREATE TABLE comms_threads (
+  id              TEXT PRIMARY KEY,
+  account_id      TEXT NOT NULL REFERENCES comms_accounts(id) ON DELETE CASCADE,
+  provider        TEXT NOT NULL,
+  external_id     TEXT NOT NULL,
+  kind            TEXT NOT NULL CHECK (kind IN ('email','dm','group','channel')),
+  title           TEXT NOT NULL DEFAULT '',
+  snippet         TEXT NOT NULL DEFAULT '',
+  last_message_at TEXT,
+  unread_count    INTEGER NOT NULL DEFAULT 0,
+  sync_enabled    INTEGER NOT NULL DEFAULT 1,
+  sync_cursor     TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  UNIQUE (account_id, external_id)
+);
+CREATE INDEX idx_comms_threads_recent ON comms_threads(last_message_at DESC);
+
+CREATE TABLE comms_messages (
+  id              TEXT PRIMARY KEY,
+  thread_id       TEXT NOT NULL REFERENCES comms_threads(id) ON DELETE CASCADE,
+  account_id      TEXT NOT NULL REFERENCES comms_accounts(id) ON DELETE CASCADE,
+  provider        TEXT NOT NULL,
+  external_id     TEXT NOT NULL,
+  sender_name     TEXT NOT NULL DEFAULT '',
+  sender_handle   TEXT NOT NULL DEFAULT '',
+  is_me           INTEGER NOT NULL DEFAULT 0,
+  person_id       TEXT REFERENCES people(id) ON DELETE SET NULL,
+  sent_at         TEXT NOT NULL,
+  body_text       TEXT NOT NULL DEFAULT '',
+  has_attachments INTEGER NOT NULL DEFAULT 0,
+  is_read         INTEGER NOT NULL DEFAULT 0,
+  raw_json        TEXT,
+  created_at      TEXT NOT NULL,
+  UNIQUE (account_id, external_id)
+);
+CREATE INDEX idx_comms_messages_thread ON comms_messages(thread_id, sent_at DESC);
+CREATE INDEX idx_comms_messages_person ON comms_messages(person_id);
+
+CREATE TABLE comms_identities (
+  id         TEXT PRIMARY KEY,
+  person_id  TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  provider   TEXT NOT NULL,
+  handle     TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (provider, handle)
+);
+
+CREATE TABLE comms_outbox (
+  id           TEXT PRIMARY KEY,
+  account_id   TEXT NOT NULL REFERENCES comms_accounts(id) ON DELETE CASCADE,
+  thread_id    TEXT REFERENCES comms_threads(id) ON DELETE SET NULL,
+  provider     TEXT NOT NULL,
+  to_json      TEXT NOT NULL,
+  body_text    TEXT NOT NULL,
+  in_reply_to  TEXT,
+  status       TEXT NOT NULL DEFAULT 'queued'
+               CHECK (status IN ('queued','sending','sent','failed')),
+  error        TEXT,
+  source       TEXT NOT NULL DEFAULT 'app' CHECK (source IN ('app','agent')),
+  external_id  TEXT,
+  created_at   TEXT NOT NULL,
+  sent_at      TEXT
+);
+CREATE INDEX idx_comms_outbox_status ON comms_outbox(status, created_at);
 `
 ]
 

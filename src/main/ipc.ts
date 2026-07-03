@@ -17,6 +17,8 @@ import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
 import { executeCapture } from '../core/capture'
 import { hideCaptureWindow } from './windows/capture-window'
+import * as comms from '../core/repo/comms'
+import { CommsSyncManager } from './comms/manager'
 
 function handle<K extends keyof IpcApi>(
   channel: K,
@@ -30,6 +32,12 @@ export function broadcast<K extends keyof IpcEvents>(channel: K, payload: IpcEve
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
   }
+}
+
+let commsManager: CommsSyncManager | null = null
+
+export function getCommsManager(): CommsSyncManager | null {
+  return commsManager
 }
 
 export function registerIpc(): void {
@@ -147,6 +155,45 @@ export function registerIpc(): void {
   handle('chat:interrupt', (localSessionId) => chat.interrupt(localSessionId))
   handle('chat:sessions', () => chat.listSessions())
 
+  const manager = new CommsSyncManager(
+    db,
+    (event) => broadcast('comms:event', event),
+    () => broadcast('db:changed', { entity: 'comms' })
+  )
+  commsManager = manager
+
+  handle('comms:accounts', () => comms.listAccounts(db))
+  handle('comms:unreadTotal', () => comms.unreadTotal(db))
+  handle('comms:threads', (f) => comms.listThreads(db, f))
+  handle('comms:accountThreads', (accountId) => comms.listAccountThreads(db, accountId))
+  handle('comms:messages', (threadId) => comms.listMessages(db, threadId))
+  handle('comms:markRead', (threadId) => {
+    comms.markThreadRead(db, threadId)
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('comms:send', (input) => manager.sendNow(input))
+  handle('comms:syncNow', (accountId) => manager.syncNow(accountId))
+  handle('comms:linkSender', (provider, handle_, personId) => {
+    comms.linkHandleToPerson(db, provider, handle_.trim().toLowerCase(), personId)
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('comms:setThreadSync', (threadId, enabled) => {
+    comms.setThreadSyncEnabled(db, threadId, enabled)
+    if (enabled) {
+      const thread = comms.getThread(db, threadId)
+      if (thread) manager.syncNow(thread.account_id)
+    }
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('comms:connectGmail', () => wrapConnect(manager.connectGmail()))
+  handle('comms:connectSlack', () => wrapConnect(manager.connectSlack()))
+  handle('comms:connectWhatsApp', () =>
+    wrapConnect(Promise.resolve().then(() => manager.connectWhatsApp()))
+  )
+  handle('comms:disconnect', async (accountId) => {
+    manager.disconnect(accountId)
+  })
+
   handle('settings:get', () => getSettings())
   handle('settings:set', (patch) => {
     const before = getSettings().captureHotkey
@@ -155,6 +202,16 @@ export function registerIpc(): void {
     return next
   })
   handle('settings:authStatus', () => checkAuthStatus())
+}
+
+async function wrapConnect(
+  p: Promise<import('../core/comms-types').CommsAccount>
+): Promise<import('../shared/ipc-contract').CommsConnectResult> {
+  try {
+    return { ok: true, account: await p }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 function checkAuthStatus(): Promise<import('../shared/ipc-contract').AuthStatus> {

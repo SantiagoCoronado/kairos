@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate } from './migrations'
+import { migrate, migrations } from './migrations'
 import * as people from './repo/people'
 import * as interactions from './repo/interactions'
 import * as followups from './repo/followups'
@@ -32,7 +32,7 @@ describe('migrations', () => {
     migrate(db)
     migrate(db)
     const rows = db.all<{ version: number }>('SELECT version FROM schema_migrations')
-    expect(rows).toHaveLength(1)
+    expect(rows).toHaveLength(migrations.length)
   })
 })
 

@@ -64,6 +64,19 @@ describe('parseCapture', () => {
       summary: 'quick call'
     })
   })
+
+  it('parses note form with #tags as labels', () => {
+    expect(parseCapture('n gift ideas for mom #family #gifts', T0)).toEqual({
+      kind: 'note',
+      title: 'gift ideas for mom',
+      labels: '#family #gifts'
+    })
+    expect(parseCapture('n plain thought', T0)).toEqual({
+      kind: 'note',
+      title: 'plain thought',
+      labels: undefined
+    })
+  })
 })
 
 describe('executeCapture', () => {
@@ -81,5 +94,11 @@ describe('executeCapture', () => {
   it('errors cleanly when person is missing', () => {
     const r = executeCapture(db, 'p nobody hello', T0)
     expect(r.ok).toBe(false)
+  })
+
+  it('creates a note with labels', () => {
+    const r = executeCapture(db, 'n check tire pressure #car', T0)
+    expect(r.ok && r.kind === 'note' && r.note.title).toBe('check tire pressure')
+    expect(r.ok && r.kind === 'note' && r.note.labels).toBe('#car')
   })
 })

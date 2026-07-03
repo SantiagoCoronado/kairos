@@ -99,6 +99,17 @@ export function updateTask(
   return getTask(db, id)!
 }
 
+/** open tasks due in [startDate, endDate) (YYYY-MM-DD) — calendar overlay chips */
+export function listTasksDueBetween(db: DbDriver, startDate: string, endDate: string): Task[] {
+  return db.all<Task>(
+    `SELECT * FROM tasks
+     WHERE status IN ('todo','in_progress') AND due_date IS NOT NULL AND due_date >= ? AND due_date < ?
+     ORDER BY due_date, priority`,
+    startDate,
+    endDate
+  )
+}
+
 export function completeTask(db: DbDriver, id: string, now: Date = new Date()): Task {
   return updateTask(db, id, { status: 'done' }, now)
 }

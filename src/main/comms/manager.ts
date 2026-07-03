@@ -40,7 +40,9 @@ export class CommsSyncManager {
   constructor(
     private db: DbDriver,
     private emit: (e: CommsEvent) => void,
-    private onDbChanged: () => void
+    private onDbChanged: () => void,
+    /** fired once per sync batch that stored ≥1 new inbound unread message */
+    private onInbound?: (provider: CommsAccount['provider']) => void
   ) {}
 
   start(): void {
@@ -123,6 +125,7 @@ export class CommsSyncManager {
     const interval = account.provider === 'gmail' ? GMAIL_INTERVAL_MS : SLACK_INTERVAL_MS
     this.syncing.add(accountId)
     this.emit({ kind: 'sync', accountId, status: 'syncing' })
+    const syncStartedAt = new Date().toISOString()
     try {
       const added =
         account.provider === 'gmail'
@@ -132,6 +135,11 @@ export class CommsSyncManager {
       this.failures.delete(accountId)
       this.emit({ kind: 'sync', accountId, status: 'idle' })
       if (added > 0) this.notifyChanged()
+      // `added` conflates outbound copies and gmail label changes — count the
+      // actual new inbound unread rows for the automation trigger signal
+      if (added > 0 && this.onInbound && repo.countNewInbound(this.db, accountId, syncStartedAt) > 0) {
+        this.onInbound(account.provider)
+      }
       this.scheduleSync(accountId, interval)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -291,7 +299,8 @@ export class CommsSyncManager {
     if (this.wa.has(accountId)) return
     const conn = new WhatsAppConnection(this.db, accountId, {
       emit: (e) => this.emit(e),
-      onChanged: () => this.notifyChanged()
+      onChanged: () => this.notifyChanged(),
+      onInbound: () => this.onInbound?.('whatsapp')
     })
     this.wa.set(accountId, conn)
     void conn.start().catch((err) => {

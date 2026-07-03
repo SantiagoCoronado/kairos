@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { ViewId } from './Sidebar'
 import { api } from '../lib/api'
@@ -95,6 +95,21 @@ export function CommandPalette({
                     New person: <span className="text-accent">{query.trim()}</span>
                   </span>
                 </Item>
+                <Item
+                  onSelect={() => {
+                    void api
+                      .invoke('notes:create', { title: query.trim() })
+                      .then(() => {
+                        onNavigate('notes')
+                        close()
+                      })
+                  }}
+                >
+                  <StickyNote size={14} className="text-accent" />
+                  <span>
+                    New note: <span className="text-accent">{query.trim()}</span>
+                  </span>
+                </Item>
               </Command.Group>
             )}
 
@@ -113,11 +128,23 @@ export function CommandPalette({
               <Item onSelect={() => go('tasks')} keywords={['todo']}>
                 <CheckSquare size={14} /> Tasks
               </Item>
+              <Item onSelect={() => go('notes')} keywords={['keep', 'memo', 'checklist', 'reminders']}>
+                <StickyNote size={14} /> Notes
+              </Item>
+              <Item onSelect={() => go('calendar')} keywords={['events', 'schedule', 'agenda', 'gcal', 'meetings']}>
+                <CalendarDays size={14} /> Calendar
+              </Item>
               <Item onSelect={() => go('objectives')} keywords={['okr', 'goals']}>
                 <Target size={14} /> Objectives
               </Item>
+              <Item onSelect={() => go('automations')} keywords={['agent', 'scheduled', 'cron', 'jobs']}>
+                <Bot size={14} /> Automations
+              </Item>
               <Item onSelect={() => go('chat')} keywords={['claude', 'ai']}>
                 <Sparkles size={14} /> Chat
+              </Item>
+              <Item onSelect={() => go('terminal')} keywords={['shell', 'console', 'zsh', 'cli']}>
+                <Terminal size={14} /> Terminal
               </Item>
             </Command.Group>
 

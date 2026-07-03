@@ -12,8 +12,13 @@ interface Bubble {
   sealed?: boolean
 }
 
-export function ChatView(): React.JSX.Element {
-  const [sessionId, setSessionId] = useState<string | null>(null)
+export function ChatView({
+  initialSessionId = null
+}: {
+  /** continue an existing session (e.g. an agent-task run transcript) */
+  initialSessionId?: string | null
+}): React.JSX.Element {
+  const [sessionId, setSessionId] = useState<string | null>(initialSessionId)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -105,8 +110,9 @@ export function ChatView(): React.JSX.Element {
           <div className="pt-16 text-center space-y-2">
             <Sparkles size={20} className="mx-auto text-faint" />
             <p className="text-faint text-[13px]">
-              "what follow-ups are due?" · "plan my week" · "log coffee with Anna, set a 3-week
-              cadence"
+              {sessionId
+                ? 'Continuing a task session — send a message to follow up on the run.'
+                : '"what follow-ups are due?" · "plan my week" · "log coffee with Anna, set a 3-week cadence"'}
             </p>
           </div>
         )}

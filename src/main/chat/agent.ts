@@ -15,6 +15,10 @@ import type {
 import * as comms from '../../core/repo/comms'
 import { DATA_DIR } from '../db'
 import { getSettings } from '../settings'
+import { emitAppEvent } from '../events'
+import { buildChildEnv } from '../child-env'
+
+export { buildChildEnv }
 
 // The chat panel is an optional layer: the app never depends on it.
 // Auth rides the user's Claude Code subscription (`claude login`); an
@@ -47,6 +51,52 @@ type SessionRow = {
   updated_at: string
 }
 
+/** The kairos tool server + allowlist, shared by the chat panel and the
+ *  scheduled-task runner so both expose the exact same tool surface. */
+export function buildKairosSdkServer(
+  db: DbDriver,
+  onMutate: (entity: import('../../core/types').DbEntity) => void
+): { server: ReturnType<typeof createSdkMcpServer>; allowedTools: string[] } {
+  // agent-made writes fire automation event triggers just like user actions
+  const defs = buildToolDefs(db, { dataDir: DATA_DIR, onMutate, onEvent: emitAppEvent })
+  const server = createSdkMcpServer({
+    name: 'kairos',
+    version: '0.1.0',
+    tools: defs.map((d) =>
+      tool(d.name, d.description, d.schema, async (args) => {
+        try {
+          const result = d.handler(args)
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }]
+          }
+        } catch (err) {
+          return {
+            isError: true,
+            content: [
+              { type: 'text' as const, text: err instanceof Error ? err.message : String(err) }
+            ]
+          }
+        }
+      })
+    )
+  })
+  return { server, allowedTools: defs.map((d) => `mcp__kairos__${d.name}`) }
+}
+
+/** built-in tools the agent must never reach from inside the app */
+export const DISALLOWED_TOOLS = [
+  'Bash',
+  'Write',
+  'Edit',
+  'Read',
+  'Glob',
+  'Grep',
+  'Task',
+  'WebSearch',
+  'WebFetch',
+  'NotebookEdit'
+]
+
 export class ChatManager {
   private db: DbDriver
   private emit: (event: ChatStreamEvent) => void
@@ -62,29 +112,9 @@ export class ChatManager {
     this.db = db
     this.emit = emit
 
-    const defs = buildToolDefs(db, { dataDir: DATA_DIR, onMutate })
-    this.server = createSdkMcpServer({
-      name: 'kairos',
-      version: '0.1.0',
-      tools: defs.map((d) =>
-        tool(d.name, d.description, d.schema, async (args) => {
-          try {
-            const result = d.handler(args)
-            return {
-              content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }]
-            }
-          } catch (err) {
-            return {
-              isError: true,
-              content: [
-                { type: 'text' as const, text: err instanceof Error ? err.message : String(err) }
-              ]
-            }
-          }
-        })
-      )
-    })
-    this.allowedTools = defs.map((d) => `mcp__kairos__${d.name}`)
+    const { server, allowedTools } = buildKairosSdkServer(db, onMutate)
+    this.server = server
+    this.allowedTools = allowedTools
   }
 
   listSessions(): ChatSessionInfo[] {
@@ -217,18 +247,7 @@ export class ChatManager {
         options: {
           mcpServers: { kairos: this.server },
           allowedTools: this.allowedTools,
-          disallowedTools: [
-            'Bash',
-            'Write',
-            'Edit',
-            'Read',
-            'Glob',
-            'Grep',
-            'Task',
-            'WebSearch',
-            'WebFetch',
-            'NotebookEdit'
-          ],
+          disallowedTools: DISALLOWED_TOOLS,
           permissionMode: 'default',
           // isolate from the user's global Claude config: without these the
           // CLI also loads user-scope MCP servers (including the standalone
@@ -298,18 +317,8 @@ export class ChatManager {
   }
 }
 
-/** Child env for SDK runs: subscription auth (never API-key billing), Finder-safe PATH. */
-function buildChildEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env }
-  delete env['ANTHROPIC_API_KEY']
-  // GUI apps launched from Finder don't inherit the shell PATH
-  env['PATH'] = [env['PATH'], '/opt/homebrew/bin', '/usr/local/bin', join(homedir(), '.local/bin')]
-    .filter(Boolean)
-    .join(':')
-  return env
-}
 
-function resolveClaudeBinary(): string | undefined {
+export function resolveClaudeBinary(): string | undefined {
   const candidates = [
     getSettings().claudePath,
     process.env['CLAUDE_CODE_PATH'],

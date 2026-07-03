@@ -1,9 +1,19 @@
 import { useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useInvoke } from '../lib/api'
 
-export type ViewId = 'today' | 'inbox' | 'people' | 'tasks' | 'objectives' | 'chat'
+export type ViewId =
+  | 'today'
+  | 'inbox'
+  | 'people'
+  | 'tasks'
+  | 'notes'
+  | 'calendar'
+  | 'objectives'
+  | 'automations'
+  | 'chat'
+  | 'terminal'
 
 /** Sidebar toggle pinned next to the traffic lights (12px bubbles from x=18,
  *  centerline y=24). Must be rendered INSIDE a .drag-region element — the
@@ -32,8 +42,12 @@ const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'people', label: 'People', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare },
+  { id: 'notes', label: 'Notes', icon: StickyNote },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'objectives', label: 'Objectives', icon: Target },
-  { id: 'chat', label: 'Chat', icon: Sparkles }
+  { id: 'automations', label: 'Automations', icon: Bot },
+  { id: 'chat', label: 'Chat', icon: Sparkles },
+  { id: 'terminal', label: 'Terminal', icon: Terminal }
 ]
 
 export function Sidebar({
@@ -47,6 +61,7 @@ export function Sidebar({
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
+  const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   return (
     <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col select-none">
       {/* space for macOS traffic lights */}
@@ -68,6 +83,11 @@ export function Sidebar({
             {id === 'inbox' && (unread ?? 0) > 0 && (
               <span className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
                 {unread! > 99 ? '99+' : unread}
+              </span>
+            )}
+            {id === 'notes' && (dueNotes ?? 0) > 0 && (
+              <span className="min-w-4 h-4 px-1 rounded-full bg-danger/20 text-danger font-mono text-[10px] flex items-center justify-center">
+                {dueNotes! > 99 ? '99+' : dueNotes}
               </span>
             )}
           </button>

@@ -658,6 +658,43 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
         }))
     },
     {
+      name: 'comms_threads_list',
+      description:
+        'List conversation threads (email/slack/whatsapp) newest first, without message bodies — lean rows with title, snippet, and unread_count. THE tool for "what is unread?" / "anything new?": call with unread_only true, then comms_thread_get on the interesting ones. Much cheaper than fishing with comms_search.',
+      schema: {
+        unread_only: z.boolean().optional().describe('only threads with unread messages'),
+        provider: commsProvider.optional(),
+        box: z.enum(['inbox', 'archived', 'all']).optional().describe('default inbox'),
+        limit: z.number().int().min(1).max(100).optional().describe('default 30')
+      },
+      handler: (a: {
+        unread_only?: boolean
+        provider?: CommsProvider
+        box?: 'inbox' | 'archived' | 'all'
+        limit?: number
+      }) => {
+        const accountNames = new Map(comms.listAccounts(db).map((acc) => [acc.id, acc.display_name]))
+        return comms
+          .listThreads(db, {
+            unreadOnly: a.unread_only,
+            provider: a.provider,
+            box: a.box,
+            limit: a.limit ?? 30
+          })
+          .map((t) => ({
+            thread_id: t.id,
+            provider: t.provider,
+            account: accountNames.get(t.account_id) ?? t.account_id,
+            kind: t.kind,
+            title: t.title,
+            snippet: t.snippet,
+            unread_count: t.unread_count,
+            last_message_at: t.last_message_at,
+            person_name: t.person_name
+          }))
+      }
+    },
+    {
       name: 'comms_search',
       description:
         'Search synced messages (email/slack/whatsapp) by text. Returns messages with their thread id, thread title, and account. Use comms_thread_get to read the surrounding conversation.',

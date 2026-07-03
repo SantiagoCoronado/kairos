@@ -55,6 +55,18 @@ const timeAgo = (iso: string | null): string => {
   return `${Math.floor(mins / (60 * 24))}d`
 }
 
+/** true while any input/textarea/select (or editable node) has focus — shortcuts stay inert */
+const isTyping = (): boolean => {
+  const el = document.activeElement
+  return (
+    el instanceof HTMLElement &&
+    (el.tagName === 'INPUT' ||
+      el.tagName === 'TEXTAREA' ||
+      el.tagName === 'SELECT' ||
+      el.isContentEditable)
+  )
+}
+
 /** read drop position from the pointer: top half = before, bottom = after */
 function dropEdge(e: React.DragEvent): 'before' | 'after' {
   const rect = e.currentTarget.getBoundingClientRect()
@@ -127,6 +139,45 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     setAccountId(id)
     setMode('threads')
   }
+
+  // keyboard: j/k or ↓/↑ move through the list, esc closes, / searches,
+  // u toggles Unread, c composes (gmail). Archive/delete live in ThreadPane.
+  useEffect(() => {
+    const down = (e: KeyboardEvent): void => {
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping()) return
+      if (mode !== 'threads') {
+        if (e.key === 'Escape') setMode('threads')
+        return
+      }
+      const list = displayThreads ?? []
+      const idx = threadId ? list.findIndex((t) => t.id === threadId) : -1
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        const next = list[idx + 1]
+        if (next) {
+          e.preventDefault()
+          openThread(next)
+        }
+      } else if (e.key === 'k' || e.key === 'ArrowUp') {
+        if (idx > 0) {
+          e.preventDefault()
+          openThread(list[idx - 1])
+        }
+      } else if (e.key === 'Escape') {
+        setThreadId(null)
+        setPinned(null)
+      } else if (e.key === '/') {
+        e.preventDefault()
+        document.getElementById('inbox-search')?.focus()
+      } else if (e.key === 'u') {
+        setUnreadOnly((v) => !v)
+      } else if (e.key === 'c' && selectedAccount?.provider === 'gmail') {
+        e.preventDefault()
+        setMode('compose')
+      }
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [displayThreads, threadId, mode, selectedAccount])
 
   const dropAccount = (draggedId: string, target: CommsAccount, edge: 'before' | 'after'): void => {
     if (!accounts || draggedId === target.id) return
@@ -240,10 +291,12 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
       <div className="relative shrink-0 border-r border-border flex flex-col" style={{ width: listW }}>
         <div className="p-3 space-y-2 border-b border-border">
           <Input
+            id="inbox-search"
             className="w-full"
-            placeholder="Search conversations…"
+            placeholder="Search conversations… ( / )"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && (e.target as HTMLInputElement).blur()}
           />
           <div className="flex items-center gap-1.5">
             <FilterButton active={box === 'archived'} onClick={() => setBox(box === 'archived' ? 'inbox' : 'archived')}>
@@ -667,6 +720,24 @@ function ThreadPane({
     else setArchiveError(res.message)
   }
 
+  // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
+  // r = focus the reply box
+  useEffect(() => {
+    const down = (e: KeyboardEvent): void => {
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping()) return
+      if (e.key === 'e') {
+        void toggleArchive()
+      } else if ((e.key === 'Backspace' || e.key === 'Delete') && thread.provider === 'gmail') {
+        void remove()
+      } else if (e.key === 'r') {
+        e.preventDefault()
+        document.getElementById('inbox-reply')?.focus()
+      }
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [thread.id, thread.provider, archived])
+
   return (
     <>
       <div className="px-4 py-3 border-b border-border flex items-center gap-2">
@@ -690,7 +761,7 @@ function ThreadPane({
         </span>
         <button
           onClick={() => void toggleArchive()}
-          title={archived ? 'Move back to inbox' : 'Archive'}
+          title={archived ? 'Move back to inbox (e)' : 'Archive (e)'}
           className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised"
         >
           {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
@@ -698,7 +769,7 @@ function ThreadPane({
         {thread.provider === 'gmail' && (
           <button
             onClick={() => void remove()}
-            title="Delete (moves to Gmail trash)"
+            title="Delete (⌫) — moves to Gmail trash"
             className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-danger hover:bg-raised"
           >
             <Trash2 size={14} />
@@ -952,6 +1023,7 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
       )}
       <div className="flex gap-2 items-end">
         <textarea
+          id="inbox-reply"
           className="flex-1 bg-raised border border-border rounded-md px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none"
           rows={2}
           placeholder="Reply… ⌘↩ to send"
@@ -962,6 +1034,7 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
               e.preventDefault()
               void send()
             }
+            if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur()
           }}
         />
         <button

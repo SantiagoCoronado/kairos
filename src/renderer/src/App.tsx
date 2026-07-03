@@ -11,6 +11,7 @@ import { api } from './lib/api'
 import { applyTranslucency } from './lib/translucency'
 
 const SIDEBAR_KEY = 'kairos.sidebarHidden'
+const VIEW_ORDER: ViewId[] = ['today', 'inbox', 'people', 'tasks', 'objectives', 'chat']
 
 export default function App(): React.JSX.Element {
   const [view, setView] = useState<ViewId>('today')
@@ -35,6 +36,11 @@ export default function App(): React.JSX.Element {
       if (e.key === 'b' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
         toggleSidebar()
+      }
+      // ⌘1–⌘6 jump between views
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key >= '1' && e.key <= '6') {
+        e.preventDefault()
+        setView(VIEW_ORDER[Number(e.key) - 1])
       }
     }
     window.addEventListener('keydown', down)

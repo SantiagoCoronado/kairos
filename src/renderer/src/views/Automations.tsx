@@ -88,6 +88,16 @@ function duration(run: AgentTaskRun, nowMs: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function fmtCost(usd: number): string {
+  return usd >= 0.995 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(3)}`
+}
+
 const RUN_DOT: Record<AgentTaskRun['status'], string> = {
   running: 'bg-accent animate-pulse',
   success: 'bg-ok',
@@ -269,7 +279,10 @@ export function AutomationsView({
               onOpenSession={onOpenSession}
             />
           ) : (
-            <RecentActivity onOpenSession={onOpenSession} />
+            <div className="space-y-4">
+              <RecentActivity onOpenSession={onOpenSession} />
+              <UsagePanel />
+            </div>
           )}
         </div>
       </div>
@@ -764,6 +777,12 @@ function RunRow({
         {steps.length > 0 && (
           <span className="font-mono text-[10.5px] text-faint">{steps.length} tools</span>
         )}
+        {run.cost_usd != null && (
+          <span className="font-mono text-[10.5px] text-faint">
+            {fmtTokens((run.input_tokens ?? 0) + (run.output_tokens ?? 0))} tok ·{' '}
+            {fmtCost(run.cost_usd)}
+          </span>
+        )}
         <span className="flex-1" />
         {run.session_id && run.status !== 'running' && (
           <span
@@ -792,6 +811,14 @@ function RunRow({
               ))}
             </div>
           )}
+          {run.cost_usd != null && (
+            <p className="font-mono text-[10.5px] text-faint">
+              in {fmtTokens(run.input_tokens ?? 0)} · out {fmtTokens(run.output_tokens ?? 0)} ·
+              cache r {fmtTokens(run.cache_read_tokens ?? 0)} / w{' '}
+              {fmtTokens(run.cache_creation_tokens ?? 0)} · {fmtCost(run.cost_usd)}
+              {run.model && ` · ${run.model}`}
+            </p>
+          )}
           {run.error && <p className="text-[12px] text-danger whitespace-pre-wrap">{run.error}</p>}
           {run.result && (
             <p className="text-[12.5px] text-muted whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
@@ -803,6 +830,68 @@ function RunRow({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+/** per-automation token/cost rollup — the data behind "which model should this run on?" */
+function UsagePanel(): React.JSX.Element | null {
+  const { data: usage } = useInvoke('agentTasks:usage', [], ['agent_tasks'])
+  const rows = usage?.filter((u) => u.runs_30d > 0)
+  if (!rows || rows.length === 0) return null
+  return (
+    <div className="space-y-2">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-faint select-none">
+        usage · trailing 7 / 30 days
+      </span>
+      <div className="border border-border rounded-lg bg-panel overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="text-left font-mono text-[10px] uppercase tracking-wider text-faint">
+              <th className="px-3 py-2 font-normal">automation</th>
+              <th className="px-3 py-2 font-normal">model</th>
+              <th className="px-3 py-2 font-normal text-right">7d runs</th>
+              <th className="px-3 py-2 font-normal text-right">7d tokens</th>
+              <th className="px-3 py-2 font-normal text-right">7d cost</th>
+              <th className="px-3 py-2 font-normal text-right">30d runs</th>
+              <th className="px-3 py-2 font-normal text-right">30d tokens</th>
+              <th className="px-3 py-2 font-normal text-right">30d cost</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rows.map((u) => (
+              <tr key={u.task_id}>
+                <td className="px-3 py-2 text-text truncate max-w-48">{u.task_name}</td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted">
+                  {u.model ?? 'default'}
+                </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted text-right">
+                  {u.runs_7d}
+                </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted text-right">
+                  {fmtTokens(u.tokens_7d)}
+                </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted text-right">
+                  {fmtCost(u.cost_7d)}
+                </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted text-right">
+                  {u.runs_30d}
+                </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted text-right">
+                  {fmtTokens(u.tokens_30d)}
+                </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-muted text-right">
+                  {fmtCost(u.cost_30d)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[11px] text-faint">
+        tokens = input + output (cache traffic excluded; cost includes everything). Runs before
+        this feature shipped count as 0 tokens.
+      </p>
     </div>
   )
 }

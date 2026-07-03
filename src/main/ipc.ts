@@ -180,6 +180,7 @@ export function registerIpc(): void {
   })
   handle('agentTasks:runs', (taskId, limit) => agentTasksRepo.listRuns(db, taskId, limit))
   handle('agentTasks:recentRuns', (limit) => agentTasksRepo.recentRuns(db, limit))
+  handle('agentTasks:usage', () => agentTasksRepo.usageByTask(db))
   handle('agentTasks:parse', (text) => parseTaskDraft(text))
 
   // event-triggered automations: count occurrences, fire on every Nth.

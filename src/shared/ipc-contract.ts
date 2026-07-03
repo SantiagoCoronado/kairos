@@ -29,6 +29,7 @@ import type {
   NotePatch,
   AgentTask,
   AgentTaskRun,
+  AgentTaskUsage,
   NewAgentTask,
   AgentTaskPatch,
   AgentTaskDraft,
@@ -100,6 +101,8 @@ export interface IpcApi {
   'agentTasks:stop': (id: string) => void
   'agentTasks:runs': (taskId: string, limit?: number) => AgentTaskRun[]
   'agentTasks:recentRuns': (limit?: number) => (AgentTaskRun & { task_name: string })[]
+  /** per-task token/cost rollup over trailing 7d and 30d windows */
+  'agentTasks:usage': () => AgentTaskUsage[]
   /** NL → structured draft for the create form (one-shot model call) */
   'agentTasks:parse': (text: string) => Promise<AgentTaskParseResult>
 

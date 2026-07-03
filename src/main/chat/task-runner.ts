@@ -119,6 +119,7 @@ export class AgentTaskRunner {
     logLine('info', 'task-runner', `run start: ${task.name} (${task.id})`)
     let resultText = ''
     let failed: string | null = null
+    let usage: import('../../core/types').RunUsage | null = null
     try {
       const q = query({
         prompt: task.prompt,
@@ -157,8 +158,16 @@ export class AgentTaskRunner {
               this.onMutate('agent_tasks')
             }
           }
-        } else if (msg.type === 'result' && msg.subtype !== 'success') {
-          failed = `run ended: ${msg.subtype}`
+        } else if (msg.type === 'result') {
+          if (msg.subtype !== 'success') failed = `run ended: ${msg.subtype}`
+          // both success and error results report token usage + cost
+          usage = {
+            input_tokens: msg.usage.input_tokens,
+            output_tokens: msg.usage.output_tokens,
+            cache_read_tokens: msg.usage.cache_read_input_tokens ?? 0,
+            cache_creation_tokens: msg.usage.cache_creation_input_tokens ?? 0,
+            cost_usd: msg.total_cost_usd
+          }
         }
       }
     } catch (err) {
@@ -172,7 +181,8 @@ export class AgentTaskRunner {
     agentTasks.finishRun(this.db, run.id, {
       status,
       result: resultText || null,
-      error: failed
+      error: failed,
+      usage
     })
     this.onMutate('agent_tasks')
     logLine(

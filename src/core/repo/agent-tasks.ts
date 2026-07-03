@@ -2,10 +2,12 @@ import type { DbDriver } from '../driver'
 import type {
   AgentTask,
   AgentTaskRun,
+  AgentTaskUsage,
   AgentRunStatus,
   AppEventName,
   NewAgentTask,
-  AgentTaskPatch
+  AgentTaskPatch,
+  RunUsage
 } from '../types'
 import { computeNextRun } from '../schedule'
 import { newId, nowIso } from '../ids'
@@ -241,7 +243,12 @@ export function appendRunStep(db: DbDriver, runId: string, tool: string, now: Da
 export function finishRun(
   db: DbDriver,
   runId: string,
-  outcome: { status: Exclude<AgentRunStatus, 'running'>; result?: string | null; error?: string | null },
+  outcome: {
+    status: Exclude<AgentRunStatus, 'running'>
+    result?: string | null
+    error?: string | null
+    usage?: RunUsage | null
+  },
   now: Date = new Date()
 ): void {
   const ts = nowIso(now)
@@ -249,11 +256,18 @@ export function finishRun(
     const run = db.get<AgentTaskRun>('SELECT * FROM agent_task_runs WHERE id = ?', runId)
     if (!run) return
     db.run(
-      `UPDATE agent_task_runs SET status=?, finished_at=?, result=?, error=? WHERE id=?`,
+      `UPDATE agent_task_runs SET status=?, finished_at=?, result=?, error=?,
+         input_tokens=?, output_tokens=?, cache_read_tokens=?, cache_creation_tokens=?, cost_usd=?
+       WHERE id=?`,
       outcome.status,
       ts,
       outcome.result ?? null,
       outcome.error ?? null,
+      outcome.usage?.input_tokens ?? null,
+      outcome.usage?.output_tokens ?? null,
+      outcome.usage?.cache_read_tokens ?? null,
+      outcome.usage?.cache_creation_tokens ?? null,
+      outcome.usage?.cost_usd ?? null,
       runId
     )
     const task = getAgentTask(db, run.task_id)
@@ -301,6 +315,33 @@ export function listRuns(db: DbDriver, taskId: string, limit = 30): AgentTaskRun
 }
 
 export type RecentRun = AgentTaskRun & { task_name: string }
+
+/**
+ * Per-task usage rollup over trailing 7- and 30-day windows. tokens = input +
+ * output (the "work" tokens); cache traffic is excluded here but kept per-run,
+ * and cost_usd already prices everything in.
+ */
+export function usageByTask(db: DbDriver, now: Date = new Date()): AgentTaskUsage[] {
+  const d7 = nowIso(new Date(now.getTime() - 7 * 86400_000))
+  const d30 = nowIso(new Date(now.getTime() - 30 * 86400_000))
+  return db.all<AgentTaskUsage>(
+    `SELECT t.id AS task_id, t.name AS task_name, t.model,
+       COALESCE(SUM(CASE WHEN r.started_at >= ? THEN 1 ELSE 0 END), 0) AS runs_7d,
+       COALESCE(SUM(CASE WHEN r.started_at >= ? THEN COALESCE(r.input_tokens,0)+COALESCE(r.output_tokens,0) ELSE 0 END), 0) AS tokens_7d,
+       COALESCE(SUM(CASE WHEN r.started_at >= ? THEN COALESCE(r.cost_usd,0) ELSE 0 END), 0) AS cost_7d,
+       COUNT(r.id) AS runs_30d,
+       COALESCE(SUM(COALESCE(r.input_tokens,0)+COALESCE(r.output_tokens,0)), 0) AS tokens_30d,
+       COALESCE(SUM(COALESCE(r.cost_usd,0)), 0) AS cost_30d
+     FROM agent_tasks t
+     LEFT JOIN agent_task_runs r ON r.task_id = t.id AND r.started_at >= ?
+     GROUP BY t.id
+     ORDER BY cost_30d DESC, tokens_30d DESC`,
+    d7,
+    d7,
+    d7,
+    d30
+  )
+}
 
 export function recentRuns(db: DbDriver, limit = 20): RecentRun[] {
   return db.all<RecentRun>(

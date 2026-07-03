@@ -414,6 +414,15 @@ CREATE TABLE chat_messages (
   created_at  TEXT NOT NULL
 );
 CREATE INDEX idx_chat_messages_session ON chat_messages(session_id, seq);
+`,
+  // 011 — per-run token usage, reported by the SDK's result message, so
+  // automation cost can be compared across models over time
+  `
+ALTER TABLE agent_task_runs ADD COLUMN input_tokens INTEGER;
+ALTER TABLE agent_task_runs ADD COLUMN output_tokens INTEGER;
+ALTER TABLE agent_task_runs ADD COLUMN cache_read_tokens INTEGER;
+ALTER TABLE agent_task_runs ADD COLUMN cache_creation_tokens INTEGER;
+ALTER TABLE agent_task_runs ADD COLUMN cost_usd REAL;
 `
 ]
 

@@ -279,7 +279,7 @@ export function AutomationsView({
               onOpenSession={onOpenSession}
             />
           ) : (
-            <div className="space-y-4">
+            <div className="h-full min-h-0 flex flex-col gap-4">
               <RecentActivity onOpenSession={onOpenSession} />
               <UsagePanel />
             </div>
@@ -840,13 +840,13 @@ function UsagePanel(): React.JSX.Element | null {
   const rows = usage?.filter((u) => u.runs_30d > 0)
   if (!rows || rows.length === 0) return null
   return (
-    <div className="space-y-2">
-      <span className="font-mono text-[10px] uppercase tracking-wider text-faint select-none">
+    <div className="flex-1 min-h-0 flex flex-col gap-2">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-faint select-none shrink-0">
         usage · trailing 7 / 30 days
       </span>
-      <div className="border border-border rounded-lg bg-panel overflow-x-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto border border-border rounded-lg bg-panel">
         <table className="w-full text-[12px]">
-          <thead>
+          <thead className="sticky top-0 bg-panel">
             <tr className="text-left font-mono text-[10px] uppercase tracking-wider text-faint">
               <th className="px-3 py-2 font-normal">automation</th>
               <th className="px-3 py-2 font-normal">model</th>
@@ -888,7 +888,7 @@ function UsagePanel(): React.JSX.Element | null {
           </tbody>
         </table>
       </div>
-      <p className="text-[11px] text-faint">
+      <p className="text-[11px] text-faint shrink-0">
         tokens = input + output (cache traffic excluded; cost includes everything). Runs before
         this feature shipped count as 0 tokens.
       </p>
@@ -903,11 +903,11 @@ function RecentActivity({
 }): React.JSX.Element {
   const { data: recent } = useInvoke('agentTasks:recentRuns', [20], ['agent_tasks'])
   return (
-    <div className="space-y-2">
-      <span className="font-mono text-[10px] uppercase tracking-wider text-faint select-none">
+    <div className="flex-1 min-h-0 flex flex-col gap-2">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-faint select-none shrink-0">
         recent activity
       </span>
-      <div className="border border-border rounded-lg bg-panel divide-y divide-border">
+      <div className="flex-1 min-h-0 overflow-y-auto border border-border rounded-lg bg-panel divide-y divide-border">
         {(recent?.length ?? 0) === 0 && (
           <EmptyState>Select an automation, or create one above.</EmptyState>
         )}

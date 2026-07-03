@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { ViewId } from './Sidebar'
 import { api } from '../lib/api'
@@ -103,6 +103,9 @@ export function CommandPalette({
             >
               <Item onSelect={() => go('today')} keywords={['home', 'dashboard']}>
                 <Sun size={14} /> Today
+              </Item>
+              <Item onSelect={() => go('inbox')} keywords={['mail', 'email', 'slack', 'whatsapp', 'messages']}>
+                <Inbox size={14} /> Inbox
               </Item>
               <Item onSelect={() => go('people')} keywords={['crm', 'contacts']}>
                 <Users size={14} /> People

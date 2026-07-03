@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import type { AppSettings, AuthStatus, ChatEffort } from '../../../shared/ipc-contract'
-import { api } from '../lib/api'
+import { api, useInvoke } from '../lib/api'
 import { applyTranslucency } from '../lib/translucency'
 import { Input, Button, Chip, Select } from '../components/ui'
 
@@ -50,7 +50,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
       onMouseDown={onClose}
     >
       <div
-        className="w-[480px] bg-overlay border border-border-strong rounded-xl shadow-2xl p-5 space-y-5"
+        className="w-[480px] max-h-[85vh] overflow-y-auto bg-overlay border border-border-strong rounded-xl shadow-2xl p-5 space-y-5"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -174,6 +174,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
           </>
         )}
 
+        {settings && <ConnectionsSection settings={settings} save={save} />}
+
         <div className="space-y-1.5">
           <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
             claude subscription
@@ -203,6 +205,199 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
           </Button>
         </div>
       </div>
+    </div>
+  )
+}
+
+const STATUS_TONE = {
+  connected: 'ok',
+  needs_auth: 'danger',
+  error: 'danger',
+  disabled: 'muted'
+} as const
+
+function ConnectionsSection({
+  settings,
+  save
+}: {
+  settings: AppSettings
+  save: (patch: Partial<AppSettings>) => void
+}): React.JSX.Element {
+  const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
+  const [busy, setBusy] = useState<'gmail' | 'slack' | 'whatsapp' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [waQr, setWaQr] = useState<string | null>(null)
+
+  useEffect(() => {
+    return api.on('comms:event', (e) => {
+      if (e.kind === 'wa_qr') setWaQr(e.qrDataUrl)
+      if (e.kind === 'sync' && e.status === 'connected') {
+        setWaQr(null)
+        setBusy(null)
+      }
+    })
+  }, [])
+
+  const connect = (provider: 'gmail' | 'slack' | 'whatsapp'): void => {
+    setBusy(provider)
+    setError(null)
+    const channel =
+      provider === 'gmail'
+        ? ('comms:connectGmail' as const)
+        : provider === 'slack'
+          ? ('comms:connectSlack' as const)
+          : ('comms:connectWhatsApp' as const)
+    void api.invoke(channel).then((res) => {
+      if (!res.ok) {
+        setError(res.message)
+        setBusy(null)
+      } else if (provider !== 'whatsapp') {
+        setBusy(null)
+      }
+      // whatsapp stays "busy" while the QR is on screen; the comms:event
+      // listener clears it when pairing completes
+    })
+  }
+
+  return (
+    <div className="space-y-2.5 border-t border-border pt-4">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+        connections
+      </span>
+
+      {(accounts?.length ?? 0) > 0 && (
+        <div className="space-y-1">
+          {accounts!.map((a) => (
+            <div key={a.id} className="flex items-center gap-2 text-[12.5px]">
+              <Chip tone={STATUS_TONE[a.status]}>{a.provider}</Chip>
+              <span className="truncate flex-1" title={a.error ?? undefined}>
+                {a.display_name}
+                {a.status !== 'connected' && (
+                  <span className="text-faint"> · {a.status.replace('_', ' ')}</span>
+                )}
+              </span>
+              {a.status === 'needs_auth' && a.provider !== 'whatsapp' && (
+                <Button variant="ghost" className="!py-0.5 text-[11px]" onClick={() => connect(a.provider as 'gmail' | 'slack')}>
+                  reconnect
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                className="!py-0.5 text-[11px] text-danger"
+                onClick={() => void api.invoke('comms:disconnect', a.id)}
+              >
+                remove
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-1.5">
+        <Button disabled={busy !== null} onClick={() => connect('gmail')}>
+          {busy === 'gmail' ? 'waiting for browser…' : '+ Gmail'}
+        </Button>
+        <Button disabled={busy !== null} onClick={() => connect('slack')}>
+          {busy === 'slack' ? 'waiting for browser…' : '+ Slack'}
+        </Button>
+        <Button disabled={busy !== null} onClick={() => connect('whatsapp')}>
+          {busy === 'whatsapp' ? 'linking…' : '+ WhatsApp'}
+        </Button>
+      </div>
+      {error && <p className="text-[11.5px] text-danger">{error}</p>}
+
+      {waQr && (
+        <div className="flex flex-col items-center gap-1.5 py-2">
+          <img src={waQr} alt="WhatsApp pairing QR" className="w-56 h-56 rounded-lg" />
+          <p className="text-[11px] text-faint text-center">
+            WhatsApp → Settings → Linked devices → Link a device.
+            <br />
+            Unofficial bridge — small chance WhatsApp objects. Keep sends personal.
+          </p>
+        </div>
+      )}
+
+      <details className="space-y-2">
+        <summary className="text-[11.5px] text-muted cursor-pointer select-none">
+          API credentials (one-time setup)
+        </summary>
+        <div className="space-y-2 pt-1.5">
+          <div className="space-y-1">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+              google oauth client
+            </span>
+            <div className="flex gap-1.5">
+              <Input
+                className="flex-1 font-mono text-[11px]"
+                placeholder="client id"
+                defaultValue={settings.googleClientId ?? ''}
+                key={`gid-${settings.googleClientId ?? ''}`}
+                onBlur={(e) => save({ googleClientId: e.target.value.trim() || null })}
+              />
+              <Input
+                className="flex-1 font-mono text-[11px]"
+                placeholder="client secret"
+                type="password"
+                defaultValue={settings.googleClientSecret ?? ''}
+                key={`gsec-${settings.googleClientSecret ?? ''}`}
+                onBlur={(e) => save({ googleClientSecret: e.target.value.trim() || null })}
+              />
+            </div>
+            <div className="text-[11px] text-faint space-y-0.5">
+              <p>
+                One project serves <b>all</b> your Google accounts — set this up once
+                (full guide: docs/google-setup.md in the repo):
+              </p>
+              <ol className="list-decimal ml-4 space-y-0.5">
+                <li>console.cloud.google.com → New project → “Kairos”</li>
+                <li>
+                  APIs &amp; Services → Library → enable <b>Gmail API</b> and{' '}
+                  <b>Google Calendar API</b> (for the upcoming calendar feature)
+                </li>
+                <li>
+                  OAuth consent screen → External → fill name/emails → <b>Publish app</b>{' '}
+                  (“In production” — Testing mode kills tokens after 7 days)
+                </li>
+                <li>
+                  Credentials → Create credentials → OAuth client ID → <b>Desktop app</b> →
+                  copy id + secret here
+                </li>
+              </ol>
+              <p>
+                Then click “+ Gmail” once per account. Google will warn the app is
+                unverified — it’s yours: Advanced → “Go to Kairos”.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+              slack app client
+            </span>
+            <div className="flex gap-1.5">
+              <Input
+                className="flex-1 font-mono text-[11px]"
+                placeholder="client id"
+                defaultValue={settings.slackClientId ?? ''}
+                key={`sid-${settings.slackClientId ?? ''}`}
+                onBlur={(e) => save({ slackClientId: e.target.value.trim() || null })}
+              />
+              <Input
+                className="flex-1 font-mono text-[11px]"
+                placeholder="client secret"
+                type="password"
+                defaultValue={settings.slackClientSecret ?? ''}
+                key={`ssec-${settings.slackClientSecret ?? ''}`}
+                onBlur={(e) => save({ slackClientSecret: e.target.value.trim() || null })}
+              />
+            </div>
+            <p className="text-[11px] text-faint">
+              api.slack.com/apps → create app → OAuth & Permissions → add redirect URL{' '}
+              <code className="font-mono">http://localhost:43117/callback</code>, then connect.
+              Works per workspace.
+            </p>
+          </div>
+        </div>
+      </details>
     </div>
   )
 }

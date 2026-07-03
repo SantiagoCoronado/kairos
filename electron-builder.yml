@@ -11,6 +11,8 @@ asarUnpack:
 extraResources:
   - from: resources/calendar-helper
     to: calendar-helper
+  - from: resources/contacts-helper
+    to: contacts-helper
 npmRebuild: true
 mac:
   identity: null # ad-hoc signing; personal app
@@ -21,3 +23,4 @@ mac:
   extendInfo:
     NSCalendarsUsageDescription: Command Center shows today's events on your dashboard.
     NSCalendarsFullAccessUsageDescription: Command Center shows today's events on your dashboard.
+    NSContactsUsageDescription: Kairos names your WhatsApp chats using your address book.

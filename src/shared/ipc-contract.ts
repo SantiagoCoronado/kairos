@@ -23,6 +23,13 @@ import type {
   KeyResult,
   TodayPayload
 } from '../core/types'
+import type {
+  CommsAccount,
+  CommsThread,
+  CommsMessage,
+  CommsProvider,
+  ThreadFilter
+} from '../core/comms-types'
 
 export interface CalendarEvent {
   title: string
@@ -90,7 +97,46 @@ export interface IpcApi {
   'settings:get': () => AppSettings
   'settings:set': (patch: Partial<AppSettings>) => AppSettings
   'settings:authStatus': () => Promise<AuthStatus>
+
+  'comms:accounts': () => CommsAccount[]
+  'comms:unreadTotal': () => number
+  'comms:threads': (f: ThreadFilter) => CommsThread[]
+  /** every thread of one account, incl. inactive/disabled — for channel opt-in UI */
+  'comms:accountThreads': (accountId: string) => CommsThread[]
+  'comms:messages': (threadId: string) => CommsMessage[]
+  'comms:markRead': (threadId: string) => void
+  'comms:send': (input: CommsSendInput) => Promise<CommsSendResult>
+  'comms:syncNow': (accountId?: string) => void
+  'comms:linkSender': (provider: CommsProvider, handle: string, personId: string) => void
+  'comms:setThreadSync': (threadId: string, enabled: boolean) => void
+  'comms:connectGmail': () => Promise<CommsConnectResult>
+  'comms:connectSlack': () => Promise<CommsConnectResult>
+  'comms:connectWhatsApp': () => Promise<CommsConnectResult>
+  'comms:disconnect': (accountId: string) => Promise<void>
 }
+
+export interface CommsSendInput {
+  accountId: string
+  /** reply into an existing thread; recipients/subject derived when omitted */
+  threadId?: string
+  /** new email only */
+  to?: string[]
+  subject?: string
+  body: string
+}
+
+export type CommsSendResult = { ok: true; outboxId: string } | { ok: false; message: string }
+
+export type CommsConnectResult = { ok: true; account: CommsAccount } | { ok: false; message: string }
+
+export type CommsEvent = { accountId?: string } & (
+  | {
+      kind: 'sync'
+      status: 'syncing' | 'idle' | 'error' | 'connected' | 'needs_auth'
+      message?: string
+    }
+  | { kind: 'wa_qr'; qrDataUrl: string }
+)
 
 export type ChatProvider = 'claude'
 export type ChatEffort = 'low' | 'medium' | 'high' | 'max'
@@ -105,6 +151,13 @@ export interface AppSettings {
   chatModel: string | null
   /** reasoning effort; null = model default */
   chatEffort: ChatEffort | null
+  /** OAuth client for the user's own Google Cloud project (installed-app
+   *  client secrets are not confidential per Google's docs) */
+  googleClientId: string | null
+  googleClientSecret: string | null
+  /** OAuth client for the user's own Slack app */
+  slackClientId: string | null
+  slackClientSecret: string | null
 }
 
 export type AuthStatus =
@@ -133,6 +186,7 @@ export interface IpcEvents {
   'db:changed': { entity: import('../core/types').DbEntity }
   'capture:reset': Record<string, never>
   'chat:event': ChatStreamEvent
+  'comms:event': CommsEvent
 }
 
 export type IpcChannel = keyof IpcApi

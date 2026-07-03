@@ -22,14 +22,18 @@ const plist = join(
 
 if (process.platform !== 'darwin' || !existsSync(plist)) process.exit(0)
 
-const KEYS = ['NSCalendarsUsageDescription', 'NSCalendarsFullAccessUsageDescription']
-const VALUE = 'Command Center (dev) shows today’s events on your dashboard.'
+const KEYS = {
+  NSCalendarsUsageDescription: 'Command Center (dev) shows today’s events on your dashboard.',
+  NSCalendarsFullAccessUsageDescription:
+    'Command Center (dev) shows today’s events on your dashboard.',
+  NSContactsUsageDescription: 'Kairos (dev) names your WhatsApp chats using your address book.'
+}
 
-for (const key of KEYS) {
+for (const [key, value] of Object.entries(KEYS)) {
   try {
     execFileSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, plist], { stdio: 'pipe' })
   } catch {
-    execFileSync('/usr/libexec/PlistBuddy', ['-c', `Add :${key} string ${VALUE}`, plist], {
+    execFileSync('/usr/libexec/PlistBuddy', ['-c', `Add :${key} string ${value}`, plist], {
       stdio: 'pipe'
     })
     console.log(`[dev-plist] added ${key} to dev Electron.app`)

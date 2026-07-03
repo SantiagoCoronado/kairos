@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sidebar, SidebarToggle, type ViewId } from './components/Sidebar'
 import { CommandPalette } from './components/CommandPalette'
 import { TodayView } from './views/Today'
+import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
 import { TasksView } from './views/Tasks'
 import { ObjectivesView } from './views/Objectives'
@@ -63,6 +64,7 @@ export default function App(): React.JSX.Element {
         )}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {view === 'today' && <TodayView onOpenPerson={openPerson} />}
+          {view === 'inbox' && <InboxView onOpenPerson={openPerson} />}
           {view === 'people' && <PeopleView selectedId={personId} onSelect={setPersonId} />}
           {view === 'tasks' && <TasksView />}
           {view === 'objectives' && <ObjectivesView />}

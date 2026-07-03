@@ -89,8 +89,10 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   // the opened thread stays in the list even when a filter (Unread) would now
   // exclude it — otherwise opening an unread email makes it vanish mid-read
   const [pinned, setPinned] = useState<CommsThreadListItem | null>(null)
-  // archive/delete exit choreography (see removeWithAnimation)
-  const [leavingIds, setLeavingIds] = useState<ReadonlySet<string>>(new Set())
+  // archive/delete exit choreography (see removeWithAnimation). Leaving rows
+  // are SNAPSHOTS: the refetch drops them from the data almost immediately,
+  // and without the snapshot React would yank the row mid-fold (the "snap").
+  const [leaving, setLeaving] = useState<ReadonlyMap<string, CommsThreadListItem>>(new Map())
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set())
   const [actionError, setActionError] = useState<string | null>(null)
   const [mode, setMode] = useState<'threads' | 'channels' | 'compose'>('threads')
@@ -118,13 +120,17 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     if (!threads) return threads
     // acted-on threads stay hidden until the refetch drops them (no flicker)
     let list = hiddenIds.size ? threads.filter((t) => !hiddenIds.has(t.id)) : threads
-    if (pinned && !hiddenIds.has(pinned.id) && !list.some((t) => t.id === pinned.id)) {
-      list = [...list, pinned].sort((a, b) =>
+    // folding rows and the open thread survive refetches via their snapshots
+    const keep = [...leaving.values(), ...(pinned ? [pinned] : [])].filter(
+      (s) => !hiddenIds.has(s.id) && !list.some((t) => t.id === s.id)
+    )
+    if (keep.length) {
+      list = [...list, ...keep].sort((a, b) =>
         (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
       )
     }
     return list
-  }, [threads, pinned, hiddenIds])
+  }, [threads, pinned, leaving, hiddenIds])
 
   const selectedAccount = accounts?.find((a) => a.id === accountId) ?? null
   const thread = displayThreads?.find((t) => t.id === threadId) ?? null
@@ -160,22 +166,21 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     t: CommsThreadListItem,
     action: () => Promise<{ ok: true } | { ok: false; message: string }>
   ): void => {
-    if (leavingIds.has(t.id)) return
-    const list = (displayThreads ?? []).filter((x) => !leavingIds.has(x.id))
+    if (leaving.has(t.id)) return
+    const list = (displayThreads ?? []).filter((x) => !leaving.has(x.id))
     const idx = list.findIndex((x) => x.id === t.id)
     const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1] ?? null) : null
-    setLeavingIds((prev) => new Set(prev).add(t.id))
-    const fold = new Promise((r) => setTimeout(r, 230))
+    setLeaving((prev) => new Map(prev).set(t.id, t))
+    const fold = new Promise((r) => setTimeout(r, 240))
     const pending = action()
     void (async () => {
       await fold
-      // the row is at zero height now — drop it optimistically so nothing
-      // lingers while the provider call finishes in the background
+      // the row is at zero height now — drop it for real; the swap is invisible
       setHiddenIds((prev) => new Set(prev).add(t.id))
-      setLeavingIds((prev) => {
-        const s = new Set(prev)
-        s.delete(t.id)
-        return s
+      setLeaving((prev) => {
+        const m = new Map(prev)
+        m.delete(t.id)
+        return m
       })
       if (next) openThread(next)
       else closeThread()
@@ -427,7 +432,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                   thread={t}
                   showProvider={accountId === null}
                   active={threadId === t.id}
-                  leaving={leavingIds.has(t.id)}
+                  leaving={leaving.has(t.id)}
                   onClick={() => openThread(t)}
                 />
               ))}

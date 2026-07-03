@@ -96,3 +96,14 @@ textarea,
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* subtle content entrance (thread pane on open) */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.fade-in {
+  animation: fade-in-up 160ms ease-out;
+}

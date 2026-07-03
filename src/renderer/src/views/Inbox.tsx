@@ -135,6 +135,40 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     if (t.unread_count > 0) void api.invoke('comms:markRead', t.id)
   }
 
+  const closeThread = (): void => {
+    setThreadId(null)
+    setPinned(null)
+  }
+
+  /**
+   * Archive/delete UX: slide the row out first, run the action, then advance
+   * to the next conversation (previous at the end of the list). Returns an
+   * error message, or null on success.
+   */
+  const [leavingId, setLeavingId] = useState<string | null>(null)
+  const removeWithAnimation = async (
+    id: string,
+    action: () => Promise<{ ok: true } | { ok: false; message: string }>
+  ): Promise<string | null> => {
+    const list = displayThreads ?? []
+    const idx = list.findIndex((t) => t.id === id)
+    const next = list[idx + 1] ?? list[idx - 1] ?? null
+    setLeavingId(id)
+    await new Promise((r) => setTimeout(r, 200))
+    const res = await action()
+    setLeavingId(null)
+    if (!res.ok) return res.message
+    if (next) openThread(next)
+    else closeThread()
+    return null
+  }
+
+  const archiveThread = (t: CommsThreadListItem): Promise<string | null> =>
+    removeWithAnimation(t.id, () => api.invoke('comms:archiveThread', t.id, t.is_archived !== 1))
+
+  const deleteThread = (t: CommsThreadListItem): Promise<string | null> =>
+    removeWithAnimation(t.id, () => api.invoke('comms:deleteThread', t.id))
+
   const selectAccount = (id: string | null): void => {
     setAccountId(id)
     setMode('threads')
@@ -163,8 +197,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
           openThread(list[idx - 1])
         }
       } else if (e.key === 'Escape') {
-        setThreadId(null)
-        setPinned(null)
+        closeThread()
       } else if (e.key === '/') {
         e.preventDefault()
         document.getElementById('inbox-search')?.focus()
@@ -354,6 +387,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                   thread={t}
                   showProvider={accountId === null}
                   active={threadId === t.id}
+                  leaving={leavingId === t.id}
                   onClick={() => openThread(t)}
                 />
               ))}
@@ -369,12 +403,11 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
           <ComposePane account={selectedAccount} onSent={() => setMode('threads')} />
         ) : thread ? (
           <ThreadPane
+            key={thread.id}
             thread={thread}
             onOpenPerson={onOpenPerson}
-            onArchived={() => {
-              setThreadId(null)
-              setPinned(null)
-            }}
+            onArchive={() => archiveThread(thread)}
+            onDelete={() => deleteThread(thread)}
           />
         ) : (
           <EmptyState>Select a conversation.</EmptyState>
@@ -615,11 +648,14 @@ function ThreadRow({
   thread,
   active,
   showProvider,
+  leaving,
   onClick
 }: {
   thread: CommsThreadListItem
   active: boolean
   showProvider: boolean
+  /** plays the exit animation (slide right + collapse) before removal */
+  leaving: boolean
   onClick: () => void
 }): React.JSX.Element {
   const Icon = PROVIDER_ICON[thread.provider]
@@ -628,8 +664,11 @@ function ThreadRow({
     <button
       onClick={onClick}
       className={cn(
-        'w-full text-left px-3 py-2 border-b border-border/50 hover:bg-raised/50',
-        active && 'bg-raised'
+        'w-full text-left px-3 overflow-hidden transition-all duration-200 ease-out',
+        leaving
+          ? 'py-0 max-h-0 opacity-0 translate-x-6'
+          : 'py-2 max-h-20 border-b border-border/50 hover:bg-raised/50',
+        active && !leaving && 'bg-raised'
       )}
     >
       <div className="flex items-center gap-1.5">
@@ -689,14 +728,18 @@ function ChannelManager({ account }: { account: CommsAccount }): React.JSX.Eleme
 function ThreadPane({
   thread,
   onOpenPerson,
-  onArchived
+  onArchive,
+  onDelete
 }: {
   thread: CommsThreadListItem
   onOpenPerson?: (id: string) => void
-  onArchived: () => void
+  /** both resolve to an error message, or null on success */
+  onArchive: () => Promise<string | null>
+  onDelete: () => Promise<string | null>
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
-  const [archiveError, setArchiveError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [acting, setActing] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const archived = thread.is_archived === 1
   const { name, title } = threadLabel(thread)
@@ -706,18 +749,18 @@ function ThreadPane({
   }, [messages, thread.id])
 
   const toggleArchive = async (): Promise<void> => {
-    setArchiveError(null)
-    const res = await api.invoke('comms:archiveThread', thread.id, !archived)
-    if (res.ok) onArchived()
-    else setArchiveError(res.message)
+    if (acting) return
+    setActing(true)
+    setActionError(await onArchive())
+    setActing(false)
   }
 
   // no confirm: deletes go to Gmail's trash, recoverable there for 30 days
   const remove = async (): Promise<void> => {
-    setArchiveError(null)
-    const res = await api.invoke('comms:deleteThread', thread.id)
-    if (res.ok) onArchived()
-    else setArchiveError(res.message)
+    if (acting) return
+    setActing(true)
+    setActionError(await onDelete())
+    setActing(false)
   }
 
   // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
@@ -777,10 +820,10 @@ function ThreadPane({
         )}
         <Chip tone="muted">{thread.provider}</Chip>
       </div>
-      {archiveError && (
-        <p className="px-4 py-1 text-[11.5px] text-danger border-b border-border">{archiveError}</p>
+      {actionError && (
+        <p className="px-4 py-1 text-[11.5px] text-danger border-b border-border">{actionError}</p>
       )}
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
+      <div className="fade-in flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
         {messages?.map((m) => (
           <MessageBubble key={m.id} message={m} onOpenPerson={onOpenPerson} />
         ))}

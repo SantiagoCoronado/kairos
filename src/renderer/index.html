@@ -3,9 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <title>Kairos</title>
+    <!-- img-src allows remote hosts because HTML emails render in a srcdoc
+         iframe, which INHERITS this CSP (its own meta CSP can only tighten).
+         Scripts stay 'self'-only; the email iframe additionally sandboxes. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:"
     />
   </head>
   <body>

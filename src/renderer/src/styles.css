@@ -107,3 +107,26 @@ textarea,
 .fade-in {
   animation: fade-in-up 160ms ease-out;
 }
+
+/* thread row exit: the content slips away first, then the slot closes.
+   max-height is tuned to the real two-line row height so the collapse
+   starts immediately instead of eating dead pixels. */
+.thread-row {
+  max-height: 3.75rem;
+  overflow: hidden;
+  transition:
+    opacity 130ms ease-out,
+    transform 130ms ease-out,
+    max-height 190ms cubic-bezier(0.4, 0, 0.2, 1) 80ms,
+    padding 190ms cubic-bezier(0.4, 0, 0.2, 1) 80ms,
+    border-color 190ms ease 80ms;
+}
+.thread-row-leaving {
+  opacity: 0;
+  transform: translateX(20px);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-color: transparent;
+  pointer-events: none;
+}

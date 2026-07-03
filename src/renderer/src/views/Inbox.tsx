@@ -89,6 +89,10 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   // the opened thread stays in the list even when a filter (Unread) would now
   // exclude it — otherwise opening an unread email makes it vanish mid-read
   const [pinned, setPinned] = useState<CommsThreadListItem | null>(null)
+  // archive/delete exit choreography (see removeWithAnimation)
+  const [leavingId, setLeavingId] = useState<string | null>(null)
+  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set())
+  const [actionError, setActionError] = useState<string | null>(null)
   const [mode, setMode] = useState<'threads' | 'channels' | 'compose'>('threads')
   const [showSettings, setShowSettings] = useState(false)
 
@@ -112,11 +116,15 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
 
   const displayThreads = useMemo(() => {
     if (!threads) return threads
-    if (!pinned || threads.some((t) => t.id === pinned.id)) return threads
-    return [...threads, pinned].sort((a, b) =>
-      (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
-    )
-  }, [threads, pinned])
+    // acted-on threads stay hidden until the refetch drops them (no flicker)
+    let list = hiddenIds.size ? threads.filter((t) => !hiddenIds.has(t.id)) : threads
+    if (pinned && !hiddenIds.has(pinned.id) && !list.some((t) => t.id === pinned.id)) {
+      list = [...list, pinned].sort((a, b) =>
+        (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
+      )
+    }
+    return list
+  }, [threads, pinned, hiddenIds])
 
   const selectedAccount = accounts?.find((a) => a.id === accountId) ?? null
   const thread = displayThreads?.find((t) => t.id === threadId) ?? null
@@ -141,33 +149,47 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   }
 
   /**
-   * Archive/delete UX: slide the row out first, run the action, then advance
-   * to the next conversation (previous at the end of the list). Returns an
-   * error message, or null on success.
+   * Archive/delete UX: the next conversation opens instantly, the row slides
+   * out while the provider call runs in the background, and the row stays
+   * hidden until the refetch actually drops it (no flicker). On failure the
+   * row slides back in and a transient banner explains why.
    */
-  const [leavingId, setLeavingId] = useState<string | null>(null)
-  const removeWithAnimation = async (
-    id: string,
+  const removeWithAnimation = (
+    t: CommsThreadListItem,
     action: () => Promise<{ ok: true } | { ok: false; message: string }>
-  ): Promise<string | null> => {
+  ): void => {
+    if (leavingId) return // one exit at a time
     const list = displayThreads ?? []
-    const idx = list.findIndex((t) => t.id === id)
-    const next = list[idx + 1] ?? list[idx - 1] ?? null
-    setLeavingId(id)
-    await new Promise((r) => setTimeout(r, 200))
-    const res = await action()
-    setLeavingId(null)
-    if (!res.ok) return res.message
+    const idx = list.findIndex((x) => x.id === t.id)
+    const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1] ?? null) : null
+    setLeavingId(t.id)
     if (next) openThread(next)
     else closeThread()
-    return null
+    void (async () => {
+      // network and animation run in parallel; whichever is slower gates the swap
+      const [res] = await Promise.all([action(), new Promise((r) => setTimeout(r, 300))])
+      if (res.ok) {
+        setHiddenIds((prev) => new Set(prev).add(t.id))
+      } else {
+        setActionError(res.message)
+        setTimeout(() => setActionError(null), 5000)
+      }
+      setLeavingId(null)
+    })()
   }
 
-  const archiveThread = (t: CommsThreadListItem): Promise<string | null> =>
-    removeWithAnimation(t.id, () => api.invoke('comms:archiveThread', t.id, t.is_archived !== 1))
+  // once the refetched data no longer contains a hidden thread, forget it
+  useEffect(() => {
+    if (!threads || hiddenIds.size === 0) return
+    const still = [...hiddenIds].filter((id) => threads.some((t) => t.id === id))
+    if (still.length !== hiddenIds.size) setHiddenIds(new Set(still))
+  }, [threads, hiddenIds])
 
-  const deleteThread = (t: CommsThreadListItem): Promise<string | null> =>
-    removeWithAnimation(t.id, () => api.invoke('comms:deleteThread', t.id))
+  const archiveThread = (t: CommsThreadListItem): void =>
+    removeWithAnimation(t, () => api.invoke('comms:archiveThread', t.id, t.is_archived !== 1))
+
+  const deleteThread = (t: CommsThreadListItem): void =>
+    removeWithAnimation(t, () => api.invoke('comms:deleteThread', t.id))
 
   /** mark unread and return to the list — "leave it for later" */
   const markUnread = (t: CommsThreadListItem): void => {
@@ -378,6 +400,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
           {selectedAccount?.status === 'needs_auth' && (
             <p className="text-[11px] text-danger">needs reconnect — Settings → Connections</p>
           )}
+          {actionError && <p className="text-[11px] text-danger truncate" title={actionError}>{actionError}</p>}
         </div>
         <div className="flex-1 overflow-y-auto">
           {mode === 'channels' && selectedAccount ? (
@@ -669,11 +692,9 @@ function ThreadRow({
     <button
       onClick={onClick}
       className={cn(
-        'w-full text-left px-3 overflow-hidden transition-all duration-200 ease-out',
-        leaving
-          ? 'py-0 max-h-0 opacity-0 translate-x-6'
-          : 'py-2 max-h-20 border-b border-border/50 hover:bg-raised/50',
-        active && !leaving && 'bg-raised'
+        'thread-row w-full text-left px-3 py-2 border-b border-border/50 hover:bg-raised/50',
+        active && 'bg-raised',
+        leaving && 'thread-row-leaving'
       )}
     >
       <div className="flex items-center gap-1.5">
@@ -739,14 +760,12 @@ function ThreadPane({
 }: {
   thread: CommsThreadListItem
   onOpenPerson?: (id: string) => void
-  /** both resolve to an error message, or null on success */
-  onArchive: () => Promise<string | null>
-  onDelete: () => Promise<string | null>
+  /** fire-and-forget — the list owns the exit animation and error banner */
+  onArchive: () => void
+  onDelete: () => void
   onMarkUnread: () => void
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [acting, setActing] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const archived = thread.is_archived === 1
   const { name, title } = threadLabel(thread)
@@ -755,30 +774,15 @@ function ThreadPane({
     bottomRef.current?.scrollIntoView()
   }, [messages, thread.id])
 
-  const toggleArchive = async (): Promise<void> => {
-    if (acting) return
-    setActing(true)
-    setActionError(await onArchive())
-    setActing(false)
-  }
-
-  // no confirm: deletes go to Gmail's trash, recoverable there for 30 days
-  const remove = async (): Promise<void> => {
-    if (acting) return
-    setActing(true)
-    setActionError(await onDelete())
-    setActing(false)
-  }
-
   // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
   // u = mark unread + back to list, r = focus the reply box
   useEffect(() => {
     const down = (e: KeyboardEvent): void => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping()) return
       if (e.key === 'e') {
-        void toggleArchive()
+        onArchive()
       } else if ((e.key === 'Backspace' || e.key === 'Delete') && thread.provider === 'gmail') {
-        void remove()
+        onDelete()
       } else if (e.key === 'u') {
         onMarkUnread()
       } else if (e.key === 'r') {
@@ -788,7 +792,7 @@ function ThreadPane({
     }
     window.addEventListener('keydown', down)
     return () => window.removeEventListener('keydown', down)
-  }, [thread.id, thread.provider, archived])
+  }, [thread.id, thread.provider, onArchive, onDelete, onMarkUnread])
 
   return (
     <>
@@ -819,7 +823,7 @@ function ThreadPane({
           <Mail size={14} />
         </button>
         <button
-          onClick={() => void toggleArchive()}
+          onClick={onArchive}
           title={archived ? 'Move back to inbox (e)' : 'Archive (e)'}
           className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised"
         >
@@ -827,7 +831,7 @@ function ThreadPane({
         </button>
         {thread.provider === 'gmail' && (
           <button
-            onClick={() => void remove()}
+            onClick={onDelete}
             title="Delete (⌫) — moves to Gmail trash"
             className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-danger hover:bg-raised"
           >
@@ -836,9 +840,6 @@ function ThreadPane({
         )}
         <Chip tone="muted">{thread.provider}</Chip>
       </div>
-      {actionError && (
-        <p className="px-4 py-1 text-[11.5px] text-danger border-b border-border">{actionError}</p>
-      )}
       <div className="fade-in flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
         {messages?.map((m) => (
           <MessageBubble key={m.id} message={m} onOpenPerson={onOpenPerson} />

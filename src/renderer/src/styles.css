@@ -114,6 +114,10 @@ textarea,
    highlight is ours; suppress the browser focus ring (it pops onto the
    last-clicked row as soon as an arrow key is pressed). */
 .thread-row {
+  /* buttons are inline-block: the fold then bottoms out at the container's
+     line-height strut (~19.5px) and the remainder snaps away on removal.
+     block-level rows collapse to a true 0. */
+  display: block;
   /* barely above the real two-line row height — a taller cap adds a dead
      zone where the collapse animates without moving anything */
   max-height: 3.5rem;

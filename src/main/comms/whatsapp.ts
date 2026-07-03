@@ -71,6 +71,8 @@ function extractText(msg: WAMessage): { text: string; hasAttachment: boolean } {
 interface WaOpts {
   emit: (e: CommsEvent) => void
   onChanged: () => void
+  /** fired once per live-message batch that stored ≥1 new inbound message */
+  onInbound?: () => void
 }
 
 export class WhatsAppConnection {
@@ -173,10 +175,15 @@ export class WhatsAppConnection {
 
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       let any = false
+      let inbound = false
       for (const msg of messages) {
-        if (this.ingest(msg, type !== 'notify')) any = true
+        if (this.ingest(msg, type !== 'notify')) {
+          any = true
+          if (type === 'notify' && !msg.key.fromMe) inbound = true
+        }
       }
       if (any) this.opts.onChanged()
+      if (inbound) this.opts.onInbound?.()
     })
   }
 

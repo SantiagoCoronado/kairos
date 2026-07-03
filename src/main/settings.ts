@@ -8,7 +8,9 @@ export type Settings = AppSettings
 const DEFAULTS: Settings = {
   captureHotkey: 'Alt+Space',
   claudePath: null,
+  automationsEnabled: true,
   translucency: 0,
+  showClaudeUsage: true,
   chatProvider: 'claude',
   chatModel: null,
   chatEffort: null,

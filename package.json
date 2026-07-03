@@ -8,13 +8,13 @@
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/patch-dev-electron-plist.js",
+    "postinstall": "electron-rebuild -f -w better-sqlite3,node-pty && node scripts/patch-dev-electron-plist.js",
     "build": "electron-vite build && npm run build:mcp",
     "build:mcp": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "helper:build": "bash scripts/build-calendar-helper.sh && bash scripts/build-contacts-helper.sh",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "electron-rebuild -f -w better-sqlite3,node-pty",
     "dist": "npm run helper:build && electron-vite build && electron-builder --mac",
     "ship": "bash scripts/ship.sh"
   },
@@ -23,6 +23,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "baileys": "^6.7.23",
     "better-sqlite3": "^12.11.1",
+    "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
     "ulid": "^3.0.2",
     "zod": "^4.4.3"
@@ -36,6 +37,8 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "cmdk": "^1.1.1",
     "electron": "^43.0.0",
     "electron-builder": "^26.15.3",

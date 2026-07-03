@@ -1,17 +1,20 @@
 import { z } from 'zod'
 import { join } from 'node:path'
 import type { DbDriver } from './driver'
-import type { DbEntity, Area, InteractionKind, TaskStatus, Person } from './types'
+import type { DbEntity, Area, InteractionKind, TaskStatus, Person, AppEventName } from './types'
 import * as people from './repo/people'
 import * as interactions from './repo/interactions'
 import * as followups from './repo/followups'
 import * as tasks from './repo/tasks'
+import * as notes from './repo/notes'
+import * as agentTasks from './repo/agent-tasks'
 import * as projects from './repo/projects'
 import * as objectives from './repo/objectives'
 import { todayAgenda } from './repo/today'
 import { exportMarkdown } from './export/markdown'
 import { readMemory, saveMemory } from './memory'
 import * as comms from './repo/comms'
+import * as calendar from './repo/calendar'
 import type { CommsProvider } from './comms-types'
 
 // Shared tool definitions for BOTH Claude surfaces:
@@ -22,6 +25,10 @@ import type { CommsProvider } from './comms-types'
 export interface ToolCtx {
   dataDir: string
   onMutate: (entity: DbEntity) => void
+  /** app-event emission for automation triggers. Only the Electron main
+   *  process wires this — the MCP twin runs in another process and its
+   *  writes cannot fire event-triggered automations. */
+  onEvent?: (name: AppEventName) => void
 }
 
 export interface ToolDef {
@@ -37,6 +44,19 @@ const area = z.enum(['personal', 'work'])
 const taskStatus = z.enum(['todo', 'in_progress', 'done', 'cancelled'])
 const interactionKind = z.enum(['call', 'message', 'email', 'meeting', 'coffee', 'other'])
 const commsProvider = z.enum(['gmail', 'slack', 'whatsapp'])
+const noteRepeat = z.enum(['none', 'daily', 'weekly', 'monthly', 'yearly'])
+const agentSchedule = z.enum(['once', 'daily', 'weekly', 'monthly'])
+const appEvent = z.enum([
+  'email_received',
+  'message_received',
+  'task_created',
+  'note_created',
+  'interaction_logged'
+])
+const noteItems = z
+  .array(z.object({ text: z.string(), done: z.boolean().optional() }))
+  .optional()
+  .describe('checklist rows; done defaults to false')
 
 /** keep tool output lean: drop raw_json and cap the body */
 function trimMessage<T extends { raw_json?: string | null; body_text: string }>(m: T): Omit<T, 'raw_json'> {
@@ -126,6 +146,7 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
         })
         ctx.onMutate('interactions')
         ctx.onMutate('people')
+        ctx.onEvent?.('interaction_logged')
         return { person: p.name, interaction: i }
       }
     },
@@ -223,6 +244,7 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
           person_id: person?.id ?? null
         })
         ctx.onMutate('tasks')
+        ctx.onEvent?.('task_created')
         return t
       }
     },
@@ -255,6 +277,103 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
       }
     },
     {
+      name: 'notes_list',
+      description:
+        'List Keep-style notes/checklists. Notes hold quick thoughts, todo checklists, and reminders (remind_at). Distinct from tasks — use tasks for tracked work items.',
+      schema: {
+        archived: z.boolean().optional().describe('default false (active notes)'),
+        label: z.string().optional().describe('filter by one #tag, e.g. "#home"'),
+        search: z.string().optional()
+      },
+      handler: (a: { archived?: boolean; label?: string; search?: string }) =>
+        notes.listNotes(db, a)
+    },
+    {
+      name: 'note_create',
+      description:
+        'Create a note or checklist. Set remind_at (ISO datetime, user-local) to attach a reminder; repeat makes it recurring. The reminder fires as a desktop notification while the Kairos app is open.',
+      schema: {
+        title: z.string().optional(),
+        content: z.string().optional(),
+        items: noteItems,
+        labels: z.string().optional().describe('space-separated #tags, e.g. "#home #errands"'),
+        color: z.string().nullable().optional(),
+        pinned: z.boolean().optional(),
+        remind_at: z.string().nullable().optional().describe('ISO datetime, e.g. 2026-07-03T09:00'),
+        repeat: noteRepeat.optional().describe('default none')
+      },
+      handler: (a: {
+        title?: string
+        content?: string
+        items?: { text: string; done?: boolean }[]
+        labels?: string
+        color?: string | null
+        pinned?: boolean
+        remind_at?: string | null
+        repeat?: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly'
+      }) => {
+        const n = notes.createNote(db, {
+          ...a,
+          items: a.items?.map((it) => ({ text: it.text, done: it.done ?? false })),
+          source: 'agent'
+        })
+        ctx.onMutate('notes')
+        ctx.onEvent?.('note_created')
+        return n
+      }
+    },
+    {
+      name: 'note_update',
+      description:
+        'Patch a note by id: title, content, items (full replacement), labels, color, pinned, archived, remind_at (null clears the reminder), repeat.',
+      schema: {
+        id: z.string(),
+        title: z.string().optional(),
+        content: z.string().optional(),
+        items: noteItems,
+        labels: z.string().optional(),
+        color: z.string().nullable().optional(),
+        pinned: z.boolean().optional(),
+        archived: z.boolean().optional(),
+        remind_at: z.string().nullable().optional(),
+        repeat: noteRepeat.optional()
+      },
+      handler: ({
+        id,
+        items,
+        ...patch
+      }: { id: string; items?: { text: string; done?: boolean }[] } & Parameters<
+        typeof notes.updateNote
+      >[2]) => {
+        const n = notes.updateNote(db, id, {
+          ...patch,
+          items: items?.map((it) => ({ text: it.text, done: it.done ?? false }))
+        })
+        ctx.onMutate('notes')
+        return n
+      }
+    },
+    {
+      name: 'note_toggle_item',
+      description: 'Check or uncheck one checklist item by its zero-based index.',
+      schema: { id: z.string(), index: z.number().int().min(0) },
+      handler: (a: { id: string; index: number }) => {
+        const n = notes.toggleItem(db, a.id, a.index)
+        ctx.onMutate('notes')
+        return n
+      }
+    },
+    {
+      name: 'note_delete',
+      description: 'Delete a note permanently. Prefer archiving (note_update archived: true) unless the user asks to delete.',
+      schema: { id: z.string() },
+      handler: (a: { id: string }) => {
+        notes.deleteNote(db, a.id)
+        ctx.onMutate('notes')
+        return { deleted: true }
+      }
+    },
+    {
       name: 'projects_list',
       description: 'List projects.',
       schema: { area: area.optional() },
@@ -273,6 +392,115 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
         ctx.onMutate('projects')
         return p
       }
+    },
+    {
+      name: 'agent_tasks_list',
+      description:
+        'List scheduled agent tasks ("Automations"): recurring or one-off prompts an AI agent executes on a schedule inside the Kairos app.',
+      schema: {},
+      handler: () => agentTasks.listAgentTasks(db)
+    },
+    {
+      name: 'agent_task_create',
+      description:
+        'Create a scheduled agent task. The prompt runs unattended in the Kairos app, either at a LOCAL clock time (trigger_type schedule; once/daily/weekly/monthly) or when an app event happens (trigger_type event + trigger_event, firing every trigger_count occurrences). Only runs while the Kairos app is open.',
+      schema: {
+        name: z.string(),
+        prompt: z.string().describe('the instruction the agent executes each run'),
+        schedule: agentSchedule,
+        scheduled_time: z.string().optional().describe('HH:MM 24h local (daily/weekly/monthly)'),
+        scheduled_day: z
+          .number()
+          .int()
+          .optional()
+          .describe('weekly: 0=Sun..6=Sat; monthly: 1..31'),
+        scheduled_date: z.string().optional().describe('once only: ISO datetime'),
+        trigger_type: z.enum(['schedule', 'event']).optional().describe('default schedule'),
+        trigger_event: appEvent.optional().describe('required when trigger_type is event'),
+        trigger_count: z.number().int().min(1).optional().describe('fire every N events; default 1'),
+        notify: z.boolean().optional().describe('desktop notification on completion; default true')
+      },
+      handler: (a: Parameters<typeof agentTasks.createAgentTask>[1]) => {
+        const t = agentTasks.createAgentTask(db, a)
+        ctx.onMutate('agent_tasks')
+        return t
+      }
+    },
+    {
+      name: 'agent_task_update',
+      description: 'Patch a scheduled agent task (name, prompt, schedule/trigger fields, notify).',
+      schema: {
+        id: z.string(),
+        name: z.string().optional(),
+        prompt: z.string().optional(),
+        schedule: agentSchedule.optional(),
+        scheduled_time: z.string().nullable().optional(),
+        scheduled_day: z.number().int().nullable().optional(),
+        scheduled_date: z.string().nullable().optional(),
+        trigger_type: z.enum(['schedule', 'event']).optional(),
+        trigger_event: appEvent.nullable().optional(),
+        trigger_count: z.number().int().min(1).optional(),
+        notify: z.boolean().optional()
+      },
+      handler: ({ id, ...patch }: { id: string } & Parameters<typeof agentTasks.updateAgentTask>[2]) => {
+        const t = agentTasks.updateAgentTask(db, id, patch)
+        ctx.onMutate('agent_tasks')
+        return t
+      }
+    },
+    {
+      name: 'agent_task_pause',
+      description: 'Pause a scheduled agent task (it stops running until resumed).',
+      schema: { id: z.string() },
+      handler: (a: { id: string }) => {
+        const t = agentTasks.pauseAgentTask(db, a.id)
+        ctx.onMutate('agent_tasks')
+        return t
+      }
+    },
+    {
+      name: 'agent_task_resume',
+      description: 'Resume a paused agent task; its next run is recomputed from now.',
+      schema: { id: z.string() },
+      handler: (a: { id: string }) => {
+        const t = agentTasks.resumeAgentTask(db, a.id)
+        ctx.onMutate('agent_tasks')
+        return t
+      }
+    },
+    {
+      name: 'agent_task_run',
+      description:
+        'Trigger an agent task to run as soon as possible by marking it due now. Execution happens inside the Kairos app: within ~30 seconds while the app is open, otherwise on next launch.',
+      schema: { id: z.string() },
+      handler: (a: { id: string }) => {
+        const t = agentTasks.getAgentTask(db, a.id)
+        if (!t) throw new Error(`No agent task with id "${a.id}"`)
+        db.run(
+          "UPDATE agent_tasks SET next_run = ?, status = 'active', updated_at = ? WHERE id = ?",
+          new Date().toISOString(),
+          new Date().toISOString(),
+          a.id
+        )
+        ctx.onMutate('agent_tasks')
+        return { queued: true, note: 'runs within ~30s while the Kairos app is open' }
+      }
+    },
+    {
+      name: 'agent_task_delete',
+      description: 'Delete a scheduled agent task and its run history.',
+      schema: { id: z.string() },
+      handler: (a: { id: string }) => {
+        agentTasks.deleteAgentTask(db, a.id)
+        ctx.onMutate('agent_tasks')
+        return { deleted: true }
+      }
+    },
+    {
+      name: 'agent_task_runs',
+      description: 'Run history for one agent task: status, result summary, errors, tool steps.',
+      schema: { id: z.string(), limit: z.number().int().min(1).max(100).optional() },
+      handler: (a: { id: string; limit?: number }) => agentTasks.listRuns(db, a.id, a.limit ?? 10)
     },
     {
       name: 'objectives_review',
@@ -513,6 +741,134 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
           outbox_id: item.id,
           note: 'delivers within seconds while the Kairos app is running; otherwise on next app launch'
         }
+      }
+    },
+
+    // ---------- calendar ----------
+    {
+      name: 'calendars_list',
+      description:
+        'List the calendars events can live on: the local "Kairos" calendar (id "local") plus any synced Google calendars. Only writable calendars accept new events.',
+      schema: {},
+      handler: () => calendar.listCalendars(db)
+    },
+    {
+      name: 'calendar_events_list',
+      description:
+        'List calendar events overlapping [start, end). Timed events use UTC ISO datetimes; all-day events use YYYY-MM-DD with an exclusive end date.',
+      schema: {
+        start: z.string().describe('ISO datetime or YYYY-MM-DD (inclusive)'),
+        end: z.string().describe('ISO datetime or YYYY-MM-DD (exclusive)'),
+        calendar_id: z.string().optional().describe('limit to one calendar')
+      },
+      handler: (a: { start: string; end: string; calendar_id?: string }) =>
+        calendar.listEventsInRange(db, a.start, a.end, { calendarId: a.calendar_id })
+    },
+    {
+      name: 'calendar_event_create',
+      description:
+        'Create a calendar event. Defaults to the local Kairos calendar; pass a Google calendar id to have it synced to Google (pushed within seconds while the Kairos app is open). Attendee emails on Google-calendar events receive Google invitations. Timed events: start/end as ISO datetimes. All-day: all_day=true with YYYY-MM-DD dates, end exclusive. color is a Google colorId "1"-"11".',
+      schema: {
+        title: z.string(),
+        start: z.string().describe('ISO datetime, or YYYY-MM-DD when all_day'),
+        end: z.string().describe('ISO datetime, or exclusive YYYY-MM-DD when all_day'),
+        all_day: z.boolean().optional(),
+        calendar_id: z.string().optional().describe('default "local"'),
+        description: z.string().optional(),
+        location: z.string().optional(),
+        color: z.string().optional().describe('Google colorId "1"-"11"'),
+        attendees: z.array(z.string()).optional().describe('attendee emails'),
+        conferencing_url: z.string().optional().describe('Zoom/Meet/other link')
+      },
+      handler: (a: {
+        title: string
+        start: string
+        end: string
+        all_day?: boolean
+        calendar_id?: string
+        description?: string
+        location?: string
+        color?: string
+        attendees?: string[]
+        conferencing_url?: string
+      }) => {
+        const e = calendar.createEvent(db, {
+          title: a.title,
+          start_at: a.start,
+          end_at: a.end,
+          all_day: a.all_day,
+          calendar_id: a.calendar_id,
+          description: a.description ?? null,
+          location: a.location ?? null,
+          color: a.color ?? null,
+          attendees: (a.attendees ?? []).map((email) => ({ email })),
+          conferencing_url: a.conferencing_url ?? null,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+        })
+        ctx.onMutate('calendar_events')
+        return e
+      }
+    },
+    {
+      name: 'calendar_event_update',
+      description:
+        'Patch a calendar event by id: title, start/end (move/reschedule), all_day, description, location, color ("1"-"11"), attendees (full replacement, emails), conferencing_url. Recurring Google event instances are read-only. Google-synced changes push within seconds while the Kairos app is open.',
+      schema: {
+        id: z.string(),
+        title: z.string().optional(),
+        start: z.string().optional(),
+        end: z.string().optional(),
+        all_day: z.boolean().optional(),
+        description: z.string().nullable().optional(),
+        location: z.string().nullable().optional(),
+        color: z.string().nullable().optional(),
+        attendees: z.array(z.string()).optional(),
+        conferencing_url: z.string().nullable().optional()
+      },
+      handler: (a: {
+        id: string
+        title?: string
+        start?: string
+        end?: string
+        all_day?: boolean
+        description?: string | null
+        location?: string | null
+        color?: string | null
+        attendees?: string[]
+        conferencing_url?: string | null
+      }) => {
+        const existing = calendar.getEvent(db, a.id)
+        if (!existing) throw new Error(`No event "${a.id}".`)
+        const e = calendar.updateEvent(db, a.id, {
+          title: a.title,
+          start_at: a.start,
+          end_at: a.end,
+          all_day: a.all_day,
+          description: a.description,
+          location: a.location,
+          color: a.color,
+          // keep known RSVP state for retained attendees
+          attendees: a.attendees?.map(
+            (email) =>
+              existing.attendees.find((x) => x.email.toLowerCase() === email.toLowerCase()) ?? {
+                email
+              }
+          ),
+          conferencing_url: a.conferencing_url
+        })
+        ctx.onMutate('calendar_events')
+        return e
+      }
+    },
+    {
+      name: 'calendar_event_delete',
+      description:
+        'Delete a calendar event by id. Google-synced deletes propagate (and notify attendees) within seconds while the Kairos app is open. Recurring instances are read-only.',
+      schema: { id: z.string() },
+      handler: (a: { id: string }) => {
+        calendar.deleteEvent(db, a.id)
+        ctx.onMutate('calendar_events')
+        return { deleted: true }
       }
     }
   ]

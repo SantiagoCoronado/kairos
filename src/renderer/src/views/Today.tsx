@@ -1,4 +1,6 @@
-import { CalendarDays } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { CalendarDays, Sparkles } from 'lucide-react'
+import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
 import { Chip, EmptyState, cn } from '../components/ui'
@@ -15,6 +17,20 @@ export function TodayView({
     ['tasks', 'people', 'interactions', 'objectives']
   )
   const { data: calendar } = useInvoke('calendar:today', [], [])
+  const { data: settings } = useInvoke('settings:get', [], ['settings'])
+  const { data: usage, reload: reloadUsage } = useInvoke('usage:claudeToday', [], [])
+  const { data: stats, reload: reloadStats } = useInvoke('usage:claudeStats', [], [])
+  const { data: limits, reload: reloadLimits } = useInvoke('usage:claudeLimits', [], [])
+
+  // usage comes from files on disk / the network, not the db — timer refresh
+  useEffect(() => {
+    const t = setInterval(() => {
+      reloadUsage()
+      reloadStats()
+      reloadLimits()
+    }, 60_000)
+    return () => clearInterval(t)
+  }, [reloadUsage, reloadStats, reloadLimits])
 
   const dateLabel = new Date().toLocaleDateString(undefined, {
     weekday: 'long',
@@ -106,6 +122,63 @@ export function TodayView({
         </Section>
       )}
 
+      {settings?.showClaudeUsage && usage && usage.messages > 0 && (
+        <Section title="claude usage">
+          <div className="flex items-center gap-3 py-1.5">
+            <Sparkles size={13} className="text-faint shrink-0" />
+            <span className="text-[13px]">
+              <span className="text-faint">today</span> · {fmtTokens(usage.totalTokens)} tokens
+              {usage.costUsd > 0 && (
+                <span className="text-muted">
+                  {' '}
+                  · {usage.costIsPartial ? '>' : '~'}${usage.costUsd.toFixed(2)}
+                </span>
+              )}
+            </span>
+            <div className="flex-1" />
+            <span className="font-mono text-[10.5px] text-faint">
+              {usage.messages} msgs · {usage.sessions} session{usage.sessions === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {stats && stats.messages > 0 && (
+            <>
+              <div className="grid grid-cols-4 gap-1.5 mt-2">
+                {[
+                  ['sessions', stats.sessions.toLocaleString()],
+                  ['messages', stats.messages.toLocaleString()],
+                  ['total tokens', fmtTokens(stats.totalTokens)],
+                  ['active days', String(stats.activeDays)],
+                  ['current streak', `${stats.currentStreak}d`],
+                  ['longest streak', `${stats.longestStreak}d`],
+                  ['peak hour', stats.peakHour === null ? '—' : fmtHour(stats.peakHour)],
+                  ['favorite model', prettyModel(stats.favoriteModel)]
+                ].map(([label, value]) => (
+                  <div key={label} className="bg-raised/60 rounded-md px-2.5 py-2 min-w-0">
+                    <div className="font-mono text-[9.5px] uppercase tracking-wider text-faint truncate">
+                      {label}
+                    </div>
+                    <div className="text-[14px] font-medium mt-0.5 truncate">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-end gap-5 mt-3">
+                <LimitBars limits={limits ?? null} />
+                <UsageHeatmap days={stats.days} />
+              </div>
+
+              {stats.totalTokens > GATSBY_TOKENS * 2 && (
+                <p className="text-[11px] text-faint mt-2">
+                  You&apos;ve used ~{Math.round(stats.totalTokens / GATSBY_TOKENS).toLocaleString()}
+                  × more tokens than The Great Gatsby.
+                </p>
+              )}
+            </>
+          )}
+        </Section>
+      )}
+
       {agenda && agenda.objectives.length > 0 && (
         <Section title="objectives">
           <div className="space-y-2.5 pt-1">
@@ -122,6 +195,138 @@ export function TodayView({
             ))}
           </div>
         </Section>
+      )}
+    </div>
+  )
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`
+  return String(n)
+}
+
+/** ≈ token count of The Great Gatsby (~47k words) */
+const GATSBY_TOKENS = 62_000
+
+function fmtHour(h: number): string {
+  const ampm = h < 12 ? 'AM' : 'PM'
+  const hh = h % 12 === 0 ? 12 : h % 12
+  return `${hh} ${ampm}`
+}
+
+function prettyModel(model: string | null): string {
+  if (!model) return '—'
+  const parts = model
+    .replace(/^claude-/, '')
+    .replace(/-\d{8}$/, '') // trailing snapshot date
+    .split('-')
+  const name = parts[0].charAt(0).toUpperCase() + parts[0].slice(1)
+  const version = parts.slice(1).join('.')
+  return version ? `${name} ${version}` : name
+}
+
+/** rate-limit windows: how much of each budget is used, and when it resets */
+function LimitBars({ limits }: { limits: ClaudeLimits | null }): React.JSX.Element {
+  if (!limits) {
+    return (
+      <div className="flex-1 min-w-0 self-center text-[11px] text-faint">
+        usage limits unavailable — is Claude Code logged in?
+      </div>
+    )
+  }
+  return (
+    <div className="flex-1 min-w-0 space-y-2.5">
+      {limits.buckets.map((b) => {
+        const pct = Math.max(0, Math.min(100, b.utilization))
+        return (
+          <div key={b.key}>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-mono text-[9.5px] uppercase tracking-wider text-faint truncate">
+                {b.label}
+              </span>
+              <span
+                className={`font-mono text-[10.5px] shrink-0 ${pct >= 80 ? 'text-danger' : 'text-muted'}`}
+              >
+                {Math.round(pct)}% used
+              </span>
+            </div>
+            <div className="h-[5px] rounded-full bg-raised mt-1 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${pct >= 80 ? 'bg-danger' : 'bg-accent'}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            {b.resetsAt && (
+              <div className="text-[10px] text-faint mt-0.5">resets {fmtReset(b.resetsAt)}</div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function fmtReset(iso: string): string {
+  const d = new Date(iso)
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
+}
+
+/** GitHub-style activity grid: columns are weeks, rows Mon–Sun */
+function UsageHeatmap({ days }: { days: { date: string; tokens: number }[] }): React.JSX.Element {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
+
+  // intensity thresholds from the quartiles of non-zero days
+  const nz = days
+    .filter((d) => d.tokens > 0)
+    .map((d) => d.tokens)
+    .sort((a, b) => a - b)
+  const q = (p: number): number => (nz.length ? nz[Math.min(nz.length - 1, Math.floor(p * nz.length))] : 0)
+  const [t1, t2, t3] = [q(0.25), q(0.5), q(0.75)]
+  const level = (n: number): number => (n === 0 ? 0 : n <= t1 ? 1 : n <= t2 ? 2 : n <= t3 ? 3 : 4)
+  const cls = ['bg-raised/70', 'bg-accent/25', 'bg-accent/45', 'bg-accent/70', 'bg-accent']
+  const weeks: { date: string; tokens: number }[][] = []
+  for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7))
+
+  const showTip = (e: React.MouseEvent<HTMLDivElement>, d: { date: string; tokens: number }): void => {
+    const cell = e.currentTarget.getBoundingClientRect()
+    const wrap = wrapRef.current!.getBoundingClientRect()
+    const day = new Date(`${d.date}T12:00:00`)
+    const label = day.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    setTip({
+      x: cell.left - wrap.left + cell.width / 2,
+      y: cell.top - wrap.top,
+      text: `${label} — ${d.tokens === 0 ? 'no usage' : `${fmtTokens(d.tokens)} tokens`}`
+    })
+  }
+
+  return (
+    <div ref={wrapRef} className="relative shrink-0">
+      <div className="flex gap-[3px]" onMouseLeave={() => setTip(null)}>
+        {weeks.map((w, i) => (
+          <div key={i} className="flex flex-col gap-[3px]">
+            {w.map((d) => (
+              <div
+                key={d.date}
+                className={`w-[11px] h-[11px] rounded-[2.5px] ${cls[level(d.tokens)]}`}
+                onMouseEnter={(e) => showTip(e, d)}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      {tip && (
+        <div
+          className="absolute z-10 -translate-x-1/2 -translate-y-full pointer-events-none whitespace-nowrap rounded-md bg-overlay border border-border-strong px-2 py-0.5 text-[11px] text-text shadow-lg"
+          style={{ left: tip.x, top: tip.y - 5 }}
+        >
+          {tip.text}
+        </div>
       )}
     </div>
   )

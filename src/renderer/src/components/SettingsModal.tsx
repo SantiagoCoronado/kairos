@@ -93,6 +93,23 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
               </div>
             </div>
 
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+                  claude usage on today
+                </span>
+                <p className="text-[11px] text-faint">
+                  Show today&apos;s Claude Code token usage on the Today view.
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.showClaudeUsage}
+                onChange={(e) => save({ showClaudeUsage: e.target.checked })}
+                className="accent-accent w-4 h-4 shrink-0"
+              />
+            </div>
+
             <div className="space-y-1">
               <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
                 assistant
@@ -224,7 +241,8 @@ function ConnectionsSection({
   save: (patch: Partial<AppSettings>) => void
 }): React.JSX.Element {
   const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
-  const [busy, setBusy] = useState<'gmail' | 'slack' | 'whatsapp' | null>(null)
+  const { data: calAccounts } = useInvoke('calendar:accounts', [], ['calendar_accounts'])
+  const [busy, setBusy] = useState<'gmail' | 'slack' | 'whatsapp' | 'gcal' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [waQr, setWaQr] = useState<string | null>(null)
 
@@ -259,11 +277,50 @@ function ConnectionsSection({
     })
   }
 
+  const connectCalendar = (): void => {
+    setBusy('gcal')
+    setError(null)
+    void api.invoke('calendar:connectGoogle').then((res) => {
+      setBusy(null)
+      if (!res.ok) setError(res.message)
+    })
+  }
+
   return (
     <div className="space-y-2.5 border-t border-border pt-4">
       <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
         connections
       </span>
+
+      {(calAccounts?.length ?? 0) > 0 && (
+        <div className="space-y-1">
+          {calAccounts!.map((a) => (
+            <div key={a.id} className="flex items-center gap-2 text-[12.5px]">
+              <Chip tone={STATUS_TONE[a.status]}>calendar</Chip>
+              <span className="truncate flex-1" title={a.error ?? undefined}>
+                {a.display_name}
+                {a.status !== 'connected' && (
+                  <span className="text-faint"> · {a.status.replace('_', ' ')}</span>
+                )}
+              </span>
+              <Button
+                variant="ghost"
+                className="!py-0.5 text-[11px]"
+                onClick={() => connectCalendar()}
+              >
+                reconnect
+              </Button>
+              <Button
+                variant="ghost"
+                className="!py-0.5 text-[11px] text-danger"
+                onClick={() => void api.invoke('calendar:disconnect', a.id)}
+              >
+                remove
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {(accounts?.length ?? 0) > 0 && (
         <div className="space-y-1">
@@ -304,6 +361,9 @@ function ConnectionsSection({
         </Button>
         <Button disabled={busy !== null} onClick={() => connect('whatsapp')}>
           {busy === 'whatsapp' ? 'linking…' : '+ WhatsApp'}
+        </Button>
+        <Button disabled={busy !== null} onClick={connectCalendar}>
+          {busy === 'gcal' ? 'waiting for browser…' : '+ Google Calendar'}
         </Button>
       </div>
       {error && <p className="text-[11.5px] text-danger">{error}</p>}

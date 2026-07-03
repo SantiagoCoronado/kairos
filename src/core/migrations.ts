@@ -242,6 +242,164 @@ UPDATE comms_threads SET is_archived = 1
 WHERE provider = 'gmail' AND NOT EXISTS (
   SELECT 1 FROM comms_messages m WHERE m.thread_id = comms_threads.id AND m.is_inbox = 1
 );
+`,
+  // 006 — notes (Keep-style notes/checklists with reminders).
+  // reminder_fired_at is the restart-safe dedupe marker: a reminder is due
+  // when remind_at <= now AND (fired IS NULL OR fired < remind_at).
+  `
+CREATE TABLE notes (
+  id                TEXT PRIMARY KEY,
+  title             TEXT NOT NULL DEFAULT '',
+  content           TEXT NOT NULL DEFAULT '',
+  items             TEXT NOT NULL DEFAULT '[]',
+  note_type         TEXT NOT NULL DEFAULT 'note' CHECK (note_type IN ('note','checklist')),
+  color             TEXT,
+  labels            TEXT NOT NULL DEFAULT '',
+  pinned            INTEGER NOT NULL DEFAULT 0,
+  archived          INTEGER NOT NULL DEFAULT 0,
+  remind_at         TEXT,
+  repeat            TEXT NOT NULL DEFAULT 'none'
+                    CHECK (repeat IN ('none','daily','weekly','monthly','yearly')),
+  reminder_fired_at TEXT,
+  source            TEXT NOT NULL DEFAULT 'user' CHECK (source IN ('user','agent')),
+  agent_session_id  TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+  sort_order        INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+CREATE INDEX idx_notes_list ON notes(archived, pinned DESC, sort_order);
+CREATE INDEX idx_notes_due ON notes(remind_at) WHERE remind_at IS NOT NULL;
+`,
+  // 007 — scheduled agent tasks ("Automations") + run history.
+  // cron_expression and then_task_id are reserved for later phases.
+  `
+CREATE TABLE agent_tasks (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  prompt          TEXT NOT NULL,
+  schedule        TEXT NOT NULL DEFAULT 'once'
+                  CHECK (schedule IN ('once','daily','weekly','monthly')),
+  scheduled_time  TEXT,
+  scheduled_day   INTEGER,
+  scheduled_date  TEXT,
+  cron_expression TEXT,
+  next_run        TEXT,
+  last_run        TEXT,
+  status          TEXT NOT NULL DEFAULT 'active'
+                  CHECK (status IN ('active','paused','completed')),
+  run_count       INTEGER NOT NULL DEFAULT 0,
+  session_id      TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
+  model           TEXT,
+  max_turns       INTEGER,
+  notify          INTEGER NOT NULL DEFAULT 1,
+  then_task_id    TEXT REFERENCES agent_tasks(id) ON DELETE SET NULL,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE INDEX idx_agent_tasks_due ON agent_tasks(status, next_run);
+
+CREATE TABLE agent_task_runs (
+  id          TEXT PRIMARY KEY,
+  task_id     TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+  started_at  TEXT NOT NULL,
+  finished_at TEXT,
+  status      TEXT NOT NULL DEFAULT 'running'
+              CHECK (status IN ('running','success','error','stopped')),
+  result      TEXT,
+  error       TEXT,
+  steps       TEXT NOT NULL DEFAULT '[]',
+  session_id  TEXT,
+  model       TEXT
+);
+CREATE INDEX idx_agent_task_runs_task ON agent_task_runs(task_id, started_at DESC);
+`,
+  // 008 — event-triggered automations: fire on app events (new mail, note
+  // created, …) every N occurrences, instead of (or in addition to) a clock
+  // schedule. Event tasks keep next_run NULL and are driven by the in-app
+  // event bus, so the schedule scanner ignores them for free.
+  `
+ALTER TABLE agent_tasks ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'schedule'
+  CHECK (trigger_type IN ('schedule','event'));
+ALTER TABLE agent_tasks ADD COLUMN trigger_event TEXT;
+ALTER TABLE agent_tasks ADD COLUMN trigger_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agent_tasks ADD COLUMN trigger_counter INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_agent_tasks_event ON agent_tasks(trigger_type, trigger_event, status);
+`,
+  // 009 — calendar: local events + two-way Google Calendar sync.
+  // Google accounts live in their own tables (comms_accounts' provider CHECK
+  // can't be relaxed without a table rebuild). calendar_calendars seeds a
+  // fixed 'local' pseudo-calendar so every event has a calendar_id; Google
+  // calendars hang off an account and carry the per-calendar events syncToken.
+  // Timed events store UTC ISO in start_at/end_at; all-day events store
+  // YYYY-MM-DD with an EXCLUSIVE end, mirroring Google's start.date/end.date.
+  // sync_status is the offline-edit queue: the push drain sends pending_*
+  // rows to Google and flips them back to 'synced' (local-calendar events are
+  // always 'synced' — there is nothing to push).
+  `
+CREATE TABLE calendar_accounts (
+  id            TEXT PRIMARY KEY,
+  provider      TEXT NOT NULL DEFAULT 'gcal' CHECK (provider IN ('gcal')),
+  external_id   TEXT NOT NULL,
+  display_name  TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'connected'
+                CHECK (status IN ('connected','needs_auth','error','disabled')),
+  error         TEXT,
+  last_sync_at  TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  UNIQUE (provider, external_id)
+);
+
+CREATE TABLE calendar_credentials (
+  account_id  TEXT PRIMARY KEY REFERENCES calendar_accounts(id) ON DELETE CASCADE,
+  cipher      TEXT NOT NULL
+);
+
+CREATE TABLE calendar_calendars (
+  id                 TEXT PRIMARY KEY,
+  account_id         TEXT REFERENCES calendar_accounts(id) ON DELETE CASCADE,
+  google_calendar_id TEXT,
+  summary            TEXT NOT NULL,
+  color              TEXT,
+  is_primary         INTEGER NOT NULL DEFAULT 0,
+  is_writable        INTEGER NOT NULL DEFAULT 1,
+  is_visible         INTEGER NOT NULL DEFAULT 1,
+  sync_token         TEXT,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  UNIQUE (account_id, google_calendar_id)
+);
+
+INSERT INTO calendar_calendars (id, account_id, google_calendar_id, summary, created_at, updated_at)
+VALUES ('local', NULL, NULL, 'Kairos',
+        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+CREATE TABLE calendar_events (
+  id                 TEXT PRIMARY KEY,
+  calendar_id        TEXT NOT NULL REFERENCES calendar_calendars(id) ON DELETE CASCADE,
+  google_event_id    TEXT,
+  etag               TEXT,
+  recurring_event_id TEXT,
+  title              TEXT NOT NULL DEFAULT '',
+  description        TEXT,
+  location           TEXT,
+  start_at           TEXT NOT NULL,
+  end_at             TEXT NOT NULL,
+  all_day            INTEGER NOT NULL DEFAULT 0,
+  timezone           TEXT,
+  color              TEXT,
+  attendees          TEXT NOT NULL DEFAULT '[]',
+  conferencing_url   TEXT,
+  status             TEXT NOT NULL DEFAULT 'confirmed'
+                     CHECK (status IN ('confirmed','tentative','cancelled')),
+  sync_status        TEXT NOT NULL DEFAULT 'synced'
+                     CHECK (sync_status IN ('synced','pending_create','pending_update','pending_delete')),
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  UNIQUE (calendar_id, google_event_id)
+);
+CREATE INDEX idx_cal_events_range ON calendar_events(calendar_id, start_at);
+CREATE INDEX idx_cal_events_dirty ON calendar_events(sync_status) WHERE sync_status != 'synced';
 `
 ]
 

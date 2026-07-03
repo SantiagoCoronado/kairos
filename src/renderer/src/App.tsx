@@ -5,24 +5,48 @@ import { TodayView } from './views/Today'
 import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
 import { TasksView } from './views/Tasks'
+import { NotesView } from './views/Notes'
+import { CalendarView } from './views/Calendar'
+import { AutomationsView } from './views/Automations'
 import { ObjectivesView } from './views/Objectives'
 import { ChatView } from './views/Chat'
+import { TerminalView } from './views/Terminal'
 import { api } from './lib/api'
 import { applyTranslucency } from './lib/translucency'
 
 const SIDEBAR_KEY = 'kairos.sidebarHidden'
-const VIEW_ORDER: ViewId[] = ['today', 'inbox', 'people', 'tasks', 'objectives', 'chat']
+const VIEW_ORDER: ViewId[] = [
+  'today',
+  'inbox',
+  'people',
+  'tasks',
+  'notes',
+  'calendar',
+  'objectives',
+  'automations',
+  'chat',
+  'terminal'
+]
 
 export default function App(): React.JSX.Element {
   const [view, setView] = useState<ViewId>('today')
   const [personId, setPersonId] = useState<string | null>(null)
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null)
   const [sidebarHidden, setSidebarHidden] = useState(
     () => localStorage.getItem(SIDEBAR_KEY) === '1'
   )
+  // once opened, the terminal stays mounted (hidden) so xterm state survives view switches
+  const [terminalOpened, setTerminalOpened] = useState(false)
+  useEffect(() => {
+    if (view === 'terminal') setTerminalOpened(true)
+  }, [view])
 
   useEffect(() => {
     void api.invoke('settings:get').then((s) => applyTranslucency(s.translucency))
   }, [])
+
+  // deep links from main-process notifications (reminder clicks)
+  useEffect(() => api.on('nav:goto', ({ view: v }) => setView(v)), [])
 
   const toggleSidebar = (): void => {
     setSidebarHidden((h) => {
@@ -37,10 +61,11 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         toggleSidebar()
       }
-      // ⌘1–⌘6 jump between views
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key >= '1' && e.key <= '6') {
+      // ⌘1–⌘N jump between views
+      const n = Number(e.key)
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && n >= 1 && n <= VIEW_ORDER.length) {
         e.preventDefault()
-        setView(VIEW_ORDER[Number(e.key) - 1])
+        setView(VIEW_ORDER[n - 1])
       }
     }
     window.addEventListener('keydown', down)
@@ -50,6 +75,11 @@ export default function App(): React.JSX.Element {
   const openPerson = (id: string): void => {
     setPersonId(id)
     setView('people')
+  }
+
+  const openChatSession = (sessionId: string): void => {
+    setChatSessionId(sessionId)
+    setView('chat')
   }
 
   return (
@@ -73,8 +103,18 @@ export default function App(): React.JSX.Element {
           {view === 'inbox' && <InboxView onOpenPerson={openPerson} />}
           {view === 'people' && <PeopleView selectedId={personId} onSelect={setPersonId} />}
           {view === 'tasks' && <TasksView />}
+          {view === 'notes' && <NotesView onOpenSession={openChatSession} />}
+          {view === 'calendar' && <CalendarView onNavigate={setView} />}
           {view === 'objectives' && <ObjectivesView />}
-          {view === 'chat' && <ChatView />}
+          {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}
+          {view === 'chat' && (
+            <ChatView key={chatSessionId ?? 'default'} initialSessionId={chatSessionId} />
+          )}
+          {terminalOpened && (
+            <div className={view === 'terminal' ? 'h-full overflow-hidden' : 'hidden'}>
+              <TerminalView active={view === 'terminal'} />
+            </div>
+          )}
         </div>
       </main>
       <CommandPalette onNavigate={setView} onOpenPerson={openPerson} onToggleSidebar={toggleSidebar} />

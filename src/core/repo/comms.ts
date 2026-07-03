@@ -655,6 +655,18 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
   })
 }
 
+/** inbound unread messages stored since `sinceIso` — the "new mail arrived"
+ *  signal for automation event triggers (created_at is stamped at insert) */
+export function countNewInbound(db: DbDriver, accountId: string, sinceIso: string): number {
+  const row = db.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM comms_messages
+     WHERE account_id = ? AND is_me = 0 AND is_read = 0 AND created_at >= ?`,
+    accountId,
+    sinceIso
+  )
+  return row?.n ?? 0
+}
+
 export function listMessages(db: DbDriver, threadId: string, limit = 200): CommsMessage[] {
   // newest N, presented oldest-first
   return db

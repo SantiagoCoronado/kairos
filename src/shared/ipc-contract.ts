@@ -22,7 +22,21 @@ import type {
   ObjectivePatch,
   ObjectiveStatus,
   KeyResult,
-  TodayPayload
+  TodayPayload,
+  Note,
+  NoteFilter,
+  NewNote,
+  NotePatch,
+  AgentTask,
+  AgentTaskRun,
+  NewAgentTask,
+  AgentTaskPatch,
+  AgentTaskDraft,
+  CalendarAccount,
+  CalendarCalendar,
+  CalendarEventRecord,
+  NewCalendarEvent,
+  CalendarEventPatch
 } from '../core/types'
 import type {
   CommsAccount,
@@ -57,6 +71,37 @@ export interface IpcApi {
   'tasks:delete': (id: string) => void
   /** place a task before another in manual order (null = move to end) */
   'tasks:reorder': (id: string, beforeId: string | null) => void
+
+  'notes:list': (f: NoteFilter) => Note[]
+  'notes:create': (input: NewNote) => Note
+  'notes:update': (id: string, patch: NotePatch) => Note
+  'notes:delete': (id: string) => void
+  /** place a note before another in manual order (null = move to end) */
+  'notes:reorder': (id: string, beforeId: string | null) => void
+  /** flip one checklist item's done state */
+  'notes:toggleItem': (id: string, index: number) => Note
+  /** distinct #tags across unarchived notes */
+  'notes:labels': () => string[]
+  /** count of due/overdue unfired reminders (sidebar badge) */
+  'notes:dueCount': () => number
+  /** hand the note (or one checklist item) to the chat agent; returns the session */
+  'notes:solve': (id: string, itemIndex?: number) => { sessionId: string }
+
+  'agentTasks:list': () => AgentTask[]
+  'agentTasks:create': (input: NewAgentTask) => AgentTask
+  'agentTasks:update': (id: string, patch: AgentTaskPatch) => AgentTask
+  'agentTasks:delete': (id: string) => void
+  'agentTasks:pause': (id: string) => AgentTask
+  /** resume recomputes next_run from now */
+  'agentTasks:resume': (id: string) => AgentTask
+  /** queue an immediate run (skips the schedule) */
+  'agentTasks:runNow': (id: string) => void
+  /** interrupt an in-flight run (or drop it from the queue) */
+  'agentTasks:stop': (id: string) => void
+  'agentTasks:runs': (taskId: string, limit?: number) => AgentTaskRun[]
+  'agentTasks:recentRuns': (limit?: number) => (AgentTaskRun & { task_name: string })[]
+  /** NL → structured draft for the create form (one-shot model call) */
+  'agentTasks:parse': (text: string) => Promise<AgentTaskParseResult>
 
   'projects:list': (f: { status?: ProjectStatus; area?: Area }) => Project[]
   'projects:create': (input: NewProject) => Project
@@ -99,6 +144,28 @@ export interface IpcApi {
 
   'calendar:today': () => Promise<CalendarResult>
 
+  /** DB-backed calendar (local events + google sync) — distinct from the
+   *  read-only macOS EventKit 'calendar:today' above */
+  'calendarEvents:list': (startIso: string, endIso: string) => CalendarEventRecord[]
+  'calendarEvents:create': (input: NewCalendarEvent) => CalendarEventRecord
+  /** drag/resize is a start_at/end_at patch on this same channel */
+  'calendarEvents:update': (id: string, patch: CalendarEventPatch) => CalendarEventRecord
+  'calendarEvents:delete': (id: string) => void
+  /** attach a Google Meet link (writable google-calendar events only) */
+  'calendarEvents:addMeet': (id: string) => Promise<CalendarEventRecord>
+  'calendar:calendars': () => CalendarCalendar[]
+  'calendar:setVisible': (calendarId: string, visible: boolean) => void
+  'calendar:accounts': () => CalendarAccount[]
+  'calendar:connectGoogle': () => Promise<CalendarConnectResult>
+  'calendar:disconnect': (accountId: string) => Promise<void>
+  'calendar:syncNow': (accountId?: string) => void
+  /** throttled opportunistic pull — fired when the calendar view opens */
+  'calendar:pokeSync': () => void
+  /** the app's own dated items for the visible range, rendered as chips */
+  'calendar:overlay': (startIso: string, endIso: string) => CalendarOverlay
+  /** invite-field autocomplete: people with emails + past event attendees */
+  'calendar:attendeeSuggest': (query: string) => AttendeeSuggestion[]
+
   'capture:submit': (raw: string) => CaptureSubmitResult
   'capture:hide': () => void
 
@@ -110,9 +177,24 @@ export interface IpcApi {
   /** one-shot AI reply draft for a comms thread — only ever called on user command */
   'chat:draft': (input: ChatDraftInput) => Promise<ChatDraftResult>
 
+  'terminal:create': () => TerminalSessionInfo
+  'terminal:list': () => TerminalSessionInfo[]
+  /** (re)subscribe to a session: returns buffered output to replay into a fresh xterm */
+  'terminal:attach': (sessionId: string) => { backlog: string } | null
+  'terminal:input': (sessionId: string, data: string) => void
+  'terminal:resize': (sessionId: string, cols: number, rows: number) => void
+  'terminal:kill': (sessionId: string) => void
+
   'settings:get': () => AppSettings
   'settings:set': (patch: Partial<AppSettings>) => AppSettings
   'settings:authStatus': () => Promise<AuthStatus>
+
+  /** today's Claude Code token usage, parsed from ~/.claude session transcripts */
+  'usage:claudeToday': () => Promise<ClaudeUsageToday>
+  /** all-time Claude Code stats: heatmap days, streaks, totals */
+  'usage:claudeStats': () => Promise<ClaudeUsageStats>
+  /** rate-limit windows from the Claude OAuth usage endpoint; null when unavailable */
+  'usage:claudeLimits': () => Promise<ClaudeLimits | null>
 
   'comms:accounts': () => CommsAccount[]
   'comms:unreadTotal': () => number
@@ -163,6 +245,28 @@ export type ChatDraftResult = { ok: true; draft: string } | { ok: false; message
 
 export type CommsConnectResult = { ok: true; account: CommsAccount } | { ok: false; message: string }
 
+export type CalendarConnectResult =
+  | { ok: true; account: CalendarAccount }
+  | { ok: false; message: string }
+
+export interface CalendarOverlay {
+  tasks: Task[]
+  notes: Note[]
+  agentTasks: AgentTask[]
+}
+
+export interface AttendeeSuggestion {
+  email: string
+  name: string | null
+}
+
+export type CalendarSyncEvent = {
+  accountId?: string
+  kind: 'sync'
+  status: 'syncing' | 'idle' | 'error' | 'connected' | 'needs_auth'
+  message?: string
+}
+
 export type CommsEvent = { accountId?: string } & (
   | {
       kind: 'sync'
@@ -178,8 +282,13 @@ export type ChatEffort = 'low' | 'medium' | 'high' | 'max'
 export interface AppSettings {
   captureHotkey: string
   claudePath: string | null
+  /** master switch: when false, no automation fires automatically
+   *  (schedules and event triggers alike); run-now still works */
+  automationsEnabled: boolean
   /** 0–60: how much desktop shows through the window (%) */
   translucency: number
+  /** show today's Claude Code token usage on the Today view */
+  showClaudeUsage: boolean
   chatProvider: ChatProvider
   /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
   chatModel: string | null
@@ -198,6 +307,57 @@ export type AuthStatus =
   | { ok: true; email: string; subscriptionType: string }
   | { ok: false; message: string }
 
+export interface ClaudeUsageModel {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  totalTokens: number
+  /** null when the model isn't in the local price table */
+  costUsd: number | null
+}
+
+export interface ClaudeUsageToday {
+  /** deduplicated assistant messages */
+  messages: number
+  sessions: number
+  totalTokens: number
+  /** sum over models with known pricing */
+  costUsd: number
+  /** true when some model had no price — costUsd undercounts */
+  costIsPartial: boolean
+  byModel: ClaudeUsageModel[]
+}
+
+export interface ClaudeUsageStats {
+  sessions: number
+  messages: number
+  totalTokens: number
+  activeDays: number
+  /** consecutive active days ending today (or yesterday if today is quiet) */
+  currentStreak: number
+  longestStreak: number
+  /** 0–23 local hour with the most messages; null when no data */
+  peakHour: number | null
+  favoriteModel: string | null
+  /** per-day token totals for the heatmap, oldest→today, Monday-aligned */
+  days: { date: string; tokens: number }[]
+}
+
+export interface ClaudeLimitBucket {
+  key: string
+  label: string
+  /** 0–100 percent used */
+  utilization: number
+  resetsAt: string | null
+}
+
+export interface ClaudeLimits {
+  fetchedAt: string
+  buckets: ClaudeLimitBucket[]
+}
+
 export interface ChatSessionInfo {
   id: string
   title: string
@@ -212,15 +372,47 @@ export type ChatStreamEvent = { localSessionId: string } & (
   | { kind: 'error'; message: string }
 )
 
+export interface TerminalSessionInfo {
+  id: string
+  /** shell basename, e.g. "zsh" */
+  title: string
+}
+
+export type TerminalEvent = { sessionId: string } & (
+  | { kind: 'data'; data: string }
+  | { kind: 'exit'; exitCode: number }
+)
+
 export type CaptureSubmitResult =
   | { ok: true; message: string }
   | { ok: false; message: string }
 
+export type AgentTaskParseResult =
+  | { ok: true; draft: AgentTaskDraft }
+  | { ok: false; message: string }
+
+/** views addressable by main-process deep links (notification clicks) */
+export type NavView =
+  | 'today'
+  | 'inbox'
+  | 'people'
+  | 'tasks'
+  | 'notes'
+  | 'objectives'
+  | 'automations'
+  | 'calendar'
+  | 'chat'
+  | 'terminal'
+
 export interface IpcEvents {
   'db:changed': { entity: import('../core/types').DbEntity }
+  /** main → renderer: focus a view (e.g. a clicked reminder notification) */
+  'nav:goto': { view: NavView; id?: string }
   'capture:reset': Record<string, never>
   'chat:event': ChatStreamEvent
   'comms:event': CommsEvent
+  'calendar:event': CalendarSyncEvent
+  'terminal:event': TerminalEvent
 }
 
 export type IpcChannel = keyof IpcApi

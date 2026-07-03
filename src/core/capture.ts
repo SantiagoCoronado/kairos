@@ -1,23 +1,27 @@
 import type { DbDriver } from './driver'
-import type { Area, Task, Interaction, Person } from './types'
+import type { Area, Task, Interaction, Person, Note } from './types'
 import { listPeople } from './repo/people'
 import { logInteraction } from './repo/interactions'
 import { createTask } from './repo/tasks'
+import { createNote } from './repo/notes'
 import { localDate } from './ids'
 
 // Quick-capture syntax:
 //   buy milk due:fri !1 @personal          -> task
 //   p Anna coffee, talked about the reorg  -> interaction with fuzzy person match
 //   p "Anna Martinez" quick call           -> quoted multi-word name
+//   n gift ideas for mom #family           -> note (#tags become labels)
 // Modifiers: @work/@personal, !1..!4, due:today|tomorrow|mon..sun|YYYY-MM-DD
 
 export type CaptureIntent =
   | { kind: 'task'; title: string; area?: Area; priority?: number; due_date?: string }
   | { kind: 'interaction'; personQuery: string; summary: string }
+  | { kind: 'note'; title: string; labels?: string }
 
 export type CaptureResult =
   | { ok: true; kind: 'task'; task: Task }
   | { ok: true; kind: 'interaction'; interaction: Interaction; person: Person }
+  | { ok: true; kind: 'note'; note: Note }
   | { ok: false; message: string }
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
@@ -44,6 +48,16 @@ export function parseDue(token: string, now: Date = new Date()): string | undefi
 export function parseCapture(raw: string, now: Date = new Date()): CaptureIntent | null {
   const text = raw.trim()
   if (!text) return null
+
+  // note form: n <text> (#tags become labels)
+  const nMatch = text.match(/^n\s+(.+)$/s)
+  if (nMatch) {
+    const tokens = nMatch[1].trim().split(/\s+/)
+    const labels = tokens.filter((t) => t.startsWith('#') && t.length > 1)
+    const title = tokens.filter((t) => !labels.includes(t)).join(' ').trim()
+    if (!title && labels.length === 0) return null
+    return { kind: 'note', title: title || labels.join(' '), labels: labels.join(' ') || undefined }
+  }
 
   // interaction form: p <name> <summary>
   const pMatch = text.match(/^p\s+(?:"([^"]+)"|(\S+))\s+(.+)$/s)
@@ -99,6 +113,11 @@ export function executeCapture(
       now
     )
     return { ok: true, kind: 'task', task }
+  }
+
+  if (intent.kind === 'note') {
+    const note = createNote(db, { title: intent.title, labels: intent.labels }, now)
+    return { ok: true, kind: 'note', note }
   }
 
   // interaction: fuzzy person match — exact name/nickname first, then substring

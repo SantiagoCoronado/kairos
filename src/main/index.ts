@@ -1,10 +1,12 @@
-import { app, globalShortcut } from 'electron'
+import { app, globalShortcut, powerMonitor } from 'electron'
 import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createMainWindow } from './windows/main-window'
 import { createCaptureWindow } from './windows/capture-window'
 import { registerCaptureHotkey } from './hotkey'
-import { registerIpc, getCommsManager } from './ipc'
-import { closeDb } from './db'
+import { registerIpc, getCommsManager, getTaskRunner, getTerminalManager, getCalendarManager } from './ipc'
+import { Scheduler } from './scheduler'
+import { closeDb, getDb } from './db'
 import { logLine } from './logger'
 
 // crash forensics — everything lands in ~/Kairos/logs/app.log
@@ -34,6 +36,8 @@ app.on('child-process-gone', (_e, details) => {
   }, 1000)
 }
 
+let scheduler: Scheduler | null = null
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -44,10 +48,31 @@ if (!gotLock) {
     win.focus()
   })
 
+  // a dev run spawned from the terminal is otherwise an anonymous "Electron"
+  // process under the terminal's process tree — brand its dock/cmd-tab tile
+  // so it's recognizable. Daily use should be /Applications/Kairos.app, which
+  // macOS attributes correctly everywhere.
+  if (!app.isPackaged) app.setName('Kairos Dev')
+
   app.whenReady().then(() => {
     logLine('info', 'main', `app start v${app.getVersion()} (packaged: ${app.isPackaged})`)
+    if (!app.isPackaged) {
+      try {
+        app.dock?.setIcon(join(app.getAppPath(), 'build/icon-1024.png'))
+      } catch {
+        // cosmetic only
+      }
+    }
     registerIpc()
     getCommsManager()?.start()
+    getCalendarManager()?.start()
+    // remote calendar edits should be visible the moment the user looks:
+    // re-check Google whenever the app regains focus or the machine wakes
+    // (incremental pulls are near-free; the manager throttles bursts)
+    app.on('browser-window-focus', () => getCalendarManager()?.pokePull())
+    powerMonitor.on('resume', () => getCalendarManager()?.pokePull())
+    scheduler = new Scheduler(getDb(), getTaskRunner())
+    scheduler.start()
     const win = createMainWindow()
 
     // dev-only self-screenshot: DEBUG_SHOT=/path.png [DEBUG_HIDE_SIDEBAR=1] npx electron .
@@ -93,7 +118,10 @@ if (!gotLock) {
 
   app.on('will-quit', () => {
     logLine('info', 'main', 'app quit')
+    scheduler?.stop()
     getCommsManager()?.stop()
+    getCalendarManager()?.stop()
+    getTerminalManager()?.disposeAll()
     closeDb()
   })
 }

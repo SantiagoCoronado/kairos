@@ -215,6 +215,10 @@ export function registerIpc(): void {
     manager.markRead(threadId) // local immediately; gmail propagation in background
     broadcast('db:changed', { entity: 'comms' })
   })
+  handle('comms:markUnread', (threadId) => {
+    manager.markUnread(threadId)
+    broadcast('db:changed', { entity: 'comms' })
+  })
   handle('comms:archiveThread', (threadId, archived) => manager.setThreadArchived(threadId, archived))
   handle('comms:deleteThread', (threadId) => manager.deleteThread(threadId))
   handle('comms:reorderAccount', (id, beforeId) => {

@@ -404,6 +404,32 @@ describe('archive', () => {
   })
 })
 
+describe('markThreadUnread', () => {
+  it('re-flags only the newest inbound message and returns its external id', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    for (const [ext, mins] of [['m1', 0], ['m2', 5]] as const) {
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: a.id, provider: 'gmail',
+        external_id: ext, sent_at: later(mins).toISOString(), body_text: ext
+      }, later(mins))
+    }
+    comms.markThreadRead(db, t.id, later(10))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(0)
+
+    expect(comms.markThreadUnread(db, t.id, later(11))).toBe('m2')
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+    const msgs = comms.listMessages(db, t.id)
+    expect(msgs.find((m) => m.external_id === 'm1')!.is_read).toBe(1)
+    expect(msgs.find((m) => m.external_id === 'm2')!.is_read).toBe(0)
+    // thread with no inbound messages → null
+    const empty = comms.upsertThread(db, {
+      account_id: a.id, provider: 'gmail', external_id: 'thr-empty', kind: 'email'
+    }, T0)
+    expect(comms.markThreadUnread(db, empty.id)).toBeNull()
+  })
+})
+
 describe('deleteThread', () => {
   it('removes the thread and cascades its messages', () => {
     const a = gmailAccount()

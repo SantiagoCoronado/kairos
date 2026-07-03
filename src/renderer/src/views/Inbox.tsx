@@ -169,6 +169,12 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   const deleteThread = (t: CommsThreadListItem): Promise<string | null> =>
     removeWithAnimation(t.id, () => api.invoke('comms:deleteThread', t.id))
 
+  /** mark unread and return to the list — "leave it for later" */
+  const markUnread = (t: CommsThreadListItem): void => {
+    void api.invoke('comms:markUnread', t.id)
+    closeThread()
+  }
+
   const selectAccount = (id: string | null): void => {
     setAccountId(id)
     setMode('threads')
@@ -201,8 +207,6 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
       } else if (e.key === '/') {
         e.preventDefault()
         document.getElementById('inbox-search')?.focus()
-      } else if (e.key === 'u') {
-        setUnreadOnly((v) => !v)
       } else if (e.key === 'c' && selectedAccount?.provider === 'gmail') {
         e.preventDefault()
         setMode('compose')
@@ -408,6 +412,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
             onOpenPerson={onOpenPerson}
             onArchive={() => archiveThread(thread)}
             onDelete={() => deleteThread(thread)}
+            onMarkUnread={() => markUnread(thread)}
           />
         ) : (
           <EmptyState>Select a conversation.</EmptyState>
@@ -729,13 +734,15 @@ function ThreadPane({
   thread,
   onOpenPerson,
   onArchive,
-  onDelete
+  onDelete,
+  onMarkUnread
 }: {
   thread: CommsThreadListItem
   onOpenPerson?: (id: string) => void
   /** both resolve to an error message, or null on success */
   onArchive: () => Promise<string | null>
   onDelete: () => Promise<string | null>
+  onMarkUnread: () => void
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
   const [actionError, setActionError] = useState<string | null>(null)
@@ -764,7 +771,7 @@ function ThreadPane({
   }
 
   // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
-  // r = focus the reply box
+  // u = mark unread + back to list, r = focus the reply box
   useEffect(() => {
     const down = (e: KeyboardEvent): void => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping()) return
@@ -772,6 +779,8 @@ function ThreadPane({
         void toggleArchive()
       } else if ((e.key === 'Backspace' || e.key === 'Delete') && thread.provider === 'gmail') {
         void remove()
+      } else if (e.key === 'u') {
+        onMarkUnread()
       } else if (e.key === 'r') {
         e.preventDefault()
         document.getElementById('inbox-reply')?.focus()
@@ -802,6 +811,13 @@ function ThreadPane({
             </>
           )}
         </span>
+        <button
+          onClick={onMarkUnread}
+          title="Mark as unread (u)"
+          className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised"
+        >
+          <Mail size={14} />
+        </button>
         <button
           onClick={() => void toggleArchive()}
           title={archived ? 'Move back to inbox (e)' : 'Archive (e)'}

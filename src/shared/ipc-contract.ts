@@ -121,6 +121,8 @@ export interface IpcApi {
   'comms:accountThreads': (accountId: string) => CommsThread[]
   'comms:messages': (threadId: string) => CommsMessage[]
   'comms:markRead': (threadId: string) => void
+  /** re-flag the newest inbound message unread; gmail propagates remotely */
+  'comms:markUnread': (threadId: string) => void
   /** archive/unarchive; gmail propagates remotely, others are local-only */
   'comms:archiveThread': (threadId: string, archived: boolean) => Promise<CommsArchiveResult>
   /** gmail only: trash the thread remotely and remove it locally */

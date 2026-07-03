@@ -180,6 +180,7 @@ export function registerIpc(): void {
   })
   handle('agentTasks:runs', (taskId, limit) => agentTasksRepo.listRuns(db, taskId, limit))
   handle('agentTasks:recentRuns', (limit) => agentTasksRepo.recentRuns(db, limit))
+  handle('agentTasks:usage', () => agentTasksRepo.usageByTask(db))
   handle('agentTasks:parse', (text) => parseTaskDraft(text))
 
   // event-triggered automations: count occurrences, fire on every Nth.
@@ -423,6 +424,7 @@ export function registerIpc(): void {
   })
   handle('chat:interrupt', (localSessionId) => chat.interrupt(localSessionId))
   handle('chat:sessions', () => chat.listSessions())
+  handle('chat:history', (localSessionId) => chat.getHistory(localSessionId))
   handle('chat:draft', (input) => chat.draftReply(input))
 
   const terminals = new TerminalManager(ptySpawn, (event) => broadcast('terminal:event', event))

@@ -9,10 +9,13 @@ import { newId, nowIso } from '../../core/ids'
 import type {
   ChatStreamEvent,
   ChatSessionInfo,
+  ChatHistoryMessage,
   ChatDraftInput,
   ChatDraftResult
 } from '../../shared/ipc-contract'
 import * as comms from '../../core/repo/comms'
+import { appendChatMessage, listChatMessages } from '../../core/repo/chat'
+import { getRunBySession, getAgentTask } from '../../core/repo/agent-tasks'
 import { DATA_DIR } from '../db'
 import { getSettings } from '../settings'
 import { emitAppEvent } from '../events'
@@ -41,6 +44,28 @@ Rules:
 function buildSystemPrompt(): string {
   const memory = readMemory(DATA_DIR).trim()
   return `${SYSTEM_PROMPT}\n\n## Persistent memory\n${memory || '(empty — nothing saved yet)'}`
+}
+
+/** tools column is a JSON string[]; tolerate corruption/legacy shapes */
+function safeParseTools(json: string): string[] {
+  try {
+    const v = JSON.parse(json)
+    return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** run.steps is a JSON [{tool, at}]; pull just the tool names for a transcript */
+function parseStepTools(json: string): string[] {
+  try {
+    const v = JSON.parse(json)
+    return Array.isArray(v)
+      ? v.map((s) => (s && typeof s.tool === 'string' ? s.tool : null)).filter((t): t is string => !!t)
+      : []
+  } catch {
+    return []
+  }
 }
 
 type SessionRow = {
@@ -121,6 +146,35 @@ export class ChatManager {
     return this.db.all<SessionRow>(
       'SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 20'
     )
+  }
+
+  /**
+   * Replay a session's transcript for the Chat view. Prefers persisted
+   * messages; for sessions from before transcripts were stored (or any
+   * automation run), reconstructs a minimal transcript from the run row so
+   * the session still opens with its prompt, tools, and result.
+   */
+  getHistory(sessionId: string): ChatHistoryMessage[] {
+    const stored = listChatMessages(this.db, sessionId)
+    if (stored.length > 0) {
+      return stored.map((m) => ({
+        role: m.role,
+        text: m.text,
+        tools: safeParseTools(m.tools)
+      }))
+    }
+
+    // fallback: rebuild from the owning automation run, if any
+    const run = getRunBySession(this.db, sessionId)
+    if (!run) return []
+    const task = getAgentTask(this.db, run.task_id)
+    const out: ChatHistoryMessage[] = []
+    if (task?.prompt) out.push({ role: 'user', text: task.prompt, tools: [] })
+    const tools = parseStepTools(run.steps)
+    if (run.result) out.push({ role: 'assistant', text: run.result, tools })
+    else if (tools.length > 0) out.push({ role: 'assistant', text: '', tools })
+    if (run.error) out.push({ role: 'error', text: run.error, tools: [] })
+    return out
   }
 
   send(localSessionId: string | null, text: string): { localSessionId: string } {
@@ -241,6 +295,9 @@ export class ChatManager {
     const settings = getSettings()
     const env = buildChildEnv()
 
+    // persist the user turn so the session can be replayed after reopen
+    appendChatMessage(this.db, sid, 'user', text)
+
     try {
       const q = query({
         prompt: text,
@@ -292,14 +349,23 @@ export class ChatManager {
             })
           }
         } else if (msg.type === 'assistant') {
+          // the full turn arrives here (text + tool_use blocks); persist it so
+          // it can be replayed, then seal the live bubble
+          let turnText = ''
+          const turnTools: string[] = []
+          for (const block of msg.message.content) {
+            if (block.type === 'text') turnText += block.text
+            else if (block.type === 'tool_use') turnTools.push(block.name.replace('mcp__kairos__', ''))
+          }
+          if (turnText || turnTools.length > 0) {
+            appendChatMessage(this.db, sid, 'assistant', turnText, turnTools)
+          }
           this.emit({ localSessionId: sid, kind: 'assistant_done' })
         } else if (msg.type === 'result') {
           if (msg.subtype !== 'success') {
-            this.emit({
-              localSessionId: sid,
-              kind: 'error',
-              message: `run ended: ${msg.subtype}`
-            })
+            const message = `run ended: ${msg.subtype}`
+            appendChatMessage(this.db, sid, 'error', message)
+            this.emit({ localSessionId: sid, kind: 'error', message })
           }
         }
       }
@@ -309,6 +375,7 @@ export class ChatManager {
       const hint = /login|auth|credential|api key|401|403/i.test(raw)
         ? ' — run `claude login` in a terminal, and make sure ANTHROPIC_API_KEY is not exported.'
         : ''
+      appendChatMessage(this.db, sid, 'error', raw + hint)
       this.emit({ localSessionId: sid, kind: 'error', message: raw + hint })
     } finally {
       this.active.delete(sid)

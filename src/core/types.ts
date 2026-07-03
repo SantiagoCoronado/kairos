@@ -189,6 +189,34 @@ export interface AgentTaskRun {
   steps: string
   session_id: string | null
   model: string | null
+  // token usage from the SDK result message; null for pre-tracking runs
+  input_tokens: number | null
+  output_tokens: number | null
+  cache_read_tokens: number | null
+  cache_creation_tokens: number | null
+  cost_usd: number | null
+}
+
+/** token usage reported at the end of a run */
+export interface RunUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  cost_usd: number
+}
+
+/** per-task usage rollup for the Automations view (7-day and 30-day windows) */
+export interface AgentTaskUsage {
+  task_id: string
+  task_name: string
+  model: string | null
+  runs_7d: number
+  tokens_7d: number
+  cost_7d: number
+  runs_30d: number
+  tokens_30d: number
+  cost_30d: number
 }
 
 /** structured draft produced by NL parsing, prefills the create form */
@@ -309,6 +337,20 @@ export interface ChatSession {
   title: string
   created_at: string
   updated_at: string
+}
+
+export type ChatMessageRole = 'user' | 'assistant' | 'error'
+
+/** one persisted turn of a chat/automation transcript, replayed on reopen */
+export interface ChatMessage {
+  id: string
+  session_id: string
+  seq: number
+  role: ChatMessageRole
+  text: string
+  /** JSON string[] — tool names invoked during this assistant turn */
+  tools: string
+  created_at: string
 }
 
 // ---------- computed shapes ----------

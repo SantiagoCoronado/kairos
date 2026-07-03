@@ -1,4 +1,4 @@
-import { BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 
 let mainWindow: BrowserWindow | null = null
@@ -10,6 +10,8 @@ export function getMainWindow(): BrowserWindow | null {
 export function createMainWindow(): BrowserWindow {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show()
+    // bring the app frontmost — showing a window doesn't guarantee activation
+    app.focus({ steal: true })
     return mainWindow
   }
 
@@ -35,7 +37,14 @@ export function createMainWindow(): BrowserWindow {
     }
   })
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('ready-to-show', () => {
+    mainWindow?.show()
+    // On a cold launch the synchronous startup work in index.ts can stall the
+    // main thread past macOS's launch-activation window, so the app comes up
+    // without a dock running-dot and outside Cmd+Tab. Explicitly activate it
+    // here (as capture/scheduler/task-runner already do for their surfaces).
+    app.focus({ steal: true })
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
   })

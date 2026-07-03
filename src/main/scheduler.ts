@@ -41,6 +41,14 @@ export class Scheduler {
   ) {}
 
   start(): void {
+    // runs left 'running' by a killed/crashed previous session never resume —
+    // close them out so they stop showing "running…" indefinitely
+    try {
+      const reconciled = agentTasks.reconcileStuckRuns(this.db)
+      if (reconciled > 0) logLine('info', 'scheduler', `reconciled ${reconciled} stuck agent run(s)`)
+    } catch (err) {
+      logLine('error', 'scheduler', `reconcile stuck runs failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
+    }
     this.firstTimer = setTimeout(() => this.tick(), FIRST_TICK_MS)
     this.timer = setInterval(() => this.tick(), TICK_MS)
     // reminders that came due during sleep should fire promptly on wake

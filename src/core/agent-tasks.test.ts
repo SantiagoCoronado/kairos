@@ -122,6 +122,68 @@ describe('agent tasks repo', () => {
     expect(r.error).toBe('boom')
   })
 
+  it('reconcileStuckRuns closes runs left running by a dead session', () => {
+    const t = at.createAgentTask(db, { name: 'x', prompt: 'p', schedule: 'once', scheduled_date: in1h() })
+    const stuck = at.createRun(db, t.id, null) // status 'running', never finished
+    const done = at.createRun(db, t.id, null)
+    at.finishRun(db, done.id, { status: 'success', result: 'ok' })
+
+    const n = at.reconcileStuckRuns(db)
+    expect(n).toBe(1)
+    const reconciled = at.listRuns(db, t.id).find((r) => r.id === stuck.id)!
+    expect(reconciled.status).toBe('stopped')
+    expect(reconciled.finished_at).not.toBeNull()
+    expect(reconciled.error).toMatch(/restart/i)
+    // a second pass is a no-op — nothing left running
+    expect(at.reconcileStuckRuns(db)).toBe(0)
+  })
+
+  it('getRunBySession finds the run that owns a chat session', () => {
+    const t = at.createAgentTask(db, { name: 'x', prompt: 'p', schedule: 'once', scheduled_date: in1h() })
+    const run = at.createRun(db, t.id, null)
+    db.run(
+      "INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES ('sess-x', 't', '2026-01-01', '2026-01-01')"
+    )
+    at.setRunSession(db, run.id, 'sess-x')
+    expect(at.getRunBySession(db, 'sess-x')?.id).toBe(run.id)
+    expect(at.getRunBySession(db, 'nope')).toBeUndefined()
+  })
+
+  it('finishRun stores token usage and usageByTask rolls up 7d/30d windows', () => {
+    const t = at.createAgentTask(db, { name: 'watch', prompt: 'p', schedule: 'daily', scheduled_time: '09:00' })
+    // recent run (inside 7d): 1k in + 2k out, $0.05
+    const r1 = at.createRun(db, t.id, 'sonnet')
+    at.finishRun(db, r1.id, {
+      status: 'success',
+      result: 'ok',
+      usage: { input_tokens: 1000, output_tokens: 2000, cache_read_tokens: 50_000, cache_creation_tokens: 500, cost_usd: 0.05 }
+    })
+    // old run (10 days ago, inside 30d only): 3k in + 4k out, $0.10
+    const r2 = at.createRun(db, t.id, 'haiku')
+    at.finishRun(db, r2.id, {
+      status: 'success',
+      usage: { input_tokens: 3000, output_tokens: 4000, cache_read_tokens: 0, cache_creation_tokens: 0, cost_usd: 0.1 }
+    })
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400_000).toISOString()
+    db.run('UPDATE agent_task_runs SET started_at = ? WHERE id = ?', tenDaysAgo, r2.id)
+    // pre-tracking run (no usage) must not break sums
+    const r3 = at.createRun(db, t.id, null)
+    at.finishRun(db, r3.id, { status: 'success' })
+
+    const stored = at.listRuns(db, t.id).find((r) => r.id === r1.id)!
+    expect(stored.input_tokens).toBe(1000)
+    expect(stored.cache_read_tokens).toBe(50_000)
+    expect(stored.cost_usd).toBeCloseTo(0.05)
+
+    const [u] = at.usageByTask(db).filter((x) => x.task_id === t.id)
+    expect(u.runs_7d).toBe(2) // r1 + r3
+    expect(u.tokens_7d).toBe(3000) // r1 only; r3 has no usage
+    expect(u.cost_7d).toBeCloseTo(0.05)
+    expect(u.runs_30d).toBe(3)
+    expect(u.tokens_30d).toBe(10_000)
+    expect(u.cost_30d).toBeCloseTo(0.15)
+  })
+
   it('rejects a then_task_id chain cycle', () => {
     const a = at.createAgentTask(db, { name: 'a', prompt: 'p', schedule: 'once', scheduled_date: in1h() })
     const b = at.createAgentTask(db, { name: 'b', prompt: 'p', schedule: 'once', scheduled_date: in1h() })

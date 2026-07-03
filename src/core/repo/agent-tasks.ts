@@ -272,6 +272,26 @@ export function finishRun(
   })
 }
 
+/**
+ * Close out runs left in 'running' by a previous session (app killed / crashed
+ * mid-stream) — call on startup. The in-memory runner queue doesn't survive a
+ * restart, so these rows would otherwise show "running…" forever. Returns the
+ * number reconciled.
+ */
+export function reconcileStuckRuns(db: DbDriver, now: Date = new Date()): number {
+  return db.run(
+    `UPDATE agent_task_runs
+       SET status='stopped', finished_at=?, error='Interrupted by app restart'
+     WHERE status='running'`,
+    nowIso(now)
+  ).changes
+}
+
+/** the run that owns a given chat session, if any (for transcript fallback) */
+export function getRunBySession(db: DbDriver, sessionId: string): AgentTaskRun | undefined {
+  return db.get<AgentTaskRun>('SELECT * FROM agent_task_runs WHERE session_id = ?', sessionId)
+}
+
 export function listRuns(db: DbDriver, taskId: string, limit = 30): AgentTaskRun[] {
   return db.all<AgentTaskRun>(
     'SELECT * FROM agent_task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT ?',

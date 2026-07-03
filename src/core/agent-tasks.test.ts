@@ -122,6 +122,33 @@ describe('agent tasks repo', () => {
     expect(r.error).toBe('boom')
   })
 
+  it('reconcileStuckRuns closes runs left running by a dead session', () => {
+    const t = at.createAgentTask(db, { name: 'x', prompt: 'p', schedule: 'once', scheduled_date: in1h() })
+    const stuck = at.createRun(db, t.id, null) // status 'running', never finished
+    const done = at.createRun(db, t.id, null)
+    at.finishRun(db, done.id, { status: 'success', result: 'ok' })
+
+    const n = at.reconcileStuckRuns(db)
+    expect(n).toBe(1)
+    const reconciled = at.listRuns(db, t.id).find((r) => r.id === stuck.id)!
+    expect(reconciled.status).toBe('stopped')
+    expect(reconciled.finished_at).not.toBeNull()
+    expect(reconciled.error).toMatch(/restart/i)
+    // a second pass is a no-op — nothing left running
+    expect(at.reconcileStuckRuns(db)).toBe(0)
+  })
+
+  it('getRunBySession finds the run that owns a chat session', () => {
+    const t = at.createAgentTask(db, { name: 'x', prompt: 'p', schedule: 'once', scheduled_date: in1h() })
+    const run = at.createRun(db, t.id, null)
+    db.run(
+      "INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES ('sess-x', 't', '2026-01-01', '2026-01-01')"
+    )
+    at.setRunSession(db, run.id, 'sess-x')
+    expect(at.getRunBySession(db, 'sess-x')?.id).toBe(run.id)
+    expect(at.getRunBySession(db, 'nope')).toBeUndefined()
+  })
+
   it('rejects a then_task_id chain cycle', () => {
     const a = at.createAgentTask(db, { name: 'a', prompt: 'p', schedule: 'once', scheduled_date: in1h() })
     const b = at.createAgentTask(db, { name: 'b', prompt: 'p', schedule: 'once', scheduled_date: in1h() })

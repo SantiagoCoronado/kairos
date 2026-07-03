@@ -25,6 +25,18 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<string | null>(null)
   sessionRef.current = sessionId
+  const hydratedRef = useRef(false)
+
+  // replay a reopened session's transcript once on mount. The view is keyed by
+  // session id in App, so opening a different session remounts and re-hydrates.
+  useEffect(() => {
+    if (!initialSessionId || hydratedRef.current) return
+    hydratedRef.current = true
+    void api.invoke('chat:history', initialSessionId).then((msgs) => {
+      if (msgs.length === 0) return
+      setBubbles(msgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools, sealed: true })))
+    })
+  }, [initialSessionId])
 
   useEffect(() => {
     return api.on('chat:event', (event: ChatStreamEvent) => {

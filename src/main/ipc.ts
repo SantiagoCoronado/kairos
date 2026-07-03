@@ -423,6 +423,7 @@ export function registerIpc(): void {
   })
   handle('chat:interrupt', (localSessionId) => chat.interrupt(localSessionId))
   handle('chat:sessions', () => chat.listSessions())
+  handle('chat:history', (localSessionId) => chat.getHistory(localSessionId))
   handle('chat:draft', (input) => chat.draftReply(input))
 
   const terminals = new TerminalManager(ptySpawn, (event) => broadcast('terminal:event', event))

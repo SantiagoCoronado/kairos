@@ -174,6 +174,8 @@ export interface IpcApi {
   'chat:send': (localSessionId: string | null, text: string) => { localSessionId: string }
   'chat:interrupt': (localSessionId: string) => void
   'chat:sessions': () => ChatSessionInfo[]
+  /** replay a session's persisted transcript; falls back to an automation run's stored result */
+  'chat:history': (localSessionId: string) => ChatHistoryMessage[]
   /** one-shot AI reply draft for a comms thread — only ever called on user command */
   'chat:draft': (input: ChatDraftInput) => Promise<ChatDraftResult>
 
@@ -362,6 +364,13 @@ export interface ChatSessionInfo {
   id: string
   title: string
   updated_at: string
+}
+
+/** a replayable transcript turn returned by chat:history */
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant' | 'error'
+  text: string
+  tools: string[]
 }
 
 export type ChatStreamEvent = { localSessionId: string } & (

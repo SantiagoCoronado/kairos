@@ -400,6 +400,20 @@ CREATE TABLE calendar_events (
 );
 CREATE INDEX idx_cal_events_range ON calendar_events(calendar_id, start_at);
 CREATE INDEX idx_cal_events_dirty ON calendar_events(sync_status) WHERE sync_status != 'synced';
+`,
+  // 010 — persisted chat transcripts, so a session (incl. an automation run's)
+  // can be reopened and replayed instead of showing an empty chat
+  `
+CREATE TABLE chat_messages (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  seq         INTEGER NOT NULL,
+  role        TEXT NOT NULL CHECK (role IN ('user','assistant','error')),
+  text        TEXT NOT NULL DEFAULT '',
+  tools       TEXT NOT NULL DEFAULT '[]',
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX idx_chat_messages_session ON chat_messages(session_id, seq);
 `
 ]
 

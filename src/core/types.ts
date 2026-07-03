@@ -311,6 +311,20 @@ export interface ChatSession {
   updated_at: string
 }
 
+export type ChatMessageRole = 'user' | 'assistant' | 'error'
+
+/** one persisted turn of a chat/automation transcript, replayed on reopen */
+export interface ChatMessage {
+  id: string
+  session_id: string
+  seq: number
+  role: ChatMessageRole
+  text: string
+  /** JSON string[] — tool names invoked during this assistant turn */
+  tools: string
+  created_at: string
+}
+
 // ---------- computed shapes ----------
 
 export interface FollowupDue {

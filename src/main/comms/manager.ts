@@ -20,11 +20,12 @@ import { WhatsAppConnection, deleteWaAuthState } from './whatsapp'
 import { loadMacContacts } from '../contacts'
 import { logLine } from '../logger'
 
-const GMAIL_INTERVAL_MS = 60_000
+const GMAIL_INTERVAL_MS = 15_000 // incremental history.list is ~free; poll tight so mail feels live
 const SLACK_INTERVAL_MS = 90_000
 const DRAIN_INTERVAL_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
 const CHANGED_DEBOUNCE_MS = 500
+const POKE_SYNC_MIN_GAP_MS = 30_000
 
 export class CommsSyncManager {
   private timers = new Map<string, NodeJS.Timeout>()
@@ -35,6 +36,7 @@ export class CommsSyncManager {
   private draining = false
   private contactsTimer: NodeJS.Timeout | null = null
   private changedTimer: NodeJS.Timeout | null = null
+  private lastPokeAt = 0
   private stopped = false
 
   constructor(
@@ -157,6 +159,19 @@ export class CommsSyncManager {
       this.scheduleSync(accountId, Math.min(interval * 2 ** fails, MAX_BACKOFF_MS))
     } finally {
       this.syncing.delete(accountId)
+    }
+  }
+
+  /** Focus/wake nudge: pull mail/slack right away, throttled so window
+   *  focus-cycling doesn't hammer the APIs. Skips the contacts sweep. */
+  pokeSync(): void {
+    if (this.stopped) return
+    if (Date.now() - this.lastPokeAt < POKE_SYNC_MIN_GAP_MS) return
+    this.lastPokeAt = Date.now()
+    for (const account of repo.listAccounts(this.db)) {
+      if (account.provider === 'whatsapp') continue // event-driven, nothing to poll
+      if (account.status === 'disabled' || account.status === 'needs_auth') continue
+      this.scheduleSync(account.id, 0)
     }
   }
 

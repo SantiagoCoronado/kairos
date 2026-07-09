@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Mail,
-  MessageSquare,
-  Phone,
   RefreshCw,
   Link2,
   SlidersHorizontal,
@@ -26,11 +24,17 @@ import type {
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
 import { SettingsModal } from '../components/SettingsModal'
+import {
+  GmailIcon,
+  SlackIcon,
+  WhatsAppIcon,
+  type ProviderIconComponent
+} from '../components/provider-icons'
 
-const PROVIDER_ICON: Record<CommsProvider, typeof Mail> = {
-  gmail: Mail,
-  slack: MessageSquare,
-  whatsapp: Phone
+const PROVIDER_ICON: Record<CommsProvider, ProviderIconComponent> = {
+  gmail: GmailIcon,
+  slack: SlackIcon,
+  whatsapp: WhatsAppIcon
 }
 
 const RAIL_W_KEY = 'kairos.inbox.railW'
@@ -73,15 +77,17 @@ function dropEdge(e: React.DragEvent): 'before' | 'after' {
   return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
 }
 
-/** Person-aware display: DMs adopt the linked person's name; emails/groups keep the title. */
+/** Person-aware display: DMs adopt the linked person's name; emails prefix it; groups keep their subject (the latest sender's name is noise on a multi-person chat). */
 function threadLabel(t: CommsThreadListItem): { name: string | null; title: string } {
-  if (!t.person_name) return { name: null, title: t.title || '(untitled)' }
+  if (!t.person_name || t.kind === 'group') return { name: null, title: t.title || '(untitled)' }
   if (t.kind === 'dm') return { name: null, title: t.person_name }
   return { name: t.person_name, title: t.title || '(untitled)' }
 }
 
 export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => void }): React.JSX.Element {
   const [accountId, setAccountId] = useState<string | null>(null)
+  // provider-wide view with no account selected ("All email" = every gmail inbox)
+  const [provider, setProvider] = useState<CommsProvider | null>(null)
   const [unreadOnly, setUnreadOnly] = useState(false)
   const [box, setBox] = useState<'inbox' | 'archived'>('inbox')
   const [search, setSearch] = useState('')
@@ -107,14 +113,22 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
   const { data: threads } = useInvoke(
     'comms:threads',
-    [{ accountId: accountId ?? undefined, unreadOnly, box, search: search || undefined }],
+    [
+      {
+        accountId: accountId ?? undefined,
+        provider: provider ?? undefined,
+        unreadOnly,
+        box,
+        search: search || undefined
+      }
+    ],
     ['comms']
   )
 
   // filter changes drop the pin (and with it, eventually, the selection)
   useEffect(() => {
     setPinned(null)
-  }, [accountId, unreadOnly, box, search])
+  }, [accountId, provider, unreadOnly, box, search])
 
   // While a fold is playing, the list renders from a frozen copy of itself:
   // any re-render that moves or drops the animating row's DOM node cancels
@@ -225,6 +239,14 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
 
   const selectAccount = (id: string | null): void => {
     setAccountId(id)
+    setProvider(null)
+    setMode('threads')
+  }
+
+  /** account-less provider view: "All email" shows every gmail account merged */
+  const selectProvider = (p: CommsProvider): void => {
+    setAccountId(null)
+    setProvider(p)
     setMode('threads')
   }
 
@@ -320,12 +342,21 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
         style={{ width: railCollapsed ? 44 : railW }}
       >
         <AccountRow
-          active={accountId === null}
+          active={accountId === null && provider === null}
           collapsed={railCollapsed}
           label="All inboxes"
           icon={Mail}
           onClick={() => selectAccount(null)}
         />
+        {accounts?.some((a) => a.provider === 'gmail') && (
+          <AccountRow
+            active={accountId === null && provider === 'gmail'}
+            collapsed={railCollapsed}
+            label="All email"
+            icon={GmailIcon}
+            onClick={() => selectProvider('gmail')}
+          />
+        )}
         {accounts?.map((a) => (
           <AccountRow
             key={a.id}
@@ -438,7 +469,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                 <ThreadRow
                   key={t.id}
                   thread={t}
-                  showProvider={accountId === null}
+                  showProvider={accountId === null && provider === null}
                   active={threadId === t.id}
                   leaving={leaving.has(t.id)}
                   onClick={() => openThread(t)}
@@ -522,7 +553,7 @@ function AccountRow({
   active: boolean
   collapsed: boolean
   label: string
-  icon: typeof Mail
+  icon: ProviderIconComponent
   status?: CommsAccount['status']
   onClick: () => void
   /** present on real accounts — enables drag-reorder and delete */
@@ -688,7 +719,7 @@ function AddAccount({
             }}
             className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[12.5px] hover:bg-raised disabled:opacity-40"
           >
-            <Phone size={13} />
+            <WhatsAppIcon size={13} />
             WhatsApp (QR in Settings)
           </button>
           {error && <p className="px-2 py-1 text-[11px] text-danger">{error}</p>}
@@ -714,8 +745,15 @@ function ThreadRow({
 }): React.JSX.Element {
   const Icon = PROVIDER_ICON[thread.provider]
   const { name, title } = threadLabel(thread)
+  const ref = useRef<HTMLButtonElement>(null)
+  // keyboard navigation can select a row that's scrolled out of the list —
+  // keep the active one visible (nearest = no jump when it's already in view)
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [active])
   return (
     <button
+      ref={ref}
       onClick={onClick}
       className={cn(
         'thread-row w-full text-left px-3 py-2 border-b border-border/50 hover:bg-raised/50',

@@ -195,6 +195,12 @@ async function refreshConversations(
   repo.patchSyncState(db, account.id, { channelsFetchedAt: Date.now() })
 }
 
+/** Channel-picker "refresh": re-list conversations now, skipping the 15 min cache. */
+export async function refreshSlackChannels(db: DbDriver, account: CommsAccount): Promise<void> {
+  const tokens = requireTokens(db, account)
+  await refreshConversations(db, account, tokens)
+}
+
 async function syncThreadHistory(
   db: DbDriver,
   account: CommsAccount,

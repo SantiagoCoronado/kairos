@@ -15,7 +15,7 @@ import {
   trashGmailThread,
   GmailAuthError
 } from './gmail'
-import { connectSlack, syncSlackAccount, sendSlack, SlackAuthError } from './slack'
+import { connectSlack, syncSlackAccount, sendSlack, refreshSlackChannels, SlackAuthError } from './slack'
 import { WhatsAppConnection, deleteWaAuthState } from './whatsapp'
 import { loadMacContacts } from '../contacts'
 import { logLine } from '../logger'
@@ -184,6 +184,25 @@ export class CommsSyncManager {
       if (account.provider === 'whatsapp') continue // event-driven, nothing to poll
       if (account.status === 'disabled' || account.status === 'needs_auth') continue
       this.scheduleSync(account.id, 0)
+    }
+  }
+
+  /** Channel picker "refresh": re-list Slack conversations on demand. */
+  async refreshChannels(accountId: string): Promise<{ ok: true } | { ok: false; message: string }> {
+    const account = repo.getAccount(this.db, accountId)
+    if (!account || account.provider !== 'slack') return { ok: false, message: 'not a Slack account' }
+    try {
+      await refreshSlackChannels(this.db, account)
+      this.notifyChanged()
+      return { ok: true }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (err instanceof SlackAuthError) {
+        repo.setAccountStatus(this.db, accountId, 'needs_auth', message)
+        this.emit({ kind: 'sync', accountId, status: 'needs_auth', message })
+        this.notifyChanged()
+      }
+      return { ok: false, message }
     }
   }
 

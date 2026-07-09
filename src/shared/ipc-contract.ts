@@ -220,6 +220,10 @@ export interface IpcApi {
   'comms:syncNow': (accountId?: string) => void
   'comms:linkSender': (provider: CommsProvider, handle: string, personId: string) => void
   'comms:setThreadSync': (threadId: string, enabled: boolean) => void
+  /** bulk channel opt-in/out — one db:changed instead of one per checkbox */
+  'comms:setThreadsSync': (threadIds: string[], enabled: boolean) => void
+  /** slack only: re-list conversations now instead of waiting out the 15 min cache */
+  'comms:refreshChannels': (accountId: string) => Promise<CommsArchiveResult>
   'comms:connectGmail': () => Promise<CommsConnectResult>
   'comms:connectSlack': () => Promise<CommsConnectResult>
   'comms:connectWhatsApp': () => Promise<CommsConnectResult>

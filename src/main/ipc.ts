@@ -480,6 +480,15 @@ export function registerIpc(): void {
     }
     broadcast('db:changed', { entity: 'comms' })
   })
+  handle('comms:setThreadsSync', (threadIds, enabled) => {
+    comms.setThreadsSyncEnabled(db, threadIds, enabled)
+    if (enabled && threadIds.length > 0) {
+      const thread = comms.getThread(db, threadIds[0])
+      if (thread) manager.syncNow(thread.account_id)
+    }
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('comms:refreshChannels', (accountId) => manager.refreshChannels(accountId))
   handle('comms:connectGmail', () => wrapConnect(manager.connectGmail()))
   handle('comms:connectSlack', () => wrapConnect(manager.connectSlack()))
   handle('comms:connectWhatsApp', () =>

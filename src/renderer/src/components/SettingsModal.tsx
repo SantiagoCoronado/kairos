@@ -110,6 +110,24 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
               />
             </div>
 
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+                  auto-label email
+                </span>
+                <p className="text-[11px] text-faint">
+                  Classify inbox email in the background (action-needed, newsletter, finance, …).
+                  Uses Haiku via your Claude Code login.
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.autoLabel}
+                onChange={(e) => save({ autoLabel: e.target.checked })}
+                className="accent-accent w-4 h-4 shrink-0"
+              />
+            </div>
+
             <div className="space-y-1">
               <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
                 assistant

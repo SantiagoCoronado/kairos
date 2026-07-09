@@ -226,6 +226,11 @@ export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThreadList
   const box = f.box ?? 'inbox'
   if (box !== 'all') where.push(`t.is_archived = ${box === 'archived' ? 1 : 0}`)
   if (f.unreadOnly) where.push('t.unread_count > 0')
+  if (f.label) {
+    // exact token match on the comma-joined list — no substring collisions
+    where.push("(',' || t.labels || ',') LIKE ?")
+    params.push(`%,${f.label},%`)
+  }
   if (f.search) {
     where.push('(t.title LIKE ? OR t.snippet LIKE ?)')
     const q = `%${f.search}%`
@@ -245,6 +250,58 @@ export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThreadList
      WHERE ${where.join(' AND ')}
      ORDER BY t.pinned DESC, t.last_message_at DESC LIMIT ?`,
     ...params
+  )
+}
+
+/** Overwrite a thread's labels (auto-classifier and manual menu alike). */
+export function setThreadLabels(
+  db: DbDriver,
+  threadId: string,
+  labels: string[],
+  now: Date = new Date()
+): void {
+  db.run(
+    'UPDATE comms_threads SET labels = ?, updated_at = ? WHERE id = ?',
+    labels.join(','),
+    nowIso(now),
+    threadId
+  )
+}
+
+/** Distinct labels present on any thread — the filter row's chip list. */
+export function listThreadLabels(db: DbDriver): string[] {
+  const rows = db.all<{ labels: string }>(
+    "SELECT DISTINCT labels FROM comms_threads WHERE labels != ''"
+  )
+  const set = new Set<string>()
+  for (const r of rows) for (const l of r.labels.split(',')) if (l) set.add(l)
+  return [...set].sort()
+}
+
+/** Unclassified inbox email threads newer than `sinceIso`, newest first — the
+ *  labeler's work queue. `sender` is the latest inbound sender and
+ *  `newest_raw` its raw_json (gmail labelIds for the zero-token heuristics). */
+export function listUnlabeledEmailThreads(
+  db: DbDriver,
+  sinceIso: string,
+  limit: number
+): (CommsThread & { sender: string; newest_raw: string | null })[] {
+  return db.all<CommsThread & { sender: string; newest_raw: string | null }>(
+    `SELECT t.*, COALESCE((
+       SELECT m.sender_name || ' <' || m.sender_handle || '>'
+       FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
+       ORDER BY m.sent_at DESC LIMIT 1
+     ), '') AS sender,
+     (
+       SELECT m.raw_json FROM comms_messages m WHERE m.thread_id = t.id
+       ORDER BY m.sent_at DESC LIMIT 1
+     ) AS newest_raw
+     FROM comms_threads t
+     WHERE t.provider = 'gmail' AND t.labels = '' AND t.is_archived = 0
+       AND t.sync_enabled = 1 AND t.last_message_at >= ?
+     ORDER BY t.last_message_at DESC LIMIT ?`,
+    sinceIso,
+    limit
   )
 }
 

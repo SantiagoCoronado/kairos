@@ -11,6 +11,7 @@ const DEFAULTS: Settings = {
   automationsEnabled: true,
   translucency: 0,
   showClaudeUsage: true,
+  autoLabel: false,
   chatProvider: 'claude',
   chatModel: null,
   chatEffort: null,

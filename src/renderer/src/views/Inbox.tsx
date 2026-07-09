@@ -16,7 +16,8 @@ import {
   Paperclip,
   Pin,
   Check,
-  Sparkles
+  Sparkles,
+  Tag
 } from 'lucide-react'
 import type {
   CommsAccount,
@@ -27,6 +28,7 @@ import type {
   CommsProvider,
   MessageSearchHit
 } from '../../../core/comms-types'
+import { COMMS_LABELS } from '../../../core/labels'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
 import { SettingsModal } from '../components/SettingsModal'
@@ -116,6 +118,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   const [actionError, setActionError] = useState<string | null>(null)
   const [mode, setMode] = useState<'threads' | 'channels' | 'compose'>('threads')
   const [showSettings, setShowSettings] = useState(false)
+  const [labelFilter, setLabelFilter] = useState<string | null>(null)
 
   const [railCollapsed, setRailCollapsed] = useState(
     () => localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'
@@ -132,6 +135,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   }, [search])
 
   const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
+  const { data: allLabels } = useInvoke('comms:labels', [], ['comms'])
   const { data: threads } = useInvoke(
     'comms:threads',
     [
@@ -139,6 +143,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
         accountId: accountId ?? undefined,
         provider: provider ?? undefined,
         unreadOnly,
+        label: labelFilter ?? undefined,
         // searching spans everything — archived mail is where searches go to die
         box: debouncedSearch ? 'all' : box,
         search: debouncedSearch || undefined
@@ -150,7 +155,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   // filter changes drop the held thread (and with it, eventually, the selection)
   useEffect(() => {
     setHeldThread(null)
-  }, [accountId, provider, unreadOnly, box, debouncedSearch])
+  }, [accountId, provider, unreadOnly, box, labelFilter, debouncedSearch])
 
   // While a fold is playing, the list renders from a frozen copy of itself:
   // any re-render that moves or drops the animating row's DOM node cancels
@@ -482,6 +487,24 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
               </button>
             )}
           </div>
+          {allLabels && allLabels.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              {allLabels.map((l) => (
+                <button
+                  key={l}
+                  onClick={() => setLabelFilter(labelFilter === l ? null : l)}
+                  className={cn(
+                    'px-1.5 py-0.5 rounded text-[10.5px] border transition-colors',
+                    labelFilter === l
+                      ? 'bg-accent/15 border-accent/40 text-accent'
+                      : 'border-border/70 text-faint hover:text-text'
+                  )}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
           {selectedAccount?.provider === 'slack' && mode === 'threads' && (
             <SlackChannelHint account={selectedAccount} onOpen={() => setMode('channels')} />
           )}
@@ -849,6 +872,18 @@ function ThreadRow({
       </div>
       <div className="flex items-center gap-1.5 mt-0.5">
         <span className="text-[11px] text-faint truncate flex-1">{thread.snippet}</span>
+        {thread.labels
+          .split(',')
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((l) => (
+            <span
+              key={l}
+              className="shrink-0 px-1 rounded text-[9.5px] border border-border/70 text-faint"
+            >
+              {l}
+            </span>
+          ))}
         {thread.unread_count > 0 && (
           <span className="shrink-0 min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
             {thread.unread_count}
@@ -1131,6 +1166,7 @@ function ThreadPane({
             </>
           )}
         </span>
+        <LabelMenu thread={thread} />
         <button
           onClick={onTogglePin}
           title={thread.pinned === 1 ? 'Unpin (p)' : 'Pin to top (p)'}
@@ -1179,6 +1215,53 @@ function ThreadPane({
       </div>
       <Composer thread={thread} />
     </>
+  )
+}
+
+/** Manual label override: taxonomy checkboxes, saved per toggle. */
+function LabelMenu({ thread }: { thread: CommsThreadListItem }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const current = new Set(thread.labels.split(',').filter(Boolean))
+  const toggle = (label: string): void => {
+    const next = new Set(current)
+    if (next.has(label)) next.delete(label)
+    else next.add(label)
+    void api.invoke('comms:setThreadLabels', thread.id, [...next])
+  }
+  return (
+    <div className="relative shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Labels"
+        className={cn(
+          'h-6 w-6 rounded flex items-center justify-center hover:bg-raised',
+          current.size > 0 ? 'text-accent' : 'text-muted hover:text-text'
+        )}
+      >
+        <Tag size={14} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-7 z-20 w-40 rounded border border-border bg-panel shadow-lg py-1">
+            {COMMS_LABELS.map((l) => (
+              <label
+                key={l}
+                className="flex items-center gap-2 px-2.5 py-1 text-[12px] hover:bg-raised/60 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={current.has(l)}
+                  onChange={() => toggle(l)}
+                  className="accent-accent"
+                />
+                {l}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

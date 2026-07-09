@@ -21,6 +21,7 @@ import {
   GmailAuthError
 } from './gmail'
 import { connectSlack, syncSlackAccount, sendSlack, refreshSlackChannels, SlackAuthError } from './slack'
+import { CommsLabeler } from './labeler'
 import { WhatsAppConnection, deleteWaAuthState } from './whatsapp'
 import { loadMacContacts } from '../contacts'
 import { logLine } from '../logger'
@@ -43,6 +44,7 @@ export class CommsSyncManager {
   private changedTimer: NodeJS.Timeout | null = null
   private lastPokeAt = 0
   private stopped = false
+  private labeler: CommsLabeler
 
   constructor(
     private db: DbDriver,
@@ -50,10 +52,13 @@ export class CommsSyncManager {
     private onDbChanged: () => void,
     /** fired once per sync batch that stored ≥1 new inbound unread message */
     private onInbound?: (provider: CommsAccount['provider']) => void
-  ) {}
+  ) {
+    this.labeler = new CommsLabeler(db, () => this.notifyChanged())
+  }
 
   start(): void {
     repo.requeueStuckSending(this.db)
+    this.labeler.start()
     for (const account of repo.listAccounts(this.db)) {
       if (account.status === 'disabled' || account.status === 'needs_auth') continue
       this.startAccount(account)
@@ -86,6 +91,7 @@ export class CommsSyncManager {
 
   stop(): void {
     this.stopped = true
+    this.labeler.stop()
     for (const t of this.timers.values()) clearTimeout(t)
     this.timers.clear()
     if (this.drainTimer) clearInterval(this.drainTimer)
@@ -142,6 +148,7 @@ export class CommsSyncManager {
       this.failures.delete(accountId)
       this.emit({ kind: 'sync', accountId, status: 'idle' })
       if (added > 0) this.notifyChanged()
+      if (added > 0 && account.provider === 'gmail') this.labeler.nudge()
       // `added` conflates outbound copies and gmail label changes — count the
       // actual new inbound unread rows for the automation trigger signal
       if (added > 0 && this.onInbound && repo.countNewInbound(this.db, accountId, syncStartedAt) > 0) {

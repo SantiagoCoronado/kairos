@@ -445,6 +445,12 @@ CREATE TABLE comms_attachments (
   created_at   TEXT NOT NULL,
   UNIQUE (message_id, external_ref)
 );
+`,
+  // 014 — thread labels (auto-classifier + manual): comma-joined list from
+  // the fixed taxonomy in core/labels.ts, same convention as notes.labels.
+  // '' = not yet classified (the labeler's work queue predicate).
+  `
+ALTER TABLE comms_threads ADD COLUMN labels TEXT NOT NULL DEFAULT '';
 `
 ]
 

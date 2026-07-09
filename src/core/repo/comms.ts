@@ -178,7 +178,15 @@ export function upsertThread(db: DbDriver, input: ThreadUpsert, now: Date = new 
   const ts = nowIso(now)
   const existing = getThreadByExternal(db, input.account_id, input.external_id)
   if (existing) {
-    if (input.title !== undefined && input.title !== '' && input.title !== existing.title) {
+    if (
+      input.title !== undefined &&
+      input.title !== '' &&
+      input.title !== existing.title &&
+      // a placeholder never displaces a real name: an outbound WhatsApp
+      // message can only compute 'WhatsApp chat', and without this guard it
+      // clobbers a title learned from an inbound message's pushName
+      !(isPlaceholderTitle(input.title) && !isPlaceholderTitle(existing.title))
+    ) {
       db.run('UPDATE comms_threads SET title = ?, updated_at = ? WHERE id = ?', input.title, ts, existing.id)
       return getThread(db, existing.id)!
     }

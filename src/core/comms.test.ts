@@ -215,6 +215,44 @@ describe('threads', () => {
   })
 })
 
+describe('thread title upserts', () => {
+  const waAccount = () =>
+    comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: '521555@s.whatsapp.net', display_name: '+521555'
+    }, T0)
+  const upsert = (accountId: string, title: string, at = T0) =>
+    comms.upsertThread(db, {
+      account_id: accountId, provider: 'whatsapp', external_id: 'abc123@lid', kind: 'dm', title
+    }, at)
+
+  it('a real name replaces a placeholder title', () => {
+    const a = waAccount()
+    upsert(a.id, 'WhatsApp chat')
+    expect(upsert(a.id, 'Rodrigo Vega', later(1)).title).toBe('Rodrigo Vega')
+  })
+
+  it('a placeholder never clobbers a real name (outbound-message regression)', () => {
+    const a = waAccount()
+    upsert(a.id, 'Rodrigo Vega')
+    // outbound messages compute 'WhatsApp chat' when the name book is cold
+    expect(upsert(a.id, 'WhatsApp chat', later(1)).title).toBe('Rodrigo Vega')
+    expect(upsert(a.id, '+5215551234', later(2)).title).toBe('Rodrigo Vega')
+    expect(upsert(a.id, 'Group', later(3)).title).toBe('Rodrigo Vega')
+  })
+
+  it('a real name still replaces another real name (contact renames)', () => {
+    const a = waAccount()
+    upsert(a.id, 'Rodrigo Vega')
+    expect(upsert(a.id, 'Rodrigo Vega (work)', later(1)).title).toBe('Rodrigo Vega (work)')
+  })
+
+  it('a placeholder may replace another placeholder', () => {
+    const a = waAccount()
+    upsert(a.id, 'WhatsApp chat')
+    expect(upsert(a.id, '+5215551234', later(1)).title).toBe('+5215551234')
+  })
+})
+
 describe('contact name matching', () => {
   it('canonicalizes legacy WhatsApp mobile prefixes (MX 521→52, AR 549→54)', () => {
     expect(comms.canonicalPhoneDigits('5215515988976')).toBe('525515988976')

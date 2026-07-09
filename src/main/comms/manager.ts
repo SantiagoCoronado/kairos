@@ -2,10 +2,14 @@
 // process. Owns the per-account sync loops (Gmail/Slack polling, WhatsApp
 // sockets) and the outbox drain. All sends — composer, agent, MCP — go
 // through comms_outbox; the drain is the single delivery path.
+import { join } from 'node:path'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { shell } from 'electron'
 import type { DbDriver } from '../../core/driver'
 import type { CommsAccount } from '../../core/comms-types'
 import type { CommsEvent, CommsSendInput, CommsSendResult } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
+import { DATA_DIR } from '../db'
 import {
   connectGmail,
   syncGmailAccount,
@@ -13,6 +17,7 @@ import {
   modifyGmailThread,
   modifyGmailMessage,
   trashGmailThread,
+  downloadGmailAttachment,
   GmailAuthError
 } from './gmail'
 import { connectSlack, syncSlackAccount, sendSlack, refreshSlackChannels, SlackAuthError } from './slack'
@@ -288,6 +293,54 @@ export class CommsSyncManager {
     repo.deleteThread(this.db, threadId)
     this.notifyChanged()
     return { ok: true }
+  }
+
+  /** Download an attachment (cached via local_path), then open it. */
+  async downloadAttachment(
+    attachmentId: string
+  ): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
+    const att = repo.getAttachment(this.db, attachmentId)
+    if (!att) return { ok: false, message: 'unknown attachment' }
+    if (att.local_path && existsSync(att.local_path)) {
+      await shell.openPath(att.local_path)
+      return { ok: true, path: att.local_path }
+    }
+    const msg = repo.getMessage(this.db, att.message_id)
+    if (!msg) return { ok: false, message: 'message no longer exists' }
+    const account = repo.getAccount(this.db, msg.account_id)
+    if (!account) return { ok: false, message: 'account was disconnected' }
+
+    let bytes: Buffer
+    try {
+      if (msg.provider === 'gmail') {
+        bytes = await downloadGmailAttachment(this.db, account, msg.external_id, att.external_ref)
+      } else if (msg.provider === 'whatsapp') {
+        const conn = this.wa.get(account.id)
+        if (!conn) return { ok: false, message: 'WhatsApp is not connected' }
+        bytes = await conn.downloadMedia(msg.raw_json)
+      } else {
+        return { ok: false, message: 'downloads are not supported for this provider yet' }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (err instanceof GmailAuthError) {
+        repo.setAccountStatus(this.db, account.id, 'needs_auth', message)
+        this.emit({ kind: 'sync', accountId: account.id, status: 'needs_auth', message })
+        this.notifyChanged()
+      }
+      return { ok: false, message }
+    }
+
+    const dir = join(DATA_DIR, 'attachments')
+    mkdirSync(dir, { recursive: true })
+    // id prefix keeps same-named files from different messages apart
+    const safeName = (att.filename || 'attachment').replace(/[/\\:]/g, '_')
+    const path = join(dir, `${att.id.slice(0, 8)}-${safeName}`)
+    writeFileSync(path, bytes)
+    repo.setAttachmentLocalPath(this.db, att.id, path)
+    this.notifyChanged()
+    await shell.openPath(path)
+    return { ok: true, path }
   }
 
   // ---------- connect / disconnect ----------

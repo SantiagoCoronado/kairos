@@ -2,10 +2,12 @@ import type { DbDriver, SqlValue } from '../driver'
 import type {
   CommsAccount,
   CommsAccountStatus,
+  CommsAttachment,
   CommsMessage,
   CommsThread,
   CommsThreadListItem,
   AccountUpsert,
+  AttachmentUpsert,
   ThreadUpsert,
   MessageUpsert,
   MessageSearchHit,
@@ -766,6 +768,65 @@ export function searchMessages(
      ORDER BY m.sent_at DESC LIMIT ?`,
     ...params
   )
+}
+
+// ---------- attachments ----------
+
+export function getMessage(db: DbDriver, id: string): CommsMessage | undefined {
+  return db.get<CommsMessage>('SELECT * FROM comms_messages WHERE id = ?', id)
+}
+
+export function getMessageByExternal(
+  db: DbDriver,
+  accountId: string,
+  externalId: string
+): CommsMessage | undefined {
+  return db.get<CommsMessage>(
+    'SELECT * FROM comms_messages WHERE account_id = ? AND external_id = ?',
+    accountId,
+    externalId
+  )
+}
+
+/** Record a message's attachments. INSERT OR IGNORE on (message_id,
+ *  external_ref) keeps backfill re-ingests idempotent. */
+export function addAttachments(
+  db: DbDriver,
+  messageId: string,
+  attachments: AttachmentUpsert[],
+  now: Date = new Date()
+): void {
+  for (const a of attachments) {
+    db.run(
+      `INSERT OR IGNORE INTO comms_attachments (id, message_id, filename, mime_type, size_bytes, external_ref, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      newId(),
+      messageId,
+      a.filename ?? '',
+      a.mime_type ?? '',
+      a.size_bytes ?? null,
+      a.external_ref,
+      nowIso(now)
+    )
+  }
+}
+
+export function getAttachment(db: DbDriver, id: string): CommsAttachment | undefined {
+  return db.get<CommsAttachment>('SELECT * FROM comms_attachments WHERE id = ?', id)
+}
+
+/** All attachments across a thread — one query for the whole message pane. */
+export function listThreadAttachments(db: DbDriver, threadId: string): CommsAttachment[] {
+  return db.all<CommsAttachment>(
+    `SELECT a.* FROM comms_attachments a
+     JOIN comms_messages m ON m.id = a.message_id
+     WHERE m.thread_id = ? ORDER BY m.sent_at, a.created_at`,
+    threadId
+  )
+}
+
+export function setAttachmentLocalPath(db: DbDriver, id: string, localPath: string): void {
+  db.run('UPDATE comms_attachments SET local_path = ? WHERE id = ?', localPath, id)
 }
 
 // ---------- outbox ----------

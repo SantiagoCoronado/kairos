@@ -7,6 +7,8 @@ import {
   makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
+  downloadMediaMessage,
+  proto,
   DisconnectReason,
   type WASocket,
   type WAMessage,
@@ -67,6 +69,28 @@ function extractText(msg: WAMessage): { text: string; hasAttachment: boolean } {
   if (m.locationMessage) return { text: '[location]', hasAttachment: false }
   if (m.contactMessage) return { text: '[contact card]', hasAttachment: false }
   return { text: '', hasAttachment: false }
+}
+
+/** proto int64s arrive as Long instances — collapse to a plain number */
+const toNum = (v: unknown): number | null => {
+  if (typeof v === 'number') return v
+  if (v && typeof v === 'object' && 'toNumber' in v) return (v as { toNumber: () => number }).toNumber()
+  return v == null ? null : Number(v)
+}
+
+/** Attachment metadata for a media message, or null for text/protocol messages. */
+function mediaMeta(msg: WAMessage): { filename: string; mime_type: string; size_bytes: number | null } | null {
+  const m = msg.message
+  if (!m) return null
+  const doc = m.documentMessage
+  const media = doc ?? m.imageMessage ?? m.videoMessage ?? m.audioMessage ?? m.stickerMessage
+  if (!media) return null
+  const mime = media.mimetype ?? ''
+  const ext = mime.split('/')[1]?.split(';')[0] || 'bin'
+  const filename =
+    doc?.fileName ||
+    (m.imageMessage ? `photo.${ext}` : m.videoMessage ? `video.${ext}` : m.audioMessage ? `audio.${ext}` : m.stickerMessage ? `sticker.${ext}` : `file.${ext}`)
+  return { filename, mime_type: mime, size_bytes: toNum(media.fileLength) }
 }
 
 interface WaOpts {
@@ -317,11 +341,19 @@ export class WhatsAppConnection {
       title
     })
     const ts = Number(msg.messageTimestamp ?? 0) * 1000
-    return repo.upsertMessage(this.db, {
+    const externalId = msg.key.id ?? `${chatJid}:${ts}`
+    // media messages keep their full content node (proto → base64-safe JSON)
+    // so downloadMediaMessage() can fetch the bytes later; text messages only
+    // need the key, and only inbound (read receipts)
+    const meta = hasAttachment ? mediaMeta(msg) : null
+    const media = meta && msg.message ? proto.Message.fromObject(msg.message).toJSON() : undefined
+    const rawJson =
+      media || !isMe ? JSON.stringify({ key: msg.key, ...(media ? { media } : {}) }) : undefined
+    const added = repo.upsertMessage(this.db, {
       thread_id: thread.id,
       account_id: this.accountId,
       provider: 'whatsapp',
-      external_id: msg.key.id ?? `${chatJid}:${ts}`,
+      external_id: externalId,
       sender_name: isMe ? 'me' : msg.pushName || this.names.get(senderJid) || jidLabel(senderJid),
       sender_handle: jidUser(senderJid),
       is_me: isMe,
@@ -331,8 +363,32 @@ export class WhatsAppConnection {
       is_read: asRead,
       // the full key (incl. group participant jid) is what readMessages()
       // needs to send a read receipt for this message later
-      raw_json: isMe ? undefined : JSON.stringify({ key: msg.key })
+      raw_json: rawJson
     })
+    if (added && meta) {
+      const row = repo.getMessageByExternal(this.db, this.accountId, externalId)
+      if (row) repo.addAttachments(this.db, row.id, [{ ...meta, external_ref: externalId }])
+    }
+    return added
+  }
+
+  /** Fetch a media message's bytes via its stored proto node. */
+  async downloadMedia(rawJson: string | null): Promise<Buffer> {
+    if (!this.sock || this.stopped) throw new Error('WhatsApp is not connected')
+    if (!rawJson) throw new Error('message was synced before attachment support')
+    const parsed = JSON.parse(rawJson) as { key?: WAMessageKey; media?: Record<string, unknown> }
+    if (!parsed.key || !parsed.media) throw new Error('message was synced before attachment support')
+    const wamsg = {
+      key: parsed.key,
+      message: proto.Message.fromObject(parsed.media)
+    } as WAMessage
+    return (await downloadMediaMessage(
+      wamsg,
+      'buffer',
+      {},
+      // expired CDN urls get refreshed through the live socket
+      { logger: silentLogger as never, reuploadRequest: this.sock.updateMediaMessage }
+    )) as Buffer
   }
 
   /**

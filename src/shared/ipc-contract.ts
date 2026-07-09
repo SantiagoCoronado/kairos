@@ -41,6 +41,7 @@ import type {
 } from '../core/types'
 import type {
   CommsAccount,
+  CommsAttachment,
   CommsThread,
   CommsThreadListItem,
   CommsMessage,
@@ -215,6 +216,10 @@ export interface IpcApi {
   /** every thread of one account, incl. inactive/disabled — for channel opt-in UI */
   'comms:accountThreads': (accountId: string) => CommsThread[]
   'comms:messages': (threadId: string) => CommsMessage[]
+  /** attachment metadata for every message in a thread (one query per pane) */
+  'comms:threadAttachments': (threadId: string) => CommsAttachment[]
+  /** fetch the bytes (cached on disk after the first download), then open the file */
+  'comms:downloadAttachment': (attachmentId: string) => Promise<CommsDownloadResult>
   'comms:markRead': (threadId: string) => void
   /** re-flag the newest inbound message unread; gmail propagates remotely */
   'comms:markUnread': (threadId: string) => void
@@ -239,6 +244,8 @@ export interface IpcApi {
   'comms:connectWhatsApp': () => Promise<CommsConnectResult>
   'comms:disconnect': (accountId: string) => Promise<void>
 }
+
+export type CommsDownloadResult = { ok: true; path: string } | { ok: false; message: string }
 
 export interface CommsSendInput {
   accountId: string

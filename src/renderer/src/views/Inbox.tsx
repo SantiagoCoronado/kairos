@@ -13,11 +13,14 @@ import {
   ArchiveRestore,
   PanelLeftClose,
   PanelLeftOpen,
+  Paperclip,
   Pin,
+  Check,
   Sparkles
 } from 'lucide-react'
 import type {
   CommsAccount,
+  CommsAttachment,
   CommsThread,
   CommsThreadListItem,
   CommsMessage,
@@ -60,6 +63,12 @@ const timeAgo = (iso: string | null): string => {
   if (mins < 60) return `${mins}m`
   if (mins < 60 * 24) return `${Math.floor(mins / 60)}h`
   return `${Math.floor(mins / (60 * 24))}d`
+}
+
+const humanSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /** true while any input/textarea/select (or editable node) has focus — shortcuts stay inert */
@@ -1060,6 +1069,17 @@ function ThreadPane({
   onTogglePin: () => void
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
+  const { data: threadAttachments } = useInvoke('comms:threadAttachments', [thread.id], ['comms'])
+  // one fetch per pane, grouped here — a hook per bubble would be N IPC calls
+  const attachmentsByMessage = useMemo(() => {
+    const map = new Map<string, CommsAttachment[]>()
+    for (const a of threadAttachments ?? []) {
+      const list = map.get(a.message_id) ?? []
+      list.push(a)
+      map.set(a.message_id, list)
+    }
+    return map
+  }, [threadAttachments])
   const bottomRef = useRef<HTMLDivElement>(null)
   const archived = thread.is_archived === 1
   const { name, title } = threadLabel(thread)
@@ -1148,7 +1168,12 @@ function ThreadPane({
       </div>
       <div className="fade-in flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
         {messages?.map((m) => (
-          <MessageBubble key={m.id} message={m} onOpenPerson={onOpenPerson} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            attachments={attachmentsByMessage.get(m.id)}
+            onOpenPerson={onOpenPerson}
+          />
         ))}
         <div ref={bottomRef} />
       </div>
@@ -1159,9 +1184,11 @@ function ThreadPane({
 
 function MessageBubble({
   message: m,
+  attachments,
   onOpenPerson
 }: {
   message: CommsMessage
+  attachments?: CommsAttachment[]
   onOpenPerson?: (id: string) => void
 }): React.JSX.Element {
   const [linking, setLinking] = useState(false)
@@ -1219,8 +1246,53 @@ function MessageBubble({
           {m.body_text || <span className="text-faint italic">(no text)</span>}
         </div>
       )}
-      {m.has_attachments === 1 && (
-        <div className="mt-1 text-[11px] text-faint">📎 has attachment (open in the app)</div>
+      {attachments?.map((a) => <AttachmentChip key={a.id} attachment={a} />)}
+      {m.has_attachments === 1 && !attachments?.length && (
+        <div className="mt-1 text-[11px] text-faint">
+          📎 attachment (synced before download support — open in the app)
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Filename chip: click downloads (cached after the first time) and opens. */
+function AttachmentChip({ attachment: a }: { attachment: CommsAttachment }): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const open = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.invoke('comms:downloadAttachment', a.id)
+      if (!res.ok) setError(res.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-1">
+      <button
+        onClick={() => void open()}
+        disabled={busy}
+        title={a.local_path ? 'Open (downloaded)' : 'Download and open'}
+        className="inline-flex items-center gap-1.5 max-w-full px-2 py-1 rounded border border-border bg-panel hover:bg-raised text-[11.5px] disabled:opacity-60"
+      >
+        {busy ? (
+          <RefreshCw size={11} className="shrink-0 animate-spin text-faint" />
+        ) : (
+          <Paperclip size={11} className="shrink-0 text-faint" />
+        )}
+        <span className="truncate">{a.filename || 'attachment'}</span>
+        {a.size_bytes != null && (
+          <span className="shrink-0 text-faint">{humanSize(a.size_bytes)}</span>
+        )}
+        {!busy && a.local_path && <Check size={11} className="shrink-0 text-accent" />}
+      </button>
+      {error && (
+        <p className="text-[10.5px] text-danger truncate" title={error}>
+          {error}
+        </p>
       )}
     </div>
   )

@@ -590,6 +590,33 @@ describe('getThreadListItem', () => {
   })
 })
 
+describe('attachments', () => {
+  it('records, dedupes on re-ingest, caches local_path, cascades with the message', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sent_at: T0.toISOString(), body_text: 'see attached',
+      has_attachments: true
+    }, T0)
+    const msg = comms.getMessageByExternal(db, a.id, 'm1')!
+    const atts = [
+      { filename: 'report.pdf', mime_type: 'application/pdf', size_bytes: 1024, external_ref: 'att-1' },
+      { filename: 'photo.jpg', mime_type: 'image/jpeg', size_bytes: 2048, external_ref: 'att-2' }
+    ]
+    comms.addAttachments(db, msg.id, atts, T0)
+    comms.addAttachments(db, msg.id, atts, later(1)) // backfill re-ingest
+    const listed = comms.listThreadAttachments(db, t.id)
+    expect(listed.map((x) => x.filename)).toEqual(['report.pdf', 'photo.jpg'])
+
+    comms.setAttachmentLocalPath(db, listed[0].id, '/tmp/report.pdf')
+    expect(comms.getAttachment(db, listed[0].id)!.local_path).toBe('/tmp/report.pdf')
+
+    db.run('DELETE FROM comms_messages WHERE id = ?', msg.id)
+    expect(comms.listThreadAttachments(db, t.id)).toHaveLength(0)
+  })
+})
+
 describe('countNewInbound', () => {
   it('counts fresh inbound unread but not backfilled old mail', () => {
     const a = gmailAccount()

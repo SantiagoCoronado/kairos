@@ -1,7 +1,7 @@
 // Gmail provider: raw fetch against the Gmail REST API (no googleapis).
 // OAuth is the installed-app loopback flow with the user's own client id/secret.
 import type { DbDriver } from '../../core/driver'
-import type { CommsAccount, OutboxItem } from '../../core/comms-types'
+import type { AttachmentUpsert, CommsAccount, OutboxItem } from '../../core/comms-types'
 import * as repo from '../../core/repo/comms'
 import { getSettings } from '../settings'
 import { runLoopbackFlow } from './oauth'
@@ -44,7 +44,7 @@ interface GmailHeader {
 interface GmailPart {
   mimeType?: string
   filename?: string
-  body?: { data?: string; attachmentId?: string }
+  body?: { data?: string; attachmentId?: string; size?: number }
   parts?: GmailPart[]
 }
 interface GmailMessage {
@@ -303,6 +303,39 @@ function hasAttachment(part: GmailPart | undefined): boolean {
   return (part.parts ?? []).some(hasAttachment)
 }
 
+/** Walk the part tree and keep what a later download needs. */
+function collectAttachments(part: GmailPart | undefined): AttachmentUpsert[] {
+  if (!part) return []
+  const out: AttachmentUpsert[] = []
+  if (part.filename && part.body?.attachmentId) {
+    out.push({
+      filename: part.filename,
+      mime_type: part.mimeType ?? '',
+      size_bytes: part.body.size ?? null,
+      external_ref: part.body.attachmentId
+    })
+  }
+  for (const child of part.parts ?? []) out.push(...collectAttachments(child))
+  return out
+}
+
+/** Fetch one attachment's bytes (base64url per the API). */
+export async function downloadGmailAttachment(
+  db: DbDriver,
+  account: CommsAccount,
+  messageExternalId: string,
+  attachmentId: string
+): Promise<Buffer> {
+  const res = await gmailFetch(
+    db,
+    account,
+    `/messages/${messageExternalId}/attachments/${encodeURIComponent(attachmentId)}`
+  )
+  const data = String(res['data'] ?? '')
+  if (!data) throw new Error('Gmail returned an empty attachment')
+  return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+}
+
 function extractBodies(msg: GmailMessage): { text: string; html: string | null } {
   const htmlPart = findPart(msg.payload, 'text/html')
   const html = htmlPart?.body?.data ? decodeB64Url(htmlPart.body.data).slice(0, 500_000) : null
@@ -355,6 +388,12 @@ export function ingestGmailMessage(db: DbDriver, account: CommsAccount, msg: Gma
   })
   // pre-existing rows were stored before HTML capture — upgrade them in place
   if (!added && bodies.html) repo.fillMessageHtml(db, account.id, msg.id, bodies.html)
+  // attachment metadata (INSERT OR IGNORE — re-ingests and old rows both safe)
+  const attachments = collectAttachments(msg.payload)
+  if (attachments.length > 0) {
+    const row = repo.getMessageByExternal(db, account.id, msg.id)
+    if (row) repo.addAttachments(db, row.id, attachments)
+  }
   return added
 }
 

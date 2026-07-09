@@ -428,6 +428,23 @@ ALTER TABLE agent_task_runs ADD COLUMN cost_usd REAL;
   // Local-only (never mirrored to gmail/slack/whatsapp).
   `
 ALTER TABLE comms_threads ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+`,
+  // 013 — attachment metadata per message. external_ref is what the provider
+  // needs to fetch the bytes later (gmail attachmentId; whatsapp uses the
+  // message's raw_json media node, ref = message external id). local_path is
+  // the download cache. UNIQUE also serves as the message_id lookup index.
+  `
+CREATE TABLE comms_attachments (
+  id           TEXT PRIMARY KEY,
+  message_id   TEXT NOT NULL REFERENCES comms_messages(id) ON DELETE CASCADE,
+  filename     TEXT NOT NULL DEFAULT '',
+  mime_type    TEXT NOT NULL DEFAULT '',
+  size_bytes   INTEGER,
+  external_ref TEXT NOT NULL,
+  local_path   TEXT,
+  created_at   TEXT NOT NULL,
+  UNIQUE (message_id, external_ref)
+);
 `
 ]
 

@@ -75,6 +75,26 @@ export interface CommsMessage {
   created_at: string
 }
 
+export interface CommsAttachment {
+  id: string
+  message_id: string
+  filename: string
+  mime_type: string
+  size_bytes: number | null
+  /** gmail: part attachmentId; whatsapp: the message external id (bytes come from raw_json) */
+  external_ref: string
+  /** download cache — set once the file is on disk */
+  local_path: string | null
+  created_at: string
+}
+
+export interface AttachmentUpsert {
+  filename?: string
+  mime_type?: string
+  size_bytes?: number | null
+  external_ref: string
+}
+
 export interface OutboxItem {
   id: string
   account_id: string

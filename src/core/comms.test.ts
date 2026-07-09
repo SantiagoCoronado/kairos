@@ -214,6 +214,44 @@ describe('threads', () => {
     expect(comms.listThreads(db, { includeDisabled: true })).toHaveLength(2)
   })
 
+  it('pinned threads float to the top, then recency; unpin restores order', () => {
+    const a = gmailAccount()
+    const mk = (ext: string, mins: number): CommsThread => {
+      const t = comms.upsertThread(db, {
+        account_id: a.id, provider: 'gmail', external_id: ext, kind: 'email', title: ext
+      }, T0)
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: a.id, provider: 'gmail',
+        external_id: `m-${ext}`, sent_at: later(mins).toISOString(), body_text: 'hi'
+      }, T0)
+      return t
+    }
+    const oldest = mk('t-oldest', 0)
+    const middle = mk('t-middle', 5)
+    const newest = mk('t-newest', 10)
+    expect(comms.listThreads(db, {}).map((t) => t.id)).toEqual([newest.id, middle.id, oldest.id])
+    comms.setThreadPinned(db, oldest.id, true, later(11))
+    expect(comms.listThreads(db, {}).map((t) => t.id)).toEqual([oldest.id, newest.id, middle.id])
+    expect(comms.listThreads(db, {})[0].pinned).toBe(1)
+    comms.setThreadPinned(db, oldest.id, false, later(12))
+    expect(comms.listThreads(db, {}).map((t) => t.id)).toEqual([newest.id, middle.id, oldest.id])
+  })
+
+  it('a pinned archived thread stays in the archived box', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+    comms.setThreadPinned(db, t.id, true, later(1))
+    comms.setThreadArchived(db, t.id, true, later(2))
+    expect(comms.listThreads(db, { box: 'inbox' })).toHaveLength(0)
+    const archived = comms.listThreads(db, { box: 'archived' })
+    expect(archived.map((x) => x.id)).toEqual([t.id])
+    expect(archived[0].pinned).toBe(1)
+  })
+
   it('bulk sync toggle flips visibility for all given channels', () => {
     const a = comms.upsertAccount(db, {
       provider: 'slack', external_id: 'T1:U1', display_name: 'Team'

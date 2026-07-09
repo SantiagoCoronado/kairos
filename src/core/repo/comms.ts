@@ -241,8 +241,18 @@ export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThreadList
        ORDER BY m.sent_at DESC LIMIT 1
      )
      WHERE ${where.join(' AND ')}
-     ORDER BY t.last_message_at DESC LIMIT ?`,
+     ORDER BY t.pinned DESC, t.last_message_at DESC LIMIT ?`,
     ...params
+  )
+}
+
+/** Pin/unpin: pinned threads float to the top of the list. Local-only. */
+export function setThreadPinned(db: DbDriver, threadId: string, pinned: boolean, now: Date = new Date()): void {
+  db.run(
+    'UPDATE comms_threads SET pinned = ?, updated_at = ? WHERE id = ?',
+    pinned ? 1 : 0,
+    nowIso(now),
+    threadId
   )
 }
 

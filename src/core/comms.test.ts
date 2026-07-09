@@ -537,6 +537,78 @@ describe('unreadInboundMessages', () => {
   })
 })
 
+describe('message search', () => {
+  it('finds body text in archived threads and filters by account', () => {
+    const a = gmailAccount()
+    const b = comms.upsertAccount(db, {
+      provider: 'gmail', external_id: 'other@example.com', display_name: 'other@example.com'
+    }, T0)
+    const mk = (accountId: string, ext: string, body: string, archived = false): CommsThread => {
+      const t = comms.upsertThread(db, {
+        account_id: accountId, provider: 'gmail', external_id: ext, kind: 'email', title: `mail ${ext}`
+      }, T0)
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: accountId, provider: 'gmail',
+        external_id: `m-${ext}`, sent_at: T0.toISOString(), body_text: body
+      }, T0)
+      if (archived) comms.setThreadArchived(db, t.id, true, later(1))
+      return t
+    }
+    const hidden = mk(a.id, 'arch', 'the flamingo invoice is attached', true)
+    mk(a.id, 'plain', 'nothing to see here')
+    const otherAcct = mk(b.id, 'other', 'flamingo sighting elsewhere')
+
+    // archived threads are invisible to the row search in the inbox box
+    // (only account b's live thread matches via its snippet)…
+    expect(comms.listThreads(db, { search: 'flamingo', box: 'inbox' }).map((t) => t.id)).toEqual([
+      otherAcct.id
+    ])
+    // …but body search has no box filter at all
+    const hits = comms.searchMessages(db, 'flamingo')
+    expect(new Set(hits.map((h) => h.thread_id))).toEqual(new Set([hidden.id, otherAcct.id]))
+    // account filter narrows it
+    const scoped = comms.searchMessages(db, 'flamingo', { accountId: a.id })
+    expect(scoped.map((h) => h.thread_id)).toEqual([hidden.id])
+  })
+})
+
+describe('getThreadListItem', () => {
+  it('returns the thread as a list row with the person join', () => {
+    const anna = people.upsertPerson(db, { name: 'Anna', email: 'anna@example.com' }, T0)
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sender_handle: 'anna@example.com',
+      sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+    const row = comms.getThreadListItem(db, t.id)!
+    expect(row.id).toBe(t.id)
+    expect(row.person_id).toBe(anna.id)
+    expect(row.person_name).toBe('Anna')
+    expect(comms.getThreadListItem(db, 'nope')).toBeNull()
+  })
+})
+
+describe('countNewInbound', () => {
+  it('counts fresh inbound unread but not backfilled old mail', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    const syncStart = later(60)
+    // a genuinely new message: sent recently, stored after sync start
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'fresh', sent_at: later(59).toISOString(), body_text: 'new'
+    }, later(61))
+    // a deep-backfill row: stored now, but sent months ago
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'ancient', sent_at: '2026-01-15T12:00:00.000Z', body_text: 'old'
+    }, later(61))
+    expect(comms.countNewInbound(db, a.id, syncStart.toISOString())).toBe(1)
+  })
+})
+
 describe('markThreadUnread', () => {
   it('re-flags only the newest inbound message and returns its external id', () => {
     const a = gmailAccount()

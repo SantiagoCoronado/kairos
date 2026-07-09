@@ -450,6 +450,8 @@ export function registerIpc(): void {
   handle('comms:accounts', () => comms.listAccounts(db))
   handle('comms:unreadTotal', () => comms.unreadTotal(db))
   handle('comms:threads', (f) => comms.listThreads(db, f))
+  handle('comms:thread', (threadId) => comms.getThreadListItem(db, threadId))
+  handle('comms:search', (query, opts) => comms.searchMessages(db, query, opts))
   handle('comms:accountThreads', (accountId) => comms.listAccountThreads(db, accountId))
   handle('comms:messages', (threadId) => comms.listMessages(db, threadId))
   handle('comms:markRead', (threadId) => {

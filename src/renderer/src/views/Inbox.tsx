@@ -21,7 +21,8 @@ import type {
   CommsThread,
   CommsThreadListItem,
   CommsMessage,
-  CommsProvider
+  CommsProvider,
+  MessageSearchHit
 } from '../../../core/comms-types'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
@@ -113,6 +114,14 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   const [railW, setRailW] = useState(() => storedWidth(RAIL_W_KEY, RAIL_W))
   const [listW, setListW] = useState(() => storedWidth(LIST_W_KEY, LIST_W))
 
+  // debounced: title/snippet LIKE is cheap but body search scans message
+  // bodies — don't run either on every keystroke
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250)
+    return () => clearTimeout(t)
+  }, [search])
+
   const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
   const { data: threads } = useInvoke(
     'comms:threads',
@@ -121,8 +130,9 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
         accountId: accountId ?? undefined,
         provider: provider ?? undefined,
         unreadOnly,
-        box,
-        search: search || undefined
+        // searching spans everything — archived mail is where searches go to die
+        box: debouncedSearch ? 'all' : box,
+        search: debouncedSearch || undefined
       }
     ],
     ['comms']
@@ -131,7 +141,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   // filter changes drop the held thread (and with it, eventually, the selection)
   useEffect(() => {
     setHeldThread(null)
-  }, [accountId, provider, unreadOnly, box, search])
+  }, [accountId, provider, unreadOnly, box, debouncedSearch])
 
   // While a fold is playing, the list renders from a frozen copy of itself:
   // any re-render that moves or drops the animating row's DOM node cancels
@@ -481,7 +491,9 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
             <ChannelManager account={selectedAccount} />
           ) : (
             <>
-              {displayThreads?.length === 0 && <EmptyState>Nothing here yet.</EmptyState>}
+              {displayThreads?.length === 0 && !debouncedSearch && (
+                <EmptyState>Nothing here yet.</EmptyState>
+              )}
               {displayThreads?.map((t) => (
                 <ThreadRow
                   key={t.id}
@@ -493,6 +505,16 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                   onTogglePin={() => togglePin(t)}
                 />
               ))}
+              {debouncedSearch && displayThreads && (
+                <MessageHits
+                  query={debouncedSearch}
+                  accountId={accountId}
+                  provider={provider}
+                  excludeThreadIds={new Set(displayThreads.map((t) => t.id))}
+                  noThreadMatches={displayThreads.length === 0}
+                  onOpen={openThread}
+                />
+              )}
             </>
           )}
         </div>
@@ -824,6 +846,75 @@ function ThreadRow({
           </span>
         )}
       </div>
+    </div>
+  )
+}
+
+/** ~90 chars of body centered on the first match, so the hit itself is visible */
+const excerpt = (body: string, query: string): string => {
+  const i = body.toLowerCase().indexOf(query.toLowerCase())
+  const start = i < 0 ? 0 : Math.max(0, i - 30)
+  return (start > 0 ? '…' : '') + body.slice(start, start + 90).replace(/\s+/g, ' ').trim()
+}
+
+/** Body-text search results — matches the thread-row search (title/snippet)
+ *  can't see. One row per thread, newest hit wins; opens like any thread. */
+function MessageHits({
+  query,
+  accountId,
+  provider,
+  excludeThreadIds,
+  noThreadMatches,
+  onOpen
+}: {
+  query: string
+  accountId: string | null
+  provider: CommsProvider | null
+  /** threads already shown as rows above — don't repeat them here */
+  excludeThreadIds: ReadonlySet<string>
+  noThreadMatches: boolean
+  onOpen: (t: CommsThreadListItem) => void
+}): React.JSX.Element | null {
+  const { data: hits } = useInvoke(
+    'comms:search',
+    [query, { accountId: accountId ?? undefined, provider: provider ?? undefined, limit: 30 }],
+    ['comms']
+  )
+  const rows = useMemo(() => {
+    const seen = new Set<string>()
+    return (hits ?? []).filter((h) => {
+      if (excludeThreadIds.has(h.thread_id) || seen.has(h.thread_id)) return false
+      seen.add(h.thread_id)
+      return true
+    })
+  }, [hits, excludeThreadIds])
+  if (rows.length === 0) {
+    return noThreadMatches && hits ? <EmptyState>No matches.</EmptyState> : null
+  }
+  const open = (h: MessageSearchHit): void => {
+    void api.invoke('comms:thread', h.thread_id).then((t) => t && onOpen(t))
+  }
+  return (
+    <div>
+      <p className="px-3 pt-3 pb-1 text-[10.5px] uppercase tracking-wide text-faint">
+        In message bodies
+      </p>
+      {rows.map((h) => (
+        <button
+          key={h.id}
+          onClick={() => open(h)}
+          className="w-full text-left px-3 py-2 border-b border-border/50 hover:bg-raised/50"
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="text-[13px] truncate flex-1">
+              <span className="text-accent">{h.sender_name || h.sender_handle || 'me'} · </span>
+              {h.thread_title || '(untitled)'}
+            </span>
+            <span className="font-mono text-[10px] text-faint shrink-0">{timeAgo(h.sent_at)}</span>
+          </div>
+          <p className="text-[11px] text-faint truncate mt-0.5">{excerpt(h.body_text, query)}</p>
+        </button>
+      ))}
     </div>
   )
 }

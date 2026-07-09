@@ -66,11 +66,17 @@ if (!gotLock) {
     registerIpc()
     getCommsManager()?.start()
     getCalendarManager()?.start()
-    // remote calendar edits should be visible the moment the user looks:
-    // re-check Google whenever the app regains focus or the machine wakes
-    // (incremental pulls are near-free; the manager throttles bursts)
-    app.on('browser-window-focus', () => getCalendarManager()?.pokePull())
-    powerMonitor.on('resume', () => getCalendarManager()?.pokePull())
+    // remote calendar edits and new mail should be visible the moment the
+    // user looks: re-check Google/Slack whenever the app regains focus or the
+    // machine wakes (incremental pulls are near-free; the managers throttle bursts)
+    app.on('browser-window-focus', () => {
+      getCalendarManager()?.pokePull()
+      getCommsManager()?.pokeSync()
+    })
+    powerMonitor.on('resume', () => {
+      getCalendarManager()?.pokePull()
+      getCommsManager()?.pokeSync()
+    })
     scheduler = new Scheduler(getDb(), getTaskRunner())
     scheduler.start()
     const win = createMainWindow()

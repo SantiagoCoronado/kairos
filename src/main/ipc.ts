@@ -468,6 +468,11 @@ export function registerIpc(): void {
     comms.setThreadPinned(db, threadId, pinned)
     broadcast('db:changed', { entity: 'comms' })
   })
+  handle('comms:labels', () => comms.listThreadLabels(db))
+  handle('comms:setThreadLabels', (threadId, labels) => {
+    comms.setThreadLabels(db, threadId, labels)
+    broadcast('db:changed', { entity: 'comms' })
+  })
   handle('comms:archiveThread', (threadId, archived) => manager.setThreadArchived(threadId, archived))
   handle('comms:deleteThread', (threadId) => manager.deleteThread(threadId))
   handle('comms:reorderAccount', (id, beforeId) => {

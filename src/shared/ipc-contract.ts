@@ -225,6 +225,10 @@ export interface IpcApi {
   'comms:markUnread': (threadId: string) => void
   /** pin/unpin to the top of the list; local-only, all providers */
   'comms:pinThread': (threadId: string, pinned: boolean) => void
+  /** distinct labels present on any thread — the filter chips */
+  'comms:labels': () => string[]
+  /** manual label override (empty array clears; auto-label may refill later) */
+  'comms:setThreadLabels': (threadId: string, labels: string[]) => void
   /** archive/unarchive; gmail propagates remotely, others are local-only */
   'comms:archiveThread': (threadId: string, archived: boolean) => Promise<CommsArchiveResult>
   /** gmail only: trash the thread remotely and remove it locally */
@@ -315,6 +319,8 @@ export interface AppSettings {
   translucency: number
   /** show today's Claude Code token usage on the Today view */
   showClaudeUsage: boolean
+  /** background email auto-labeling (haiku batches via the Claude Code login) */
+  autoLabel: boolean
   chatProvider: ChatProvider
   /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
   chatModel: string | null

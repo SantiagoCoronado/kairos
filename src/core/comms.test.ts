@@ -590,6 +590,49 @@ describe('getThreadListItem', () => {
   })
 })
 
+describe('thread labels', () => {
+  const mk = (a: CommsAccount, ext: string, opts: { archived?: boolean; raw?: string } = {}): CommsThread => {
+    const t = comms.upsertThread(db, {
+      account_id: a.id, provider: 'gmail', external_id: ext, kind: 'email', title: `mail ${ext}`
+    }, T0)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: `m-${ext}`, sent_at: T0.toISOString(), body_text: 'hi',
+      raw_json: opts.raw
+    }, T0)
+    if (opts.archived) comms.setThreadArchived(db, t.id, true, later(1))
+    return t
+  }
+
+  it('set/filter/list labels with exact token matching', () => {
+    const a = gmailAccount()
+    const t1 = mk(a, 'e1')
+    const t2 = mk(a, 'e2')
+    comms.setThreadLabels(db, t1.id, ['finance', 'action-needed'], later(1))
+    comms.setThreadLabels(db, t2.id, ['newsletter'], later(1))
+    expect(comms.getThread(db, t1.id)!.labels).toBe('finance,action-needed')
+    expect(comms.listThreads(db, { label: 'finance' }).map((t) => t.id)).toEqual([t1.id])
+    // 'action' must not substring-match 'action-needed'
+    expect(comms.listThreads(db, { label: 'action' })).toHaveLength(0)
+    expect(comms.listThreadLabels(db)).toEqual(['action-needed', 'finance', 'newsletter'])
+    comms.setThreadLabels(db, t1.id, [], later(2))
+    expect(comms.getThread(db, t1.id)!.labels).toBe('')
+  })
+
+  it('work queue picks only unlabeled recent inbox email, with sender and raw', () => {
+    const a = gmailAccount()
+    const fresh = mk(a, 'fresh', { raw: JSON.stringify({ labelIds: ['CATEGORY_PROMOTIONS'] }) })
+    const labeled = mk(a, 'labeled')
+    comms.setThreadLabels(db, labeled.id, ['promo'], later(1))
+    mk(a, 'archived', { archived: true })
+    const q = comms.listUnlabeledEmailThreads(db, new Date('2026-06-01').toISOString(), 10)
+    expect(q.map((t) => t.id)).toEqual([fresh.id])
+    expect(q[0].newest_raw).toContain('CATEGORY_PROMOTIONS')
+    // outside the window → not picked
+    expect(comms.listUnlabeledEmailThreads(db, later(10).toISOString(), 10)).toHaveLength(0)
+  })
+})
+
 describe('attachments', () => {
   it('records, dedupes on re-ingest, caches local_path, cascades with the message', () => {
     const a = gmailAccount()

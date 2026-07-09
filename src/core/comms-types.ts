@@ -41,6 +41,8 @@ export interface CommsThread {
   is_archived: number
   /** pinned threads float to the top of the list (local-only) */
   pinned: number
+  /** comma-joined labels from core/labels.ts taxonomy; '' = not classified yet */
+  labels: string
   created_at: string
   updated_at: string
 }
@@ -123,6 +125,8 @@ export interface ThreadFilter {
   search?: string
   /** archive bucket to show (default 'inbox') */
   box?: 'inbox' | 'archived' | 'all'
+  /** exact-match one label from the taxonomy */
+  label?: string
   /** include threads with sync disabled (default false) */
   includeDisabled?: boolean
   limit?: number

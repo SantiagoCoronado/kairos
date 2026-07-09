@@ -39,6 +39,8 @@ export interface CommsThread {
   sync_cursor: string | null
   /** gmail: no message carries INBOX; slack/whatsapp: local-only flag */
   is_archived: number
+  /** pinned threads float to the top of the list (local-only) */
+  pinned: number
   created_at: string
   updated_at: string
 }

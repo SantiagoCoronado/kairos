@@ -423,6 +423,11 @@ ALTER TABLE agent_task_runs ADD COLUMN output_tokens INTEGER;
 ALTER TABLE agent_task_runs ADD COLUMN cache_read_tokens INTEGER;
 ALTER TABLE agent_task_runs ADD COLUMN cache_creation_tokens INTEGER;
 ALTER TABLE agent_task_runs ADD COLUMN cost_usd REAL;
+`,
+  // 012 — pinned comms threads: pins float to the top of the inbox list.
+  // Local-only (never mirrored to gmail/slack/whatsapp).
+  `
+ALTER TABLE comms_threads ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
 `
 ]
 

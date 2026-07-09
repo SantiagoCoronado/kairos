@@ -13,6 +13,7 @@ import {
   ArchiveRestore,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
   Sparkles
 } from 'lucide-react'
 import type {
@@ -94,8 +95,9 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   const [search, setSearch] = useState('')
   const [threadId, setThreadId] = useState<string | null>(null)
   // the opened thread stays in the list even when a filter (Unread) would now
-  // exclude it — otherwise opening an unread email makes it vanish mid-read
-  const [pinned, setPinned] = useState<CommsThreadListItem | null>(null)
+  // exclude it — otherwise opening an unread email makes it vanish mid-read.
+  // (Unrelated to the user-facing pin feature — this is a selection snapshot.)
+  const [heldThread, setHeldThread] = useState<CommsThreadListItem | null>(null)
   // archive/delete exit choreography (see removeWithAnimation). Leaving rows
   // are SNAPSHOTS: the refetch drops them from the data almost immediately,
   // and without the snapshot React would yank the row mid-fold (the "snap").
@@ -126,9 +128,9 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     ['comms']
   )
 
-  // filter changes drop the pin (and with it, eventually, the selection)
+  // filter changes drop the held thread (and with it, eventually, the selection)
   useEffect(() => {
-    setPinned(null)
+    setHeldThread(null)
   }, [accountId, provider, unreadOnly, box, search])
 
   // While a fold is playing, the list renders from a frozen copy of itself:
@@ -146,19 +148,21 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     // acted-on threads stay hidden until the refetch drops them (no flicker)
     let list = hiddenIds.size ? threads.filter((t) => !hiddenIds.has(t.id)) : threads
     // the open thread survives filter refetches via its snapshot
-    if (pinned && !hiddenIds.has(pinned.id) && !list.some((t) => t.id === pinned.id)) {
-      list = [...list, pinned].sort((a, b) =>
-        (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
+    if (heldThread && !hiddenIds.has(heldThread.id) && !list.some((t) => t.id === heldThread.id)) {
+      list = [...list, heldThread].sort(
+        (a, b) =>
+          b.pinned - a.pinned ||
+          (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
       )
     }
     if (leaving.size > 0) frozen.current = list
     return list
-  }, [threads, pinned, leaving, hiddenIds])
+  }, [threads, heldThread, leaving, hiddenIds])
 
   const selectedAccount = accounts?.find((a) => a.id === accountId) ?? null
   const thread = displayThreads?.find((t) => t.id === threadId) ?? null
 
-  // keep selection valid when the thread leaves both the list and the pin
+  // keep selection valid when the thread leaves both the list and the held snapshot
   useEffect(() => {
     if (threadId && displayThreads && !displayThreads.some((t) => t.id === threadId)) {
       setThreadId(null)
@@ -167,14 +171,14 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
 
   const openThread = (t: CommsThreadListItem): void => {
     setThreadId(t.id)
-    setPinned({ ...t, unread_count: 0 })
+    setHeldThread({ ...t, unread_count: 0 })
     setMode('threads')
     if (t.unread_count > 0) void api.invoke('comms:markRead', t.id)
   }
 
   const closeThread = (): void => {
     setThreadId(null)
-    setPinned(null)
+    setHeldThread(null)
   }
 
   /**
@@ -236,6 +240,15 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   /** mark unread but keep it open — the badge flips, reading continues */
   const markUnread = (t: CommsThreadListItem): void => {
     void api.invoke('comms:markUnread', t.id)
+  }
+
+  /** pin/unpin — local-only, floats the thread to the top of the list */
+  const togglePin = (t: CommsThreadListItem): void => {
+    const next = t.pinned !== 1
+    // keep the held snapshot honest so the header icon flips even when the
+    // thread is only in the list via the snapshot (e.g. under the Unread filter)
+    setHeldThread((h) => (h && h.id === t.id ? { ...h, pinned: next ? 1 : 0 } : h))
+    void api.invoke('comms:pinThread', t.id, next)
   }
 
   const selectAccount = (id: string | null): void => {
@@ -477,6 +490,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                   active={threadId === t.id}
                   leaving={leaving.has(t.id)}
                   onClick={() => openThread(t)}
+                  onTogglePin={() => togglePin(t)}
                 />
               ))}
             </>
@@ -497,6 +511,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
             onArchive={() => archiveThread(thread)}
             onDelete={() => deleteThread(thread)}
             onMarkUnread={() => markUnread(thread)}
+            onTogglePin={() => togglePin(thread)}
           />
         ) : (
           <EmptyState>Select a conversation.</EmptyState>
@@ -738,7 +753,8 @@ function ThreadRow({
   active,
   showProvider,
   leaving,
-  onClick
+  onClick,
+  onTogglePin
 }: {
   thread: CommsThreadListItem
   active: boolean
@@ -746,21 +762,26 @@ function ThreadRow({
   /** plays the exit animation (slide right + collapse) before removal */
   leaving: boolean
   onClick: () => void
+  onTogglePin: () => void
 }): React.JSX.Element {
   const Icon = PROVIDER_ICON[thread.provider]
   const { name, title } = threadLabel(thread)
-  const ref = useRef<HTMLButtonElement>(null)
+  const ref = useRef<HTMLDivElement>(null)
   // keyboard navigation can select a row that's scrolled out of the list —
   // keep the active one visible (nearest = no jump when it's already in view)
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: 'nearest' })
   }, [active])
   return (
-    <button
+    // div, not button: the pin toggle nests inside and buttons can't nest
+    <div
       ref={ref}
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onClick()}
       className={cn(
-        'thread-row w-full text-left px-3 py-2 border-b border-border/50 hover:bg-raised/50',
+        'thread-row group w-full text-left px-3 py-2 border-b border-border/50 hover:bg-raised/50 cursor-default',
         active && 'bg-raised',
         leaving && 'thread-row-leaving'
       )}
@@ -776,6 +797,21 @@ function ThreadRow({
           {name && <span className="text-accent">{name} · </span>}
           {title}
         </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onTogglePin()
+          }}
+          title={thread.pinned === 1 ? 'Unpin' : 'Pin to top'}
+          className={cn(
+            'shrink-0 h-4 w-4 rounded flex items-center justify-center',
+            thread.pinned === 1
+              ? 'text-accent'
+              : 'text-faint hover:text-text opacity-0 group-hover:opacity-100'
+          )}
+        >
+          <Pin size={11} className={thread.pinned === 1 ? 'fill-current' : undefined} />
+        </button>
         <span className="font-mono text-[10px] text-faint shrink-0">
           {timeAgo(thread.last_message_at)}
         </span>
@@ -788,7 +824,7 @@ function ThreadRow({
           </span>
         )}
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -921,7 +957,8 @@ function ThreadPane({
   onOpenPerson,
   onArchive,
   onDelete,
-  onMarkUnread
+  onMarkUnread,
+  onTogglePin
 }: {
   thread: CommsThreadListItem
   onOpenPerson?: (id: string) => void
@@ -929,6 +966,7 @@ function ThreadPane({
   onArchive: () => void
   onDelete: () => void
   onMarkUnread: () => void
+  onTogglePin: () => void
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -940,7 +978,7 @@ function ThreadPane({
   }, [messages, thread.id])
 
   // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
-  // u = mark unread + back to list, r = focus the reply box
+  // u = mark unread + back to list, p = pin/unpin, r = focus the reply box
   useEffect(() => {
     const down = (e: KeyboardEvent): void => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping()) return
@@ -950,6 +988,8 @@ function ThreadPane({
         onDelete()
       } else if (e.key === 'u') {
         onMarkUnread()
+      } else if (e.key === 'p') {
+        onTogglePin()
       } else if (e.key === 'r') {
         e.preventDefault()
         document.getElementById('inbox-reply')?.focus()
@@ -957,7 +997,7 @@ function ThreadPane({
     }
     window.addEventListener('keydown', down)
     return () => window.removeEventListener('keydown', down)
-  }, [thread.id, thread.provider, onArchive, onDelete, onMarkUnread])
+  }, [thread.id, thread.provider, onArchive, onDelete, onMarkUnread, onTogglePin])
 
   return (
     <>
@@ -980,6 +1020,16 @@ function ThreadPane({
             </>
           )}
         </span>
+        <button
+          onClick={onTogglePin}
+          title={thread.pinned === 1 ? 'Unpin (p)' : 'Pin to top (p)'}
+          className={cn(
+            'shrink-0 h-6 w-6 rounded flex items-center justify-center hover:bg-raised',
+            thread.pinned === 1 ? 'text-accent' : 'text-muted hover:text-text'
+          )}
+        >
+          <Pin size={14} className={thread.pinned === 1 ? 'fill-current' : undefined} />
+        </button>
         <button
           onClick={onMarkUnread}
           title="Mark as unread (u)"

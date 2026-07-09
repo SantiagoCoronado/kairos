@@ -442,6 +442,38 @@ describe('archive', () => {
   })
 })
 
+describe('unreadInboundMessages', () => {
+  it('returns only unread inbound rows, oldest first, with raw_json intact', () => {
+    const a = comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: '521555@s.whatsapp.net', display_name: '+521555'
+    }, T0)
+    const t = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: 'g1@g.us', kind: 'group', title: 'Familia'
+    }, T0)
+    const key = { remoteJid: 'g1@g.us', id: 'MSG2', participant: 'abc@lid' }
+    const rows = [
+      { ext: 'MSG1', mins: 0, is_me: false, is_read: true },
+      { ext: 'MSG2', mins: 5, is_me: false, is_read: false, raw: JSON.stringify({ key }) },
+      { ext: 'MSG3', mins: 10, is_me: true, is_read: true }
+    ]
+    for (const r of rows) {
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: a.id, provider: 'whatsapp',
+        external_id: r.ext, is_me: r.is_me, is_read: r.is_read,
+        sent_at: later(r.mins).toISOString(), body_text: r.ext,
+        raw_json: 'raw' in r ? r.raw : undefined
+      }, later(r.mins))
+    }
+    const unread = comms.unreadInboundMessages(db, t.id)
+    expect(unread.map((m) => m.external_id)).toEqual(['MSG2'])
+    // the stored key round-trips with the group participant jid readMessages() needs
+    expect(JSON.parse(unread[0].raw_json!)).toEqual({ key })
+    // marking read empties the receipt list
+    comms.markThreadRead(db, t.id, later(11))
+    expect(comms.unreadInboundMessages(db, t.id)).toHaveLength(0)
+  })
+})
+
 describe('markThreadUnread', () => {
   it('re-flags only the newest inbound message and returns its external id', () => {
     const a = gmailAccount()

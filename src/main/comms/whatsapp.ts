@@ -9,7 +9,8 @@ import {
   fetchLatestBaileysVersion,
   DisconnectReason,
   type WASocket,
-  type WAMessage
+  type WAMessage,
+  type WAMessageKey
 } from 'baileys'
 import { toDataURL } from 'qrcode'
 import type { DbDriver } from '../../core/driver'
@@ -201,6 +202,28 @@ export class WhatsAppConnection {
     sock.ev.on('groups.update', (updates) => {
       for (const g of updates) this.applyGroupSubject(g.id, g.subject)
     })
+
+    // read state mirrored from the phone via app-state sync: reading a chat
+    // there emits unreadCount 0, marking it unread emits -1 (baileys
+    // chat-utils); positive counts are increments our own ingest already tracks
+    sock.ev.on('chats.update', (updates) => {
+      let changed = false
+      for (const c of updates) {
+        if (!c.id) continue
+        if (c.name) this.names.set(c.id, c.name)
+        if (typeof c.unreadCount !== 'number') continue
+        const thread = repo.getThreadByExternal(this.db, this.accountId, c.id)
+        if (!thread) continue
+        if (c.unreadCount === 0 && thread.unread_count > 0) {
+          repo.markThreadRead(this.db, thread.id)
+          changed = true
+        } else if (c.unreadCount === -1 && thread.unread_count === 0) {
+          repo.markThreadUnread(this.db, thread.id)
+          changed = true
+        }
+      }
+      if (changed) this.opts.onChanged()
+    })
   }
 
   /** Contact records carry the lid AND the phone jid — key the name under every form. */
@@ -305,7 +328,34 @@ export class WhatsAppConnection {
       sent_at: new Date(ts || Date.now()).toISOString(),
       body_text: text,
       has_attachments: hasAttachment,
-      is_read: asRead
+      is_read: asRead,
+      // the full key (incl. group participant jid) is what readMessages()
+      // needs to send a read receipt for this message later
+      raw_json: isMe ? undefined : JSON.stringify({ key: msg.key })
+    })
+  }
+
+  /**
+   * Send read receipts to the phone for a thread's still-unread inbound
+   * messages. Must run BEFORE the local mark-read flips is_read (the unread
+   * rows ARE the receipt list). Fire-and-forget: a receipt failure never
+   * blocks the local state change.
+   */
+  sendReadReceipts(threadId: string): void {
+    if (!this.sock || this.stopped) return
+    const keys: WAMessageKey[] = []
+    for (const m of repo.unreadInboundMessages(this.db, threadId)) {
+      if (!m.raw_json) continue // rows ingested before receipt support
+      try {
+        const { key } = JSON.parse(m.raw_json) as { key?: WAMessageKey }
+        if (key?.remoteJid && key.id) keys.push(key)
+      } catch {
+        // corrupt raw_json: skip this message
+      }
+    }
+    if (keys.length === 0) return
+    void this.sock.readMessages(keys).catch((err) => {
+      logLine('warn', 'comms', `wa read receipts failed: ${err instanceof Error ? err.message : String(err)}`)
     })
   }
 

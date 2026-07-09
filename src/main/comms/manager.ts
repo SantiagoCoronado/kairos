@@ -201,10 +201,12 @@ export class CommsSyncManager {
     return message
   }
 
-  /** Mark read locally right away; propagate to Gmail in the background. */
+  /** Mark read locally right away; propagate to Gmail/WhatsApp in the background. */
   markRead(threadId: string): void {
     const thread = repo.getThread(this.db, threadId)
     if (!thread) return
+    // WhatsApp receipts need the unread rows — gather them before the local flip
+    if (thread.provider === 'whatsapp') this.wa.get(thread.account_id)?.sendReadReceipts(threadId)
     repo.markThreadRead(this.db, threadId)
     this.notifyChanged()
     if (thread.provider !== 'gmail') return

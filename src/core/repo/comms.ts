@@ -374,6 +374,14 @@ export function markThreadRead(db: DbDriver, threadId: string, now: Date = new D
   })
 }
 
+/** The inbound messages still unread in a thread — the WhatsApp read-receipt list. */
+export function unreadInboundMessages(db: DbDriver, threadId: string): CommsMessage[] {
+  return db.all<CommsMessage>(
+    'SELECT * FROM comms_messages WHERE thread_id = ? AND is_me = 0 AND is_read = 0 ORDER BY sent_at',
+    threadId
+  )
+}
+
 /** Archive/unarchive a thread; gmail messages mirror the flag so local state matches the remote modify. */
 export function setThreadArchived(
   db: DbDriver,

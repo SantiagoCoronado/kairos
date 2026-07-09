@@ -45,6 +45,7 @@ import type {
   CommsThreadListItem,
   CommsMessage,
   CommsProvider,
+  MessageSearchHit,
   ThreadFilter
 } from '../core/comms-types'
 
@@ -204,6 +205,13 @@ export interface IpcApi {
   'comms:accounts': () => CommsAccount[]
   'comms:unreadTotal': () => number
   'comms:threads': (f: ThreadFilter) => CommsThreadListItem[]
+  /** one thread as a list row — for opening search hits not in the current list */
+  'comms:thread': (threadId: string) => CommsThreadListItem | null
+  /** message-body search across all boxes (LIKE over body/sender/title) */
+  'comms:search': (
+    query: string,
+    opts?: { accountId?: string; provider?: CommsProvider; limit?: number }
+  ) => MessageSearchHit[]
   /** every thread of one account, incl. inactive/disabled — for channel opt-in UI */
   'comms:accountThreads': (accountId: string) => CommsThread[]
   'comms:messages': (threadId: string) => CommsMessage[]

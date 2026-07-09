@@ -256,6 +256,24 @@ export function setThreadPinned(db: DbDriver, threadId: string, pinned: boolean,
   )
 }
 
+/** One thread as a list row (person join included) — for opening search hits
+ *  whose thread isn't in the current list. */
+export function getThreadListItem(db: DbDriver, threadId: string): CommsThreadListItem | null {
+  return (
+    db.get<CommsThreadListItem>(
+      `SELECT t.*, p.id AS person_id, p.name AS person_name
+       FROM comms_threads t
+       LEFT JOIN people p ON p.id = (
+         SELECT m.person_id FROM comms_messages m
+         WHERE m.thread_id = t.id AND m.is_me = 0 AND m.person_id IS NOT NULL
+         ORDER BY m.sent_at DESC LIMIT 1
+       )
+       WHERE t.id = ?`,
+      threadId
+    ) ?? null
+  )
+}
+
 /** All threads for an account regardless of activity — for sync loops and channel opt-in UI. */
 export function listAccountThreads(db: DbDriver, accountId: string): CommsThread[] {
   return db.all<CommsThread>(
@@ -692,13 +710,17 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
 }
 
 /** inbound unread messages stored since `sinceIso` — the "new mail arrived"
- *  signal for automation event triggers (created_at is stamped at insert) */
+ *  signal for automation event triggers (created_at is stamped at insert).
+ *  Requires a recent sent_at too: backfill sweeps ingest months-old unread
+ *  mail whose created_at is now, and those must not fire "email received". */
 export function countNewInbound(db: DbDriver, accountId: string, sinceIso: string): number {
+  const recentIso = new Date(Date.parse(sinceIso) - 24 * 60 * 60 * 1000).toISOString()
   const row = db.get<{ n: number }>(
     `SELECT COUNT(*) AS n FROM comms_messages
-     WHERE account_id = ? AND is_me = 0 AND is_read = 0 AND created_at >= ?`,
+     WHERE account_id = ? AND is_me = 0 AND is_read = 0 AND created_at >= ? AND sent_at >= ?`,
     accountId,
-    sinceIso
+    sinceIso,
+    recentIso
   )
   return row?.n ?? 0
 }
@@ -717,11 +739,15 @@ export function listMessages(db: DbDriver, threadId: string, limit = 200): Comms
 export function searchMessages(
   db: DbDriver,
   query: string,
-  opts: { provider?: CommsProvider; personId?: string; limit?: number } = {}
+  opts: { accountId?: string; provider?: CommsProvider; personId?: string; limit?: number } = {}
 ): MessageSearchHit[] {
   const where: string[] = ['(m.body_text LIKE ? OR m.sender_name LIKE ? OR t.title LIKE ?)']
   const q = `%${query}%`
   const params: SqlValue[] = [q, q, q]
+  if (opts.accountId) {
+    where.push('m.account_id = ?')
+    params.push(opts.accountId)
+  }
   if (opts.provider) {
     where.push('m.provider = ?')
     params.push(opts.provider)

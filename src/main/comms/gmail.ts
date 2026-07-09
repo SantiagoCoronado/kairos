@@ -14,6 +14,12 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send openid email'
 const BACKFILL_QUERY = 'newer_than:30d -in:spam -in:trash'
 const BACKFILL_CAP = 500
+// progressive deep backfill: after the initial window is in, keep extending
+// history one page per sync tick (15 s apart) until a year is covered or the
+// message cap is hit — search over archived mail needs the bodies local
+const DEEP_BACKFILL_QUERY = 'older_than:30d newer_than:1y -in:spam -in:trash'
+const DEEP_BACKFILL_PAGE = 100
+const DEEP_BACKFILL_CAP = 5000
 const FETCH_CONCURRENCY = 4
 
 interface GmailTokens {
@@ -396,6 +402,41 @@ async function backfill(db: DbDriver, account: CommsAccount): Promise<number> {
   return fetchAndIngest(db, account, ids.slice(0, BACKFILL_CAP))
 }
 
+interface GmailSyncState {
+  historyId?: string
+  backfilled?: boolean
+  /** deep backfill list cursor; null/absent = start of the sweep */
+  deepPageToken?: string | null
+  /** messages ingested by the deep sweep so far (for the cap) */
+  deepCount?: number
+  deepDone?: boolean
+}
+
+/** One page of the deep backfill per call. Errors (expired page token,
+ *  transient network) reset the cursor — inserts are idempotent, so the
+ *  restarted sweep just re-lists what it already has. */
+async function deepBackfillChunk(db: DbDriver, account: CommsAccount, state: GmailSyncState): Promise<number> {
+  try {
+    const p = new URLSearchParams({ q: DEEP_BACKFILL_QUERY, maxResults: String(DEEP_BACKFILL_PAGE) })
+    if (state.deepPageToken) p.set('pageToken', state.deepPageToken)
+    const page = await gmailFetch(db, account, `/messages?${p}`)
+    const ids = (((page['messages'] as { id: string }[] | undefined) ?? [])).map((m) => m.id)
+    const added = await fetchAndIngest(db, account, ids)
+    const count = (state.deepCount ?? 0) + ids.length
+    const next = page['nextPageToken'] as string | undefined
+    if (!next || count >= DEEP_BACKFILL_CAP) {
+      repo.patchSyncState(db, account.id, { deepPageToken: null, deepCount: count, deepDone: true })
+    } else {
+      repo.patchSyncState(db, account.id, { deepPageToken: next, deepCount: count })
+    }
+    return added
+  } catch (err) {
+    if (err instanceof GmailAuthError) throw err
+    repo.patchSyncState(db, account.id, { deepPageToken: null })
+    return 0
+  }
+}
+
 interface GmailLabelEvent {
   message: { id: string }
   labelIds?: string[]
@@ -458,7 +499,7 @@ async function incremental(db: DbDriver, account: CommsAccount, historyId: strin
 
 /** One sync pass. Returns the number of newly ingested messages. */
 export async function syncGmailAccount(db: DbDriver, account: CommsAccount): Promise<number> {
-  let state: { historyId?: string; backfilled?: boolean } = {}
+  let state: GmailSyncState = {}
   try {
     state = JSON.parse(account.sync_state) as typeof state
   } catch {
@@ -478,8 +519,9 @@ export async function syncGmailAccount(db: DbDriver, account: CommsAccount): Pro
     return 0
   }
 
+  let added: number
   try {
-    return await incremental(db, account, state.historyId)
+    added = await incremental(db, account, state.historyId)
   } catch (err) {
     if (err instanceof GmailNotFound) {
       // history expired (404) — reset the cursor and re-backfill; inserts are idempotent
@@ -489,6 +531,9 @@ export async function syncGmailAccount(db: DbDriver, account: CommsAccount): Pro
     }
     throw err
   }
+  // fresh mail is in — spend the rest of the tick extending history backwards
+  if (!state.deepDone) added += await deepBackfillChunk(db, account, state)
+  return added
 }
 
 // ---------- send ----------

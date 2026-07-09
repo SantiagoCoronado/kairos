@@ -263,6 +263,16 @@ export function setThreadSyncEnabled(db: DbDriver, threadId: string, enabled: bo
   )
 }
 
+/** Bulk channel opt-in/out — the "enable all" path in the channel picker. */
+export function setThreadsSyncEnabled(
+  db: DbDriver,
+  threadIds: string[],
+  enabled: boolean,
+  now: Date = new Date()
+): void {
+  for (const id of threadIds) setThreadSyncEnabled(db, id, enabled, now)
+}
+
 export function setThreadTitle(db: DbDriver, threadId: string, title: string, now: Date = new Date()): void {
   db.run('UPDATE comms_threads SET title = ?, updated_at = ? WHERE id = ?', title, nowIso(now), threadId)
 }

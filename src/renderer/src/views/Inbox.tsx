@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Mail,
   RefreshCw,
+  Hash,
   Link2,
   SlidersHorizontal,
   PenLine,
@@ -449,6 +450,9 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
               </button>
             )}
           </div>
+          {selectedAccount?.provider === 'slack' && mode === 'threads' && (
+            <SlackChannelHint account={selectedAccount} onOpen={() => setMode('channels')} />
+          )}
           {selectedAccount?.status === 'error' && (
             <p className="text-[11px] text-danger truncate" title={selectedAccount.error ?? ''}>
               sync error: {selectedAccount.error}
@@ -788,14 +792,111 @@ function ThreadRow({
   )
 }
 
+/** Nudge shown while a Slack account syncs zero channels: DMs work out of the
+ *  box, but the channel opt-in is invisible unless you know the toggle exists. */
+function SlackChannelHint({
+  account,
+  onOpen
+}: {
+  account: CommsAccount
+  onOpen: () => void
+}): React.JSX.Element | null {
+  const { data: all } = useInvoke('comms:accountThreads', [account.id], ['comms'])
+  const channels = all?.filter((t) => t.kind === 'channel') ?? []
+  if (channels.length === 0 || channels.some((c) => c.sync_enabled === 1)) return null
+  return (
+    <button
+      onClick={onOpen}
+      className="w-full text-left px-2 py-1.5 rounded border border-border bg-raised/40 text-[11px] text-muted hover:text-text hover:border-border-strong transition-colors"
+    >
+      <Hash size={11} className="inline mr-1 -mt-px" />
+      {channels.length} channels available, none syncing yet.{' '}
+      <span className="text-accent">Pick channels →</span>
+    </button>
+  )
+}
+
+/** Keep bulk-enable well under Slack's rate limits — each synced channel is a
+ *  conversations.history call per 90 s poll. */
+const BULK_ENABLE_CAP = 30
+
 function ChannelManager({ account }: { account: CommsAccount }): React.JSX.Element {
   const { data: all } = useInvoke('comms:accountThreads', [account.id], ['comms'])
   const channels = useMemo(() => all?.filter((t) => t.kind === 'channel') ?? [], [all])
+  const enabled = useMemo(() => channels.filter((c) => c.sync_enabled === 1), [channels])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const room = Math.max(0, BULK_ENABLE_CAP - enabled.length)
+  const off = channels.filter((c) => c.sync_enabled !== 1)
+  const toEnable = off.slice(0, room)
+  // note stays while at cap so the leftover channels aren't a mystery
+  const capped = off.length > 0 && (toEnable.length < off.length || room === 0)
+
+  const bulk = async (ids: string[], on: boolean): Promise<void> => {
+    setBusy(true)
+    try {
+      await api.invoke('comms:setThreadsSync', ids, on)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const refresh = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.invoke('comms:refreshChannels', account.id)
+      if (!res.ok) setError(res.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div>
-      <p className="px-3 py-2 text-[11px] text-faint border-b border-border/50">
-        Channels are off by default — pick the ones worth syncing.
-      </p>
+      <div className="px-3 py-2 space-y-1.5 border-b border-border/50">
+        <p className="text-[11px] text-faint">
+          Channels are off by default — pick the ones worth syncing.
+        </p>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-muted">
+            {enabled.length} of {channels.length} syncing
+          </span>
+          <span className="flex-1" />
+          {toEnable.length > 0 && (
+            <button
+              disabled={busy}
+              onClick={() => void bulk(toEnable.map((c) => c.id), true)}
+              className="px-2 py-0.5 rounded text-[11px] border border-border text-muted hover:text-text hover:border-border-strong disabled:opacity-50"
+            >
+              Enable all{capped ? ` (first ${toEnable.length})` : ''}
+            </button>
+          )}
+          {enabled.length > 0 && (
+            <button
+              disabled={busy}
+              onClick={() => void bulk(enabled.map((c) => c.id), false)}
+              className="px-2 py-0.5 rounded text-[11px] border border-border text-muted hover:text-text hover:border-border-strong disabled:opacity-50"
+            >
+              Disable all
+            </button>
+          )}
+          <button
+            disabled={busy}
+            onClick={() => void refresh()}
+            title="Re-list channels from Slack"
+            className="h-5 w-5 rounded flex items-center justify-center text-faint hover:text-text hover:bg-raised disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={busy ? 'animate-spin' : undefined} />
+          </button>
+        </div>
+        {capped && (
+          <p className="text-[10.5px] text-faint">
+            capped at {BULK_ENABLE_CAP} synced channels to stay under Slack rate limits
+          </p>
+        )}
+        {error && <p className="text-[11px] text-danger truncate" title={error}>{error}</p>}
+      </div>
       {channels.length === 0 && <EmptyState>No channels found yet.</EmptyState>}
       {channels.map((c) => (
         <label

@@ -213,6 +213,31 @@ describe('threads', () => {
     expect(comms.listThreads(db, {})).toHaveLength(1)
     expect(comms.listThreads(db, { includeDisabled: true })).toHaveLength(2)
   })
+
+  it('bulk sync toggle flips visibility for all given channels', () => {
+    const a = comms.upsertAccount(db, {
+      provider: 'slack', external_id: 'T1:U1', display_name: 'Team'
+    }, T0)
+    const mkChannel = (ext: string): CommsThread => {
+      const t = comms.upsertThread(db, {
+        account_id: a.id, provider: 'slack', external_id: ext,
+        kind: 'channel', title: ext, sync_enabled: 0
+      }, T0)
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: a.id, provider: 'slack',
+        external_id: `m-${ext}`, sent_at: T0.toISOString(), body_text: 'hi'
+      }, T0)
+      return t
+    }
+    const c1 = mkChannel('C1')
+    const c2 = mkChannel('C2')
+    mkChannel('C3')
+    expect(comms.listThreads(db, {})).toHaveLength(0)
+    comms.setThreadsSyncEnabled(db, [c1.id, c2.id], true, later(1))
+    expect(new Set(comms.listThreads(db, {}).map((t) => t.id))).toEqual(new Set([c1.id, c2.id]))
+    comms.setThreadsSyncEnabled(db, [c1.id], false, later(2))
+    expect(comms.listThreads(db, {}).map((t) => t.id)).toEqual([c2.id])
+  })
 })
 
 describe('thread title upserts', () => {

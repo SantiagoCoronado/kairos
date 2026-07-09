@@ -81,6 +81,11 @@ export class WhatsAppConnection {
   private reconnectDelay = 2_000
   /** jid → chat/contact display name, fed by history + contact events */
   private names = new Map<string, string>()
+  /** jids whose name came from a message pushName — contact-store names win */
+  private pushNamed = new Set<string>()
+  /** set by ingest() when a pushName taught us a new chat name — the batch
+   *  handler then sweeps placeholder threads (cleared by applyNames) */
+  private namesLearned = false
   /** names already swept into the DB, so applyNames stays incremental */
   private appliedNames = new Map<string, string>()
   /** address-book phones already looked up via onWhatsApp this session */
@@ -128,7 +133,7 @@ export class WhatsAppConnection {
           try {
             const groups = await sock.groupFetchAllParticipating()
             for (const [gid, meta] of Object.entries(groups)) {
-              if (meta.subject) this.names.set(gid, meta.subject)
+              if (meta.subject) this.applyGroupSubject(gid, meta.subject)
             }
             this.applyNames()
           } catch {
@@ -182,8 +187,19 @@ export class WhatsAppConnection {
           if (type === 'notify' && !msg.key.fromMe) inbound = true
         }
       }
+      // a pushName may have just named a chat that already exists as a
+      // placeholder thread — sweep so the list fixes itself immediately
+      if (this.namesLearned) this.applyNames()
       if (any) this.opts.onChanged()
       if (inbound) this.opts.onInbound?.()
+    })
+
+    // groups created or renamed after connect: subjects arrive out-of-band
+    sock.ev.on('groups.upsert', (metas) => {
+      for (const g of metas) this.applyGroupSubject(g.id, g.subject)
+    })
+    sock.ev.on('groups.update', (updates) => {
+      for (const g of updates) this.applyGroupSubject(g.id, g.subject)
     })
   }
 
@@ -192,7 +208,21 @@ export class WhatsAppConnection {
     const name = c.name || c.notify || c.verifiedName
     if (!name) return
     for (const j of [c.id, c.lid, c.jid]) {
-      if (j) this.names.set(j, name)
+      if (j) {
+        this.names.set(j, name)
+        this.pushNamed.delete(j) // contact-store name outranks a pushName
+      }
+    }
+  }
+
+  /** Group subjects arrive out-of-band; a rename must overwrite the old real title too. */
+  private applyGroupSubject(gid?: string | null, subject?: string | null): void {
+    if (!gid || !subject) return
+    this.names.set(gid, subject)
+    const thread = repo.getThreadByExternal(this.db, this.accountId, gid)
+    if (thread && thread.title !== subject) {
+      repo.setThreadTitle(this.db, thread.id, subject)
+      this.opts.onChanged()
     }
   }
 
@@ -202,6 +232,7 @@ export class WhatsAppConnection {
 
   /** Retitle placeholder threads and fix placeholder sender names from the name book. */
   private applyNames(): void {
+    this.namesLearned = false
     if (this.names.size === 0) return
     const started = Date.now()
     let changed = false
@@ -235,6 +266,18 @@ export class WhatsAppConnection {
     const isGroup = isGroupJid(chatJid)
     const isMe = Boolean(msg.key.fromMe)
     const senderJid = isGroup ? (msg.key.participant ?? '') : chatJid
+    // DMs: an inbound pushName is the chat's name when nothing better is
+    // known. Feeding it into the name book (not just this message's title)
+    // is what keeps outbound messages from re-computing 'WhatsApp chat' and
+    // lets applyNames() fix an already-placeholder thread.
+    if (!isGroup && !isMe && msg.pushName) {
+      const known = this.names.get(chatJid)
+      if (!known || (this.pushNamed.has(chatJid) && known !== msg.pushName)) {
+        this.names.set(chatJid, msg.pushName)
+        this.pushNamed.add(chatJid)
+        this.namesLearned = true
+      }
+    }
     // lid jids are opaque ids, not phone numbers — never render them as "+…"
     const jidLabel = (jid: string): string =>
       isLidJid(jid) || isGroupJid(jid) ? 'WhatsApp chat' : `+${jidUser(jid)}`

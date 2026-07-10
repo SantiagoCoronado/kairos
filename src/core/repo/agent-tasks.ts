@@ -306,6 +306,21 @@ export function getRunBySession(db: DbDriver, sessionId: string): AgentTaskRun |
   return db.get<AgentTaskRun>('SELECT * FROM agent_task_runs WHERE session_id = ?', sessionId)
 }
 
+/** sidebar badge feed: in-flight runs + runs finished after the seen marker */
+export function activityCounts(
+  db: DbDriver,
+  seenIso: string | null
+): { running: number; unseenFinished: number } {
+  const running = db.get<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM agent_task_runs WHERE status = 'running'"
+  )!.n
+  const unseenFinished = db.get<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM agent_task_runs WHERE finished_at IS NOT NULL AND finished_at > ?',
+    seenIso ?? ''
+  )!.n
+  return { running, unseenFinished }
+}
+
 export function listRuns(db: DbDriver, taskId: string, limit = 30): AgentTaskRun[] {
   return db.all<AgentTaskRun>(
     'SELECT * FROM agent_task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT ?',

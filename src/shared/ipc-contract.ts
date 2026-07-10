@@ -107,6 +107,10 @@ export interface IpcApi {
   'agentTasks:usage': () => AgentTaskUsage[]
   /** NL → structured draft for the create form (one-shot model call) */
   'agentTasks:parse': (text: string) => Promise<AgentTaskParseResult>
+  /** sidebar badge: in-flight runs + finished runs not yet seen */
+  'agentTasks:activity': () => { running: number; unseenFinished: number }
+  /** renderer reports Automations view visibility; while open, runs are seen */
+  'agentTasks:setViewActive': (active: boolean) => void
 
   'projects:list': (f: { status?: ProjectStatus; area?: Area }) => Project[]
   'projects:create': (input: NewProject) => Project
@@ -333,6 +337,9 @@ export interface AppSettings {
   /** OAuth client for the user's own Slack app */
   slackClientId: string | null
   slackClientSecret: string | null
+  /** UI cursor, not a user preference: newest automation run already seen
+   *  in the Automations view (drives the sidebar unseen-runs badge) */
+  automationsSeenAt: string | null
 }
 
 export type AuthStatus =

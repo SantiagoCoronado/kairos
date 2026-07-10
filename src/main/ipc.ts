@@ -183,6 +183,21 @@ export function registerIpc(): void {
   handle('agentTasks:usage', () => agentTasksRepo.usageByTask(db))
   handle('agentTasks:parse', (text) => parseTaskDraft(text))
 
+  // unseen-runs badge: while the Automations view is open every finished run
+  // is immediately "seen"; the marker persists in settings across restarts
+  let automationsViewActive = false
+  handle('agentTasks:setViewActive', (active) => {
+    automationsViewActive = active
+    if (active) {
+      saveSettings({ automationsSeenAt: new Date().toISOString() })
+      broadcast('db:changed', { entity: 'agent_tasks' })
+    }
+  })
+  handle('agentTasks:activity', () => {
+    if (automationsViewActive) saveSettings({ automationsSeenAt: new Date().toISOString() })
+    return agentTasksRepo.activityCounts(db, getSettings().automationsSeenAt)
+  })
+
   // event-triggered automations: count occurrences, fire on every Nth.
   // A task never triggers itself (isRunning guard) and nothing fires while
   // the master switch is off.

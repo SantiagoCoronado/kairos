@@ -29,6 +29,7 @@ import type {
 import type { AppSettings } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Select, Chip, Segmented, EmptyState, cn } from '../components/ui'
+import { Markdown } from '../components/Markdown'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -232,6 +233,15 @@ export function AutomationsView({
   useEffect(() => {
     void api.invoke('settings:get').then(setSettings)
   }, [])
+
+  // while this view is open, finished runs count as seen (no sidebar badge)
+  useEffect(() => {
+    void api.invoke('agentTasks:setViewActive', true)
+    return () => {
+      void api.invoke('agentTasks:setViewActive', false)
+    }
+  }, [])
+
   const enabled = settings?.automationsEnabled ?? true
   const toggleMaster = (): void => {
     void api.invoke('settings:set', { automationsEnabled: !enabled }).then(setSettings)
@@ -821,9 +831,10 @@ function RunRow({
           )}
           {run.error && <p className="text-[12px] text-danger whitespace-pre-wrap">{run.error}</p>}
           {run.result && (
-            <p className="text-[12.5px] text-muted whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
-              {run.result}
-            </p>
+            <Markdown
+              text={run.result}
+              className="text-[12.5px] text-muted leading-relaxed max-h-72 overflow-y-auto"
+            />
           )}
           {!run.error && !run.result && run.status === 'running' && (
             <p className="text-[12px] text-faint font-mono animate-pulse">running…</p>

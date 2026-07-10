@@ -4,6 +4,7 @@ import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
 import { calendarToday } from './calendar'
+import { searchMacContacts } from './contacts'
 import { ChatManager } from './chat/agent'
 import { getSettings, saveSettings } from './settings'
 import { getClaudeLimits, getClaudeUsageStats, getClaudeUsageToday } from './claude-usage'
@@ -237,6 +238,7 @@ export function registerIpc(): void {
     broadcast('db:changed', { entity: 'comms' })
   })
   handle('people:identities', (personId) => comms.listIdentitiesForPerson(db, personId))
+  handle('people:findByContact', (emails, phones) => people.findPersonByContact(db, emails, phones) ?? null)
 
   handle('interactions:log', (input) => {
     const i = interactions.logInteraction(db, input)
@@ -310,6 +312,8 @@ export function registerIpc(): void {
   handle('today:get', () => todayAgenda(db))
 
   handle('calendar:today', () => calendarToday())
+
+  handle('contacts:search', (query) => searchMacContacts(query))
 
   // DB-backed calendar: local CRUD on SQLite, with the CalendarSyncManager
   // pushing dirty rows to Google and pulling remote changes in the background.
@@ -473,6 +477,7 @@ export function registerIpc(): void {
   handle('comms:messages', (threadId) => comms.listMessages(db, threadId))
   handle('comms:threadAttachments', (threadId) => comms.listThreadAttachments(db, threadId))
   handle('comms:downloadAttachment', (attachmentId) => manager.downloadAttachment(attachmentId))
+  handle('comms:attachmentData', (attachmentId) => manager.getAttachmentData(attachmentId))
   handle('comms:markRead', (threadId) => {
     manager.markRead(threadId) // local immediately; gmail propagation in background
     broadcast('db:changed', { entity: 'comms' })

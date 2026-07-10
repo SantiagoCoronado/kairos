@@ -1,6 +1,6 @@
 // Kairos contacts helper (Objective-C, same pattern as calendar-helper).
 // Prints the macOS address book as JSON on stdout:
-//   [{"name": "...", "phones": ["+52 55 ..."], "emails": ["..."]}]
+//   [{"name": "...", "org": "...", "phones": ["+52 55 ..."], "emails": ["..."]}]
 // Exit codes: 0 ok · 2 contacts access denied · 3 unexpected failure.
 // TCC note: permission is attributed to the responsible .app bundle that
 // spawned this binary — the Electron app's Info.plist must carry
@@ -53,7 +53,12 @@ int main(void) {
       }
       if (phones.count == 0 && emails.count == 0) return;
 
-      [out addObject:@{@"name" : name, @"phones" : phones, @"emails" : emails}];
+      [out addObject:@{
+        @"name" : name,
+        @"org" : c.organizationName ?: @"",
+        @"phones" : phones,
+        @"emails" : emails
+      }];
     }];
 
     if (!ok) {

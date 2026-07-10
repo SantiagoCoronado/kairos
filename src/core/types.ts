@@ -417,6 +417,7 @@ export interface TaskFilter {
 export interface NewTask {
   title: string
   notes?: string
+  status?: TaskStatus
   area?: Area
   priority?: number
   project_id?: string | null

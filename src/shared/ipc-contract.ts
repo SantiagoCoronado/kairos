@@ -64,6 +64,18 @@ export type CalendarResult =
   | { events: CalendarEvent[] }
   | { error: 'not-authorized' | 'helper-missing' | 'helper-failed' }
 
+export interface MacContact {
+  name: string
+  /** organization name; helpers built before the org field omit it */
+  org?: string
+  phones: string[]
+  emails: string[]
+}
+
+export type ContactsResult =
+  | { contacts: MacContact[] }
+  | { error: 'not-authorized' | 'helper-missing' | 'helper-failed' }
+
 export interface IpcApi {
   'app:ping': () => string
   /** append a renderer-side event to ~/Kairos/logs/app.log */
@@ -121,6 +133,8 @@ export interface IpcApi {
   'people:delete': (id: string) => void
   /** linked comms handles for the detail view's unlink list */
   'people:identities': (personId: string) => CommsIdentity[]
+  /** dedupe lookup against the FULL roster (email exact, phone canonical-suffix) */
+  'people:findByContact': (emails: string[], phones: string[]) => Person | null
 
   'interactions:log': (input: NewInteraction) => Interaction
 
@@ -155,6 +169,9 @@ export interface IpcApi {
   'today:get': () => TodayPayload
 
   'calendar:today': () => Promise<CalendarResult>
+
+  /** macOS address-book autocomplete for the People view (TCC-gated) */
+  'contacts:search': (query: string) => Promise<ContactsResult>
 
   /** DB-backed calendar (local events + google sync) — distinct from the
    *  read-only macOS EventKit 'calendar:today' above */
@@ -227,6 +244,8 @@ export interface IpcApi {
   'comms:threadAttachments': (threadId: string) => CommsAttachment[]
   /** fetch the bytes (cached on disk after the first download), then open the file */
   'comms:downloadAttachment': (attachmentId: string) => Promise<CommsDownloadResult>
+  /** fetch the bytes as a data URL for in-app rendering (voice notes) */
+  'comms:attachmentData': (attachmentId: string) => Promise<CommsAttachmentDataResult>
   'comms:markRead': (threadId: string) => void
   /** re-flag the newest inbound message unread; gmail propagates remotely */
   'comms:markUnread': (threadId: string) => void
@@ -259,6 +278,9 @@ export interface IpcApi {
 }
 
 export type CommsDownloadResult = { ok: true; path: string } | { ok: false; message: string }
+export type CommsAttachmentDataResult =
+  | { ok: true; dataUrl: string }
+  | { ok: false; message: string }
 
 export interface CommsSendInput {
   accountId: string

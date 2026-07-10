@@ -233,6 +233,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
 
         {settings && <ConnectionsSection settings={settings} save={save} />}
 
+        {settings && <RemoteSection settings={settings} save={save} />}
+
         <div className="space-y-1.5">
           <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
             claude subscription
@@ -500,6 +502,79 @@ function ConnectionsSection({
           </div>
         </div>
       </details>
+    </div>
+  )
+}
+
+function RemoteSection({
+  settings,
+  save
+}: {
+  settings: AppSettings
+  save: (patch: Partial<AppSettings>) => void
+}): React.JSX.Element {
+  // settings:set broadcasts db:changed settings, so toggling refreshes this
+  const { data: status } = useInvoke('remote:status', [], ['settings'])
+  const [copied, setCopied] = useState(false)
+
+  const url = status?.urls[0]
+  const copy = (): void => {
+    if (!url) return
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+            remote access
+          </span>
+          <p className="text-[11px] text-faint">
+            Serve the app over your private network (Tailscale / same Wi-Fi) so a phone or
+            browser can use it. Data requires the link&apos;s token; keep it private.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={settings.remoteAccess}
+          onChange={(e) => save({ remoteAccess: e.target.checked })}
+          className="accent-accent w-4 h-4 shrink-0"
+        />
+      </div>
+      {settings.remoteAccess && status && (
+        <div className="space-y-1">
+          {status.error && (
+            <p className="text-[11px] text-danger">
+              failed to start: {status.error} (port {status.port})
+            </p>
+          )}
+          {status.running && url && (
+            <div className="flex items-center gap-2">
+              <code
+                className="flex-1 truncate font-mono text-[11px] text-muted bg-raised border border-border rounded px-2 py-1"
+                title={status.urls.join('\n')}
+              >
+                {url}
+              </code>
+              <Button variant="ghost" onClick={copy}>
+                {copied ? 'copied' : 'copy link'}
+              </Button>
+            </div>
+          )}
+          {status.running && (
+            <p className="text-[11px] text-faint">
+              {status.clients === 0
+                ? 'no clients connected'
+                : `${status.clients} client${status.clients === 1 ? '' : 's'} connected`}
+              {status.urls.length > 1 ? ' · hover the link for every address' : ''}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

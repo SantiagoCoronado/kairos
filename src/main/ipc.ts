@@ -34,13 +34,21 @@ import { CalendarSyncManager } from './gcal/manager'
 import { TerminalManager } from './terminal'
 import { spawn as ptySpawn } from 'node-pty'
 import { logLine } from './logger'
+import { syncRemoteServer, getRemoteStatus, remoteBroadcast } from './remote/server'
 
 const SLOW_IPC_MS = 300
+
+// every handler also lands here so the remote-access server can dispatch the
+// same contract over WebSocket (see remote/server.ts)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ipcHandlers = new Map<string, (...args: any[]) => unknown>()
 
 function handle<K extends keyof IpcApi>(
   channel: K,
   fn: (...args: Parameters<IpcApi[K]>) => ReturnType<IpcApi[K]>
 ): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ipcHandlers.set(channel, fn as (...args: any[]) => unknown)
   ipcMain.handle(channel, async (_event, ...args) => {
     const started = Date.now()
     try {
@@ -61,6 +69,7 @@ export function broadcast<K extends keyof IpcEvents>(channel: K, payload: IpcEve
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
   }
+  remoteBroadcast(channel, payload)
 }
 
 let commsManager: CommsSyncManager | null = null
@@ -597,16 +606,22 @@ export function registerIpc(): void {
 
   handle('settings:get', () => getSettings())
   handle('settings:set', (patch) => {
-    const before = getSettings().captureHotkey
+    const before = getSettings()
     const next = saveSettings(patch)
-    if (next.captureHotkey !== before) reregisterCaptureHotkey(next.captureHotkey)
+    if (next.captureHotkey !== before.captureHotkey) reregisterCaptureHotkey(next.captureHotkey)
+    if (next.remoteAccess !== before.remoteAccess || next.remotePort !== before.remotePort)
+      syncRemoteServer(ipcHandlers)
     broadcast('db:changed', { entity: 'settings' })
     return next
   })
+  handle('remote:status', () => getRemoteStatus())
   handle('settings:authStatus', () => checkAuthStatus())
   handle('usage:claudeToday', () => getClaudeUsageToday())
   handle('usage:claudeStats', () => getClaudeUsageStats())
   handle('usage:claudeLimits', () => getClaudeLimits())
+
+  // all handlers are registered — bring the remote server up if enabled
+  syncRemoteServer(ipcHandlers)
 }
 
 /** turn a note (or one of its checklist items) into an agent instruction */

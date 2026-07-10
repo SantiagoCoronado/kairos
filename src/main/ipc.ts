@@ -456,6 +456,7 @@ export function registerIpc(): void {
   handle('comms:messages', (threadId) => comms.listMessages(db, threadId))
   handle('comms:threadAttachments', (threadId) => comms.listThreadAttachments(db, threadId))
   handle('comms:downloadAttachment', (attachmentId) => manager.downloadAttachment(attachmentId))
+  handle('comms:attachmentData', (attachmentId) => manager.getAttachmentData(attachmentId))
   handle('comms:markRead', (threadId) => {
     manager.markRead(threadId) // local immediately; gmail propagation in background
     broadcast('db:changed', { entity: 'comms' })

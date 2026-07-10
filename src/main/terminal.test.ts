@@ -178,6 +178,31 @@ describe('bell attention (agent-finished badge)', () => {
     expect(manager.attentionCount()).toBe(1)
   })
 
+  it('escape sequences split at ANY chunk boundary still parse', () => {
+    manager.create()
+    // ESC / ] split across chunks: the whole OSC (incl. its BEL terminator)
+    // must be swallowed, not read as text plus a bell
+    ptys[0].emitData('before\x1b')
+    ptys[0].emitData(']0;title\x07after')
+    expect(manager.attentionCount()).toBe(0)
+    // ST split across chunks: ESC ends one chunk, backslash starts the next —
+    // must exit the sequence so the following genuine bell counts
+    ptys[0].emitData('\x1b]7;file://x/y\x1b')
+    ptys[0].emitData('\\')
+    ptys[0].emitData('\x07')
+    expect(manager.attentionCount()).toBe(1)
+  })
+
+  it('BEL inside DCS/APC payloads is data, not a bell', () => {
+    manager.create()
+    ptys[0].emitData('\x1bPtmux;inner\x07payload\x1b\\') // DCS passthrough
+    expect(manager.attentionCount()).toBe(0)
+    ptys[0].emitData('\x1b_apc\x07data\x1b\\') // APC
+    expect(manager.attentionCount()).toBe(0)
+    ptys[0].emitData('\x07')
+    expect(manager.attentionCount()).toBe(1)
+  })
+
   it('no flag while the view is open; opening the view clears flags', () => {
     manager.create()
     manager.setViewActive(true)

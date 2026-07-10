@@ -62,6 +62,7 @@ export function Sidebar({
   const [showSettings, setShowSettings] = useState(false)
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
+  const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
   const { data: termAttention } = useInvoke('terminal:attentionCount', [], ['terminal'])
   return (
     <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col select-none">
@@ -91,6 +92,22 @@ export function Sidebar({
                 {dueNotes! > 99 ? '99+' : dueNotes}
               </span>
             )}
+            {id === 'automations' && (autoActivity?.running ?? 0) > 0 && (
+              <span
+                title={`${autoActivity!.running} automation${autoActivity!.running > 1 ? 's' : ''} running`}
+                className="w-2 h-2 rounded-full bg-accent animate-pulse"
+              />
+            )}
+            {id === 'automations' &&
+              (autoActivity?.running ?? 0) === 0 &&
+              (autoActivity?.unseenFinished ?? 0) > 0 && (
+                <span
+                  title="Automation runs finished since you last looked"
+                  className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center"
+                >
+                  {autoActivity!.unseenFinished > 99 ? '99+' : autoActivity!.unseenFinished}
+                </span>
+              )}
             {id === 'terminal' && (termAttention ?? 0) > 0 && (
               <span
                 title="A terminal rang the bell (agent finished)"

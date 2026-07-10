@@ -135,7 +135,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
                 </span>
                 <p className="text-[11px] text-faint">
                   Native notifications for new messages while the app is in the background.
-                  Important = DMs plus email labeled action-needed (needs auto-label on).
+                  Important = DMs plus email classified action-needed (fresh mail is
+                  classified for this even while auto-label is off).
                 </p>
               </div>
               <Segmented

@@ -99,9 +99,12 @@ describe('messages', () => {
   it('does not count own or already-read messages as unread', () => {
     const a = gmailAccount()
     const t = emailThread(a.id)
+    // gmail ingest derives is_read from the UNREAD label: a normal sent
+    // reply arrives read (self-sent-unread mail is the exception — covered
+    // in the self-sent ingest test)
     comms.upsertMessage(db, {
       thread_id: t.id, account_id: a.id, provider: 'gmail',
-      external_id: 'm1', is_me: true, sent_at: T0.toISOString(), body_text: 'sent by me'
+      external_id: 'm1', is_me: true, is_read: true, sent_at: T0.toISOString(), body_text: 'sent by me'
     }, T0)
     comms.upsertMessage(db, {
       thread_id: t.id, account_id: a.id, provider: 'gmail',
@@ -697,11 +700,90 @@ describe('markThreadUnread', () => {
     const msgs = comms.listMessages(db, t.id)
     expect(msgs.find((m) => m.external_id === 'm1')!.is_read).toBe(1)
     expect(msgs.find((m) => m.external_id === 'm2')!.is_read).toBe(0)
-    // thread with no inbound messages → null
+    // thread with no messages at all → null
     const empty = comms.upsertThread(db, {
       account_id: a.id, provider: 'gmail', external_id: 'thr-empty', kind: 'email'
     }, T0)
     expect(comms.markThreadUnread(db, empty.id)).toBeNull()
+  })
+
+  it('falls back to the newest self-sent message when the thread has no inbound', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-self')
+    // automation mail: you email yourself — every message is is_me
+    for (const [ext, mins] of [['s1', 0], ['s2', 5]] as const) {
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: a.id, provider: 'gmail', is_me: true, is_read: true,
+        external_id: ext, sent_at: later(mins).toISOString(), body_text: ext
+      }, later(mins))
+    }
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(0)
+
+    expect(comms.markThreadUnread(db, t.id, later(11))).toBe('s2')
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+    expect(
+      comms.listMessages(db, t.id).find((m) => m.external_id === 's2')!.is_read
+    ).toBe(0)
+    // reading the thread clears the self-sent flag again
+    comms.markThreadRead(db, t.id, later(12))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(0)
+  })
+
+  it('still prefers the newest inbound over a newer self-sent reply', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-mixed')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'in1', sent_at: later(0).toISOString(), body_text: 'them'
+    }, later(0))
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', is_me: true, is_read: true,
+      external_id: 'me1', sent_at: later(5).toISOString(), body_text: 'my reply'
+    }, later(5))
+    comms.markThreadRead(db, t.id, later(10))
+
+    expect(comms.markThreadUnread(db, t.id, later(11))).toBe('in1')
+    const msgs = comms.listMessages(db, t.id)
+    expect(msgs.find((m) => m.external_id === 'in1')!.is_read).toBe(0)
+    expect(msgs.find((m) => m.external_id === 'me1')!.is_read).toBe(1)
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+  })
+
+  it('survives the gmail label-history recompute on self-sent threads', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-recompute')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', is_me: true, is_read: true,
+      external_id: 's1', sent_at: later(0).toISOString(), body_text: 'to myself'
+    }, later(0))
+    comms.markThreadUnread(db, t.id, later(1))
+    // the remote UNREAD add comes back as a label-history event → recompute
+    comms.recomputeThreadState(db, t.id, later(2))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+  })
+})
+
+describe('unread_count for self-sent mail on ingest', () => {
+  it('counts gmail self-sent unread (UNREAD label is authoritative) but not other providers', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-ingest')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', is_me: true, is_read: false,
+      external_id: 'g1', sent_at: later(0).toISOString(), body_text: 'note to self'
+    }, later(0))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+
+    const wa = comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: 'me@s.whatsapp.net', display_name: 'me'
+    }, T0)
+    const wt = comms.upsertThread(db, {
+      account_id: wa.id, provider: 'whatsapp', external_id: 'chat-self', kind: 'dm'
+    }, T0)
+    comms.upsertMessage(db, {
+      thread_id: wt.id, account_id: wa.id, provider: 'whatsapp', is_me: true, is_read: false,
+      external_id: 'w1', sent_at: later(0).toISOString(), body_text: 'own outbound'
+    }, later(0))
+    expect(comms.getThread(db, wt.id)!.unread_count).toBe(0)
   })
 })
 

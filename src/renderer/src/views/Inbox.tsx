@@ -1247,7 +1247,7 @@ function LabelMenu({ thread }: { thread: CommsThreadListItem }): React.JSX.Eleme
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-7 z-20 w-40 rounded border border-border bg-panel shadow-lg py-1">
+          <div className="absolute right-0 top-7 z-20 w-40 rounded border border-border bg-overlay shadow-lg py-1">
             {COMMS_LABELS.map((l) => (
               <label
                 key={l}

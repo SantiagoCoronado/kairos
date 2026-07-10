@@ -142,7 +142,7 @@ export function PeopleView({
               </Button>
             </div>
             {suggestions.length > 0 && (
-              <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-md border border-border bg-panel shadow-lg overflow-hidden">
+              <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-md border border-border bg-overlay shadow-lg overflow-hidden">
                 {suggestions.map((c, i) => (
                   <button
                     key={`${c.name}-${i}`}
@@ -332,7 +332,7 @@ function PersonDetail({
               )}
               {snoozeOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-panel shadow-lg overflow-hidden"
+                  className="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-overlay shadow-lg overflow-hidden"
                   onKeyDown={(e) => e.key === 'Escape' && setSnoozeOpen(false)}
                 >
                   <p className="px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-faint border-b border-border/50">
@@ -372,38 +372,36 @@ function PersonDetail({
             </>
           )}
           {archived && (
-            <>
-              <Button
-                variant="ghost"
-                title="Unarchive"
-                onClick={() => {
-                  void api.invoke('people:unarchive', person.id).then(onGone)
-                }}
-              >
-                <ArchiveRestore size={14} />
-              </Button>
-              <Button
-                variant="ghost"
-                title={confirmDelete ? 'Click again to permanently delete' : 'Delete permanently'}
-                onClick={() => {
-                  if (!confirmDelete) {
-                    setConfirmDelete(true)
-                    return
-                  }
-                  void api.invoke('people:delete', person.id).then(onGone)
-                }}
-                className={confirmDelete ? 'text-danger' : ''}
-              >
-                {confirmDelete ? (
-                  <span className="inline-flex items-center gap-1 text-danger">
-                    <Trash2 size={14} /> sure?
-                  </span>
-                ) : (
-                  <Trash2 size={14} />
-                )}
-              </Button>
-            </>
+            <Button
+              variant="ghost"
+              title="Unarchive"
+              onClick={() => {
+                void api.invoke('people:unarchive', person.id).then(onGone)
+              }}
+            >
+              <ArchiveRestore size={14} />
+            </Button>
           )}
+          <Button
+            variant="ghost"
+            title={confirmDelete ? 'Click again to permanently delete' : 'Delete permanently'}
+            onClick={() => {
+              if (!confirmDelete) {
+                setConfirmDelete(true)
+                return
+              }
+              void api.invoke('people:delete', person.id).then(onGone)
+            }}
+            className={confirmDelete ? 'text-danger' : ''}
+          >
+            {confirmDelete ? (
+              <span className="inline-flex items-center gap-1 text-danger">
+                <Trash2 size={14} /> sure?
+              </span>
+            ) : (
+              <Trash2 size={14} />
+            )}
+          </Button>
         </div>
       </div>
 

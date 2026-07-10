@@ -95,7 +95,8 @@ export function registerIpc(): void {
   setInterval(() => {
     try {
       const v = db.get<{ data_version: number }>('PRAGMA data_version')?.data_version ?? null
-      if (dataVersion !== null && v !== null && v !== dataVersion) {
+      if (v === null) return // keep the last-good baseline on a fluke read
+      if (dataVersion !== null && v !== dataVersion) {
         broadcast('db:changed', { entity: 'all' })
       }
       dataVersion = v

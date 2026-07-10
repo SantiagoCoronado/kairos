@@ -2,6 +2,7 @@
 // External links go through the window-open handler → default browser.
 import { useMemo } from 'react'
 import { parseMarkdown, type MdBlock, type MdInline } from '../../../core/markdown-lite'
+// (MdBlock is also the fallback shape when parsing throws)
 import { cn } from './ui'
 
 function Inline({ nodes }: { nodes: MdInline[] }): React.JSX.Element {
@@ -130,7 +131,14 @@ function Block({ block }: { block: MdBlock }): React.JSX.Element {
 }
 
 export function Markdown({ text, className }: { text: string; className?: string }): React.JSX.Element {
-  const blocks = useMemo(() => parseMarkdown(text), [text])
+  // one malformed result must degrade to plain text, not white-screen the app
+  const blocks = useMemo<MdBlock[]>(() => {
+    try {
+      return parseMarkdown(text)
+    } catch {
+      return [{ kind: 'paragraph', children: [{ kind: 'text', text }] }]
+    }
+  }, [text])
   return (
     <div className={cn('space-y-2', className)}>
       {blocks.map((b, i) => (

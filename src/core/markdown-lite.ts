@@ -22,11 +22,20 @@ export type MdBlock =
 
 // one alternation, first match wins: `code` | **bold** | *italic* | _italic_ | [text](url)
 // bold content may hold nested * emphasis; the (?!\*) after the closer makes
-// '**a *b***' close on the LAST star pair instead of stranding one
+// '**a *b***' close on the LAST star pair instead of stranding one. The link
+// URL tolerates one level of balanced parens (Wikipedia-style URLs).
 const INLINE_RE =
-  /(`+)([^`]+?)\1|\*\*(.+?)\*\*(?!\*)|\*([^*\n]+?)\*|(?<![\w])_([^_\n]+?)_(?![\w])|\[([^\]]+?)\]\(([^)\s]+?)\)/
+  /(`+)([^`]+?)\1|\*\*(.+?)\*\*(?!\*)|\*([^*\n]+?)\*|(?<![\w])_([^_\n]+?)_(?![\w])|\[([^\]]+?)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/
 
-export function parseInline(text: string): MdInline[] {
+/** emphasis nests via recursion; degenerate marker runs ('****…') would
+ *  otherwise recurse once per ~2 chars and blow the stack */
+const MAX_INLINE_DEPTH = 8
+
+/** only schemes safe to hand to shell.openExternal render as links */
+const SAFE_HREF_RE = /^(https?:|mailto:)/i
+
+export function parseInline(text: string, depth = 0): MdInline[] {
+  if (depth >= MAX_INLINE_DEPTH) return [{ kind: 'text', text }]
   const out: MdInline[] = []
   let rest = text
   while (rest.length > 0) {
@@ -37,10 +46,15 @@ export function parseInline(text: string): MdInline[] {
     }
     if (m.index > 0) out.push({ kind: 'text', text: rest.slice(0, m.index) })
     if (m[2] !== undefined) out.push({ kind: 'code', text: m[2] })
-    else if (m[3] !== undefined) out.push({ kind: 'bold', children: parseInline(m[3]) })
-    else if (m[4] !== undefined) out.push({ kind: 'italic', children: parseInline(m[4]) })
-    else if (m[5] !== undefined) out.push({ kind: 'italic', children: parseInline(m[5]) })
-    else out.push({ kind: 'link', href: m[7], children: parseInline(m[6]) })
+    else if (m[3] !== undefined) out.push({ kind: 'bold', children: parseInline(m[3], depth + 1) })
+    else if (m[4] !== undefined) out.push({ kind: 'italic', children: parseInline(m[4], depth + 1) })
+    else if (m[5] !== undefined) out.push({ kind: 'italic', children: parseInline(m[5], depth + 1) })
+    else if (SAFE_HREF_RE.test(m[7])) {
+      out.push({ kind: 'link', href: m[7], children: parseInline(m[6], depth + 1) })
+    } else {
+      // javascript:/file:/custom schemes stay visible, inert text
+      out.push({ kind: 'text', text: m[0] })
+    }
     rest = rest.slice(m.index + m[0].length)
   }
   return out

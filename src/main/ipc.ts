@@ -184,18 +184,29 @@ export function registerIpc(): void {
   handle('agentTasks:parse', (text) => parseTaskDraft(text))
 
   // unseen-runs badge: while the Automations view is open every finished run
-  // is immediately "seen"; the marker persists in settings across restarts
+  // is immediately "seen"; the marker persists in settings across restarts.
+  // activity fires on every agent_tasks broadcast (incl. per-tool-call), so
+  // the marker write is throttled — the live answer comes from the
+  // viewActive override, the file is only durability.
   let automationsViewActive = false
+  let seenWriteAt = 0
+  const SEEN_WRITE_MIN_GAP_MS = 5000
+  const markAutomationsSeen = (force = false): void => {
+    if (!force && Date.now() - seenWriteAt < SEEN_WRITE_MIN_GAP_MS) return
+    seenWriteAt = Date.now()
+    saveSettings({ automationsSeenAt: new Date().toISOString() })
+  }
   handle('agentTasks:setViewActive', (active) => {
     automationsViewActive = active
-    if (active) {
-      saveSettings({ automationsSeenAt: new Date().toISOString() })
-      broadcast('db:changed', { entity: 'agent_tasks' })
-    }
+    // both transitions: everything visible up to this moment counts as seen
+    markAutomationsSeen(true)
+    broadcast('db:changed', { entity: 'agent_tasks' })
   })
   handle('agentTasks:activity', () => {
-    if (automationsViewActive) saveSettings({ automationsSeenAt: new Date().toISOString() })
-    return agentTasksRepo.activityCounts(db, getSettings().automationsSeenAt)
+    if (automationsViewActive) markAutomationsSeen()
+    const counts = agentTasksRepo.activityCounts(db, getSettings().automationsSeenAt)
+    // open view = seen by definition, even between throttled marker writes
+    return automationsViewActive ? { ...counts, unseenFinished: 0 } : counts
   })
 
   // event-triggered automations: count occurrences, fire on every Nth.

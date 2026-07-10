@@ -21,6 +21,30 @@ describe('markdown-lite inline', () => {
     ])
   })
 
+  it('caps emphasis recursion instead of blowing the stack', () => {
+    // a flat run of thousands of ** markers must parse (as junk), not throw
+    expect(() => parseInline('**'.repeat(14000))).not.toThrow()
+  })
+
+  it('renders unsafe link schemes as inert text', () => {
+    expect(parseInline('[click](javascript:alert(1))')).toEqual([
+      { kind: 'text', text: '[click](javascript:alert(1))' }
+    ])
+    expect(parseInline('[f](file:///etc/passwd)')).toEqual([
+      { kind: 'text', text: '[f](file:///etc/passwd)' }
+    ])
+  })
+
+  it('keeps balanced parens inside link URLs', () => {
+    expect(parseInline('[wiki](https://en.wikipedia.org/wiki/Foo_(bar))')).toEqual([
+      {
+        kind: 'link',
+        href: 'https://en.wikipedia.org/wiki/Foo_(bar)',
+        children: [{ kind: 'text', text: 'wiki' }]
+      }
+    ])
+  })
+
   it('nests emphasis inside bold', () => {
     expect(parseInline('**really *sure***')).toEqual([
       {

@@ -43,6 +43,10 @@ export class CalendarSyncManager {
   private pokeTimer: NodeJS.Timeout | null = null
   private pulling = new Set<string>()
   private draining = false
+  /** serializes every Google push — concurrent triggers (drain timer, poke,
+   *  addMeet) queue behind each other instead of racing. Two pushes for the
+   *  same pending_create row would each insert a fresh Google event. */
+  private pushQueue: Promise<unknown> = Promise.resolve()
   private failures = new Map<string, number>()
   private skipUntil = new Map<string, number>()
   private lastPullAt = 0
@@ -244,14 +248,22 @@ export class CalendarSyncManager {
 
   // ---------- push ----------
 
+  private enqueuePush<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.pushQueue.then(fn)
+    this.pushQueue = run.catch(() => undefined)
+    return run
+  }
+
   private async drainAll(): Promise<void> {
     if (this.stopped || this.draining) return
     this.draining = true
     try {
-      for (const account of repo.listCalendarAccounts(this.db)) {
-        if (account.status === 'disabled' || account.status === 'needs_auth') continue
-        await this.drainAccount(account)
-      }
+      await this.enqueuePush(async () => {
+        for (const account of repo.listCalendarAccounts(this.db)) {
+          if (account.status === 'disabled' || account.status === 'needs_auth') continue
+          await this.drainAccount(account)
+        }
+      })
     } finally {
       this.draining = false
     }
@@ -261,7 +273,11 @@ export class CalendarSyncManager {
     const dirty = repo.listDirtyEvents(this.db, account.id)
     if (dirty.length === 0) return
     let changed = false
-    for (const event of dirty) {
+    for (const stale of dirty) {
+      // re-read: queued push work (addMeet) may have synced or deleted the
+      // row since the dirty list was built
+      const event = repo.getEvent(this.db, stale.id)
+      if (!event || event.sync_status === 'synced') continue
       try {
         if (await this.pushEvent(account, event)) changed = true
       } catch (err) {
@@ -295,7 +311,10 @@ export class CalendarSyncManager {
       return true
     }
 
-    if (event.sync_status === 'pending_create') {
+    // a pending_create row that somehow already carries a remote id (e.g. a
+    // push raced this one) must be patched, not inserted again — a second
+    // insert makes a duplicate Google event
+    if (event.sync_status === 'pending_create' && !event.google_event_id) {
       const created = await insertEvent(this.db, account, gid, rowToGoogleBody(event), {
         sendUpdates: notify
       })
@@ -306,7 +325,7 @@ export class CalendarSyncManager {
       return true
     }
 
-    // pending_update
+    // pending_update (or pending_create with a remote id)
     try {
       const patched = await patchEvent(this.db, account, gid, event.google_event_id!, rowToGoogleBody(event), {
         etag: event.etag,
@@ -349,9 +368,16 @@ export class CalendarSyncManager {
     const account = repo.getCalendarAccount(this.db, cal.account_id)
     if (!account) throw new Error('calendar account missing')
 
-    // the event must exist remotely before it can carry conference data
+    // the event must exist remotely before it can carry conference data.
+    // Push through the shared queue — Meet-on-create fires right after the
+    // create poked a drain, and an unserialized second push would insert a
+    // duplicate Google event. Re-read inside the queue slot: by the time we
+    // run, that drain may already have pushed the row.
     if (!event.google_event_id) {
-      await this.pushEvent(account, event)
+      await this.enqueuePush(async () => {
+        const fresh = repo.getEvent(this.db, eventId)
+        if (fresh && !fresh.google_event_id) await this.pushEvent(account, fresh)
+      })
       event = repo.getEvent(this.db, eventId)!
       if (!event.google_event_id) throw new Error('could not create the event on Google first')
     }

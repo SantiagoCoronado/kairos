@@ -1287,10 +1287,16 @@ function MessageBubble({
   })
   const html = m.body_html
   const audioAtts = attachments?.filter((a) => a.mime_type?.startsWith('audio/')) ?? []
-  const fileAtts = attachments?.filter((a) => !a.mime_type?.startsWith('audio/')) ?? []
+  const imageAtts = attachments?.filter((a) => a.mime_type?.startsWith('image/')) ?? []
+  const fileAtts =
+    attachments?.filter(
+      (a) => !a.mime_type?.startsWith('audio/') && !a.mime_type?.startsWith('image/')
+    ) ?? []
   // a voice note's body is just the '[voice message]' placeholder — the
-  // player replaces it rather than showing both
+  // player replaces it rather than showing both; same for an uncaptioned
+  // photo's '[image]'
   const voiceOnly = audioAtts.length > 0 && !html && m.body_text === '[voice message]'
+  const imageOnly = imageAtts.length > 0 && !html && m.body_text === '[image]'
   return (
     <div className={cn(html ? 'max-w-full' : 'max-w-[85%]', m.is_me ? 'ml-auto' : '')}>
       <div className="group/sender flex items-baseline gap-2 mb-0.5 relative">
@@ -1337,7 +1343,7 @@ function MessageBubble({
         <div className="rounded-lg overflow-hidden border border-border bg-white">
           <HtmlBody html={html} />
         </div>
-      ) : voiceOnly ? null : (
+      ) : voiceOnly || imageOnly ? null : (
         <div
           className={cn(
             'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words',
@@ -1349,6 +1355,9 @@ function MessageBubble({
       )}
       {audioAtts.map((a) => (
         <VoiceNoteChip key={a.id} attachment={a} mine={m.is_me === 1} />
+      ))}
+      {imageAtts.map((a) => (
+        <ImageThumb key={a.id} attachment={a} />
       ))}
       {fileAtts.map((a) => (
         <AttachmentChip key={a.id} attachment={a} />
@@ -1494,6 +1503,64 @@ function VoiceNoteChip({
         <p className="text-[10.5px] text-danger truncate" title={error}>
           {error}
         </p>
+      )}
+    </div>
+  )
+}
+
+/** Preview-sized cap mirrors MAX_PREVIEW_BYTES main-side — anything bigger
+ *  would be refused there anyway, so don't even request the bytes. */
+const MAX_IMG_PREVIEW_BYTES = 10 * 1024 * 1024
+
+/** Inline thumbnail for image attachments: bytes arrive as a data URL over
+ *  IPC (cached on disk main-side), click opens the full-size file. Falls back
+ *  to the filename chip when the preview can't load. */
+function ImageThumb({ attachment: a }: { attachment: CommsAttachment }): React.JSX.Element {
+  const [dataUrl, setDataUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [opening, setOpening] = useState(false)
+  const tooBig = a.size_bytes != null && a.size_bytes > MAX_IMG_PREVIEW_BYTES
+
+  useEffect(() => {
+    if (tooBig) return undefined
+    let stale = false // unmount (thread switch) must not set state afterwards
+    void api.invoke('comms:attachmentData', a.id).then((res) => {
+      if (stale) return
+      if (res.ok) setDataUrl(res.dataUrl)
+      else setFailed(true)
+    })
+    return () => {
+      stale = true
+    }
+  }, [a.id, tooBig])
+
+  if (tooBig || failed) return <AttachmentChip attachment={a} />
+
+  const openFull = async (): Promise<void> => {
+    setOpening(true)
+    try {
+      await api.invoke('comms:downloadAttachment', a.id)
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      {dataUrl ? (
+        <img
+          src={dataUrl}
+          alt={a.filename || 'image attachment'}
+          title="Click to open full size"
+          onClick={() => void openFull()}
+          onError={() => setFailed(true)}
+          className={cn(
+            'max-h-72 max-w-full rounded-lg border border-border cursor-zoom-in',
+            opening && 'opacity-60'
+          )}
+        />
+      ) : (
+        <div className="w-48 h-32 rounded-lg border border-border bg-panel animate-pulse" />
       )}
     </div>
   )

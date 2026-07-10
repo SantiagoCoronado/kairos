@@ -63,6 +63,18 @@ export type CalendarResult =
   | { events: CalendarEvent[] }
   | { error: 'not-authorized' | 'helper-missing' | 'helper-failed' }
 
+export interface MacContact {
+  name: string
+  /** organization name; helpers built before the org field omit it */
+  org?: string
+  phones: string[]
+  emails: string[]
+}
+
+export type ContactsResult =
+  | { contacts: MacContact[] }
+  | { error: 'not-authorized' | 'helper-missing' | 'helper-failed' }
+
 export interface IpcApi {
   'app:ping': () => string
   /** append a renderer-side event to ~/Kairos/logs/app.log */
@@ -148,6 +160,9 @@ export interface IpcApi {
   'today:get': () => TodayPayload
 
   'calendar:today': () => Promise<CalendarResult>
+
+  /** macOS address-book autocomplete for the People view (TCC-gated) */
+  'contacts:search': (query: string) => Promise<ContactsResult>
 
   /** DB-backed calendar (local events + google sync) — distinct from the
    *  read-only macOS EventKit 'calendar:today' above */

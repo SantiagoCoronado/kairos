@@ -4,6 +4,7 @@ import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
 import { calendarToday } from './calendar'
+import { searchMacContacts } from './contacts'
 import { ChatManager } from './chat/agent'
 import { getSettings, saveSettings } from './settings'
 import { getClaudeLimits, getClaudeUsageStats, getClaudeUsageToday } from './claude-usage'
@@ -293,6 +294,8 @@ export function registerIpc(): void {
   handle('today:get', () => todayAgenda(db))
 
   handle('calendar:today', () => calendarToday())
+
+  handle('contacts:search', (query) => searchMacContacts(query))
 
   // DB-backed calendar: local CRUD on SQLite, with the CalendarSyncManager
   // pushing dirty rows to Google and pulling remote changes in the background.

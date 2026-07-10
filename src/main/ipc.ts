@@ -223,8 +223,21 @@ export function registerIpc(): void {
   })
   handle('people:archive', (id) => {
     people.archivePerson(db, id)
+    // archived people disappear from thread person-joins too
     broadcast('db:changed', { entity: 'people' })
+    broadcast('db:changed', { entity: 'comms' })
   })
+  handle('people:unarchive', (id) => {
+    people.unarchivePerson(db, id)
+    broadcast('db:changed', { entity: 'people' })
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('people:delete', (id) => {
+    people.deletePerson(db, id)
+    broadcast('db:changed', { entity: 'people' })
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('people:identities', (personId) => comms.listIdentitiesForPerson(db, personId))
   handle('people:findByContact', (emails, phones) => people.findPersonByContact(db, emails, phones) ?? null)
 
   handle('interactions:log', (input) => {
@@ -239,6 +252,10 @@ export function registerIpc(): void {
   handle('followups:statuses', () => followups.followupStatuses(db))
   handle('followups:snooze', (personId, untilDate) => {
     people.snoozeFollowup(db, personId, untilDate)
+    broadcast('db:changed', { entity: 'people' })
+  })
+  handle('followups:clearSnooze', (personId) => {
+    people.clearSnooze(db, personId)
     broadcast('db:changed', { entity: 'people' })
   })
 
@@ -489,6 +506,11 @@ export function registerIpc(): void {
   handle('comms:linkSender', (provider, handle_, personId) => {
     comms.linkHandleToPerson(db, provider, handle_.trim().toLowerCase(), personId)
     broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('comms:unlinkSender', (provider, handle_) => {
+    comms.unlinkHandle(db, provider, handle_.trim().toLowerCase())
+    broadcast('db:changed', { entity: 'comms' })
+    broadcast('db:changed', { entity: 'people' })
   })
   handle('comms:setThreadSync', (threadId, enabled) => {
     comms.setThreadSyncEnabled(db, threadId, enabled)

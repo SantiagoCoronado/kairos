@@ -4,6 +4,7 @@ import {
   RefreshCw,
   Hash,
   Link2,
+  Unlink,
   SlidersHorizontal,
   PenLine,
   Send,
@@ -1292,7 +1293,7 @@ function MessageBubble({
   const voiceOnly = audioAtts.length > 0 && !html && m.body_text === '[voice message]'
   return (
     <div className={cn(html ? 'max-w-full' : 'max-w-[85%]', m.is_me ? 'ml-auto' : '')}>
-      <div className="flex items-baseline gap-2 mb-0.5 relative">
+      <div className="group/sender flex items-baseline gap-2 mb-0.5 relative">
         {m.is_me ? (
           <span className="text-[11px] text-faint ml-auto">{when}</span>
         ) : (
@@ -1314,6 +1315,15 @@ function MessageBubble({
                 onClick={() => setLinking((v) => !v)}
               >
                 <Link2 size={11} />
+              </button>
+            )}
+            {m.person_id && m.sender_handle && (
+              <button
+                className="text-faint hover:text-danger opacity-0 group-hover/sender:opacity-100"
+                title="Unlink this sender. If the person's email/phone still matches, the next incoming message re-links"
+                onClick={() => void api.invoke('comms:unlinkSender', m.provider, m.sender_handle)}
+              >
+                <Unlink size={11} />
               </button>
             )}
             <span className="text-[11px] text-faint">{when}</span>

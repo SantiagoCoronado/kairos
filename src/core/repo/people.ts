@@ -6,7 +6,8 @@ import { canonicalPhoneDigits } from './comms'
 export function listPeople(db: DbDriver, f: PeopleFilter = {}): Person[] {
   const where: string[] = []
   const params: SqlValue[] = []
-  if (!f.includeArchived) where.push('archived_at IS NULL')
+  if (f.archived) where.push('archived_at IS NOT NULL')
+  else if (!f.includeArchived) where.push('archived_at IS NULL')
   if (f.area) {
     where.push('area = ?')
     params.push(f.area)
@@ -153,10 +154,28 @@ export function archivePerson(db: DbDriver, id: string, now: Date = new Date()):
   db.run('UPDATE people SET archived_at = ?, updated_at = ? WHERE id = ?', nowIso(now), nowIso(now), id)
 }
 
+export function unarchivePerson(db: DbDriver, id: string, now: Date = new Date()): void {
+  db.run('UPDATE people SET archived_at = NULL, updated_at = ? WHERE id = ?', nowIso(now), id)
+}
+
+/** Hard delete. FKs do the bookkeeping: interactions and comms_identities
+ *  cascade away; tasks.person_id and comms_messages.person_id go NULL. */
+export function deletePerson(db: DbDriver, id: string): void {
+  db.run('DELETE FROM people WHERE id = ?', id)
+}
+
 export function snoozeFollowup(db: DbDriver, personId: string, untilDate: string, now: Date = new Date()): void {
   db.run(
     'UPDATE people SET snoozed_until = ?, updated_at = ? WHERE id = ?',
     untilDate,
+    nowIso(now),
+    personId
+  )
+}
+
+export function clearSnooze(db: DbDriver, personId: string, now: Date = new Date()): void {
+  db.run(
+    'UPDATE people SET snoozed_until = NULL, updated_at = ? WHERE id = ?',
     nowIso(now),
     personId
   )

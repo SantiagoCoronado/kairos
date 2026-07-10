@@ -3,6 +3,7 @@ import type {
   CommsAccount,
   CommsAccountStatus,
   CommsAttachment,
+  CommsIdentity,
   CommsMessage,
   CommsThread,
   CommsThreadListItem,
@@ -242,7 +243,7 @@ export function listThreads(db: DbDriver, f: ThreadFilter = {}): CommsThreadList
   return db.all<CommsThreadListItem>(
     `SELECT t.*, p.id AS person_id, p.name AS person_name
      FROM comms_threads t
-     LEFT JOIN people p ON p.id = (
+     LEFT JOIN people p ON p.archived_at IS NULL AND p.id = (
        SELECT m.person_id FROM comms_messages m
        WHERE m.thread_id = t.id AND m.is_me = 0 AND m.person_id IS NOT NULL
        ORDER BY m.sent_at DESC LIMIT 1
@@ -322,7 +323,7 @@ export function getThreadListItem(db: DbDriver, threadId: string): CommsThreadLi
     db.get<CommsThreadListItem>(
       `SELECT t.*, p.id AS person_id, p.name AS person_name
        FROM comms_threads t
-       LEFT JOIN people p ON p.id = (
+       LEFT JOIN people p ON p.archived_at IS NULL AND p.id = (
          SELECT m.person_id FROM comms_messages m
          WHERE m.thread_id = t.id AND m.is_me = 0 AND m.person_id IS NOT NULL
          ORDER BY m.sent_at DESC LIMIT 1
@@ -704,6 +705,26 @@ export function linkHandleToPerson(
       handle
     )
   })
+}
+
+/** Remove an identity link and clear person_id on its messages (inverse of linkHandleToPerson). */
+export function unlinkHandle(db: DbDriver, provider: CommsProvider, handle: string): void {
+  db.transaction(() => {
+    db.run('DELETE FROM comms_identities WHERE provider = ? AND handle = ?', provider, handle)
+    db.run(
+      'UPDATE comms_messages SET person_id = NULL WHERE provider = ? AND sender_handle = ?',
+      provider,
+      handle
+    )
+  })
+}
+
+/** Every linked handle for a person — the detail view's "linked accounts" list. */
+export function listIdentitiesForPerson(db: DbDriver, personId: string): CommsIdentity[] {
+  return db.all<CommsIdentity>(
+    'SELECT * FROM comms_identities WHERE person_id = ? ORDER BY provider, handle',
+    personId
+  )
 }
 
 // ---------- messages ----------

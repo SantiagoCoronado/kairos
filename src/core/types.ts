@@ -378,6 +378,8 @@ export interface PeopleFilter {
   area?: Area
   search?: string
   includeArchived?: boolean
+  /** true = only archived people (the Archived section) */
+  archived?: boolean
 }
 
 export interface PersonUpsert {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Archive, BellOff, Plus } from 'lucide-react'
+import { Archive, ArchiveRestore, BellOff, Plus, Trash2, Unlink, X } from 'lucide-react'
 import type { Person, Area, InteractionKind, FollowupDue } from '../../../core/types'
 import type { MacContact } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
@@ -19,10 +19,17 @@ export function PeopleView({
   const [search, setSearch] = useState('')
   const [area, setArea] = useState<Area | 'all'>('all')
   const [newName, setNewName] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
 
   const { data: persons } = useInvoke(
     'people:list',
-    [{ search: search || undefined, area: area === 'all' ? undefined : area }],
+    [
+      {
+        search: search || undefined,
+        area: area === 'all' ? undefined : area,
+        archived: showArchived || undefined
+      }
+    ],
     ['people']
   )
   const { data: statuses } = useInvoke('followups:statuses', [], ['people', 'interactions'])
@@ -163,7 +170,9 @@ export function PeopleView({
           </div>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {persons?.length === 0 && <EmptyState>No people yet.</EmptyState>}
+          {persons?.length === 0 && (
+            <EmptyState>{showArchived ? 'No archived people.' : 'No people yet.'}</EmptyState>
+          )}
           {persons?.map((p) => {
             const st = statusById.get(p.id)
             return (
@@ -193,32 +202,68 @@ export function PeopleView({
             )
           })}
         </div>
+        <button
+          onClick={() => {
+            setShowArchived((v) => !v)
+            setSelectedId(null)
+          }}
+          className={cn(
+            'shrink-0 px-3 py-2 border-t border-border text-left font-mono text-[10.5px] uppercase tracking-wider',
+            showArchived ? 'text-text bg-raised' : 'text-faint hover:text-text'
+          )}
+        >
+          {showArchived ? '← back to people' : 'archived'}
+        </button>
       </div>
 
       <div className="flex-1 min-w-0 overflow-y-auto">
         {selectedId ? (
-          <PersonDetail id={selectedId} onArchived={() => setSelectedId(null)} />
+          // key: switching person must remount — otherwise an armed delete
+          // confirm (or open snooze popover) carries over to the new person
+          <PersonDetail key={selectedId} id={selectedId} onGone={() => setSelectedId(null)} />
         ) : (
-          <EmptyState>Select a person, or add someone new.</EmptyState>
+          <EmptyState>
+            {showArchived ? 'Select an archived person.' : 'Select a person, or add someone new.'}
+          </EmptyState>
         )}
       </div>
     </div>
   )
 }
 
+const SNOOZE_CHOICES: { label: string; days: number }[] = [
+  { label: '1 day', days: 1 },
+  { label: '3 days', days: 3 },
+  { label: '1 week', days: 7 },
+  { label: '2 weeks', days: 14 },
+  { label: '1 month', days: 30 }
+]
+
 function PersonDetail({
   id,
-  onArchived
+  onGone
 }: {
   id: string
-  onArchived: () => void
+  /** the person left this list (archived, unarchived, or deleted) — drop selection */
+  onGone: () => void
 }): React.JSX.Element {
   const { data: detail } = useInvoke('people:detail', [id], ['people', 'interactions', 'tasks'])
+  const { data: identities } = useInvoke('people:identities', [id], ['comms', 'people'])
   const [kind, setKind] = useState<InteractionKind>('coffee')
   const [summary, setSummary] = useState('')
+  const [snoozeOpen, setSnoozeOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // the armed delete button disarms itself if not confirmed quickly
+  useEffect(() => {
+    if (!confirmDelete) return undefined
+    const t = setTimeout(() => setConfirmDelete(false), 3000)
+    return () => clearTimeout(t)
+  }, [confirmDelete])
 
   if (!detail) return <EmptyState>Loading…</EmptyState>
   const { person, interactions, open_tasks } = detail
+  const archived = person.archived_at !== null
 
   const patch = (fields: Partial<Person>): void => {
     void api.invoke('people:upsert', { id: person.id, name: person.name, ...fields })
@@ -231,10 +276,11 @@ function PersonDetail({
     setSummary('')
   }
 
-  const snoozeWeek = (): void => {
+  const snoozeFor = (days: number): void => {
     const d = new Date()
-    d.setDate(d.getDate() + 7)
+    d.setDate(d.getDate() + days)
     void api.invoke('followups:snooze', person.id, d.toISOString().slice(0, 10))
+    setSnoozeOpen(false)
   }
 
   return (
@@ -255,22 +301,109 @@ function PersonDetail({
                 { value: 'work', label: 'Work' }
               ]}
             />
-            {person.snoozed_until && <Chip tone="muted">snoozed → {person.snoozed_until}</Chip>}
+            {archived && <Chip tone="danger">archived</Chip>}
+            {person.snoozed_until && (
+              <span className="inline-flex items-center gap-1">
+                <Chip tone="muted">snoozed → {person.snoozed_until}</Chip>
+                <button
+                  title="Clear snooze"
+                  onClick={() => void api.invoke('followups:clearSnooze', person.id)}
+                  className="text-faint hover:text-danger"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
           </div>
         </div>
-        <div className="flex gap-1.5">
-          <Button variant="ghost" title="Snooze follow-up 1 week" onClick={snoozeWeek}>
-            <BellOff size={14} />
-          </Button>
-          <Button
-            variant="ghost"
-            title="Archive"
-            onClick={() => {
-              void api.invoke('people:archive', person.id).then(onArchived)
-            }}
-          >
-            <Archive size={14} />
-          </Button>
+        <div className="flex gap-1.5 relative">
+          {!archived && (
+            <>
+              <Button
+                variant="ghost"
+                title="Snooze follow-up…"
+                onClick={() => setSnoozeOpen((v) => !v)}
+              >
+                <BellOff size={14} />
+              </Button>
+              {snoozeOpen && (
+                // click-catcher: any outside click closes the popover
+                <div className="fixed inset-0 z-10" onMouseDown={() => setSnoozeOpen(false)} />
+              )}
+              {snoozeOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-panel shadow-lg overflow-hidden"
+                  onKeyDown={(e) => e.key === 'Escape' && setSnoozeOpen(false)}
+                >
+                  <p className="px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-faint border-b border-border/50">
+                    snooze follow-up for
+                  </p>
+                  {SNOOZE_CHOICES.map((c) => (
+                    <button
+                      key={c.days}
+                      onClick={() => snoozeFor(c.days)}
+                      className="w-full text-left px-2.5 py-1.5 text-[12.5px] hover:bg-raised"
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                  {person.snoozed_until && (
+                    <button
+                      onClick={() => {
+                        void api.invoke('followups:clearSnooze', person.id)
+                        setSnoozeOpen(false)
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 text-[12.5px] text-danger hover:bg-raised border-t border-border/50"
+                    >
+                      clear snooze
+                    </button>
+                  )}
+                </div>
+              )}
+              <Button
+                variant="ghost"
+                title="Archive (hides from People and linked chats; reversible)"
+                onClick={() => {
+                  void api.invoke('people:archive', person.id).then(onGone)
+                }}
+              >
+                <Archive size={14} />
+              </Button>
+            </>
+          )}
+          {archived && (
+            <>
+              <Button
+                variant="ghost"
+                title="Unarchive"
+                onClick={() => {
+                  void api.invoke('people:unarchive', person.id).then(onGone)
+                }}
+              >
+                <ArchiveRestore size={14} />
+              </Button>
+              <Button
+                variant="ghost"
+                title={confirmDelete ? 'Click again to permanently delete' : 'Delete permanently'}
+                onClick={() => {
+                  if (!confirmDelete) {
+                    setConfirmDelete(true)
+                    return
+                  }
+                  void api.invoke('people:delete', person.id).then(onGone)
+                }}
+                className={confirmDelete ? 'text-danger' : ''}
+              >
+                {confirmDelete ? (
+                  <span className="inline-flex items-center gap-1 text-danger">
+                    <Trash2 size={14} /> sure?
+                  </span>
+                ) : (
+                  <Trash2 size={14} />
+                )}
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -310,6 +443,27 @@ function PersonDetail({
           }}
         />
       </div>
+
+      {(identities?.length ?? 0) > 0 && (
+        <div className="space-y-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+            linked accounts
+          </span>
+          {identities!.map((ident) => (
+            <div key={ident.id} className="flex items-center gap-2 text-[12.5px]">
+              <Chip tone="muted">{ident.provider}</Chip>
+              <span className="truncate text-muted">{ident.handle}</span>
+              <button
+                title="Unlink this handle. If the person's email/phone still matches it, the next incoming message re-links — clear that field too for a permanent unlink"
+                onClick={() => void api.invoke('comms:unlinkSender', ident.provider, ident.handle)}
+                className="text-faint hover:text-danger"
+              >
+                <Unlink size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {open_tasks.length > 0 && (
         <div className="space-y-1.5">

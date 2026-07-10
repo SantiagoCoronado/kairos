@@ -771,6 +771,62 @@ describe('thread person join', () => {
     expect(row.person_id).toBeNull()
     expect(row.person_name).toBeNull()
   })
+
+  it('archived people vanish from the join; unarchive restores them', () => {
+    const anna = people.upsertPerson(db, { name: 'Anna', email: 'anna@example.com' }, T0)
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sender_handle: 'anna@example.com',
+      sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+
+    people.archivePerson(db, anna.id, later(1))
+    expect(comms.listThreads(db, {})[0].person_name).toBeNull()
+    expect(comms.getThreadListItem(db, t.id)?.person_name).toBeNull()
+
+    people.unarchivePerson(db, anna.id, later(2))
+    expect(comms.listThreads(db, {})[0].person_name).toBe('Anna')
+  })
+})
+
+describe('identities: list + unlink', () => {
+  it('lists a person\'s handles and unlink clears identity + message person_id', () => {
+    const anna = people.upsertPerson(db, { name: 'Anna', email: 'anna@example.com' }, T0)
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sender_handle: 'anna@example.com',
+      sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+
+    const idents = comms.listIdentitiesForPerson(db, anna.id)
+    expect(idents).toHaveLength(1)
+    expect(idents[0].handle).toBe('anna@example.com')
+
+    comms.unlinkHandle(db, 'gmail', 'anna@example.com')
+    expect(comms.listIdentitiesForPerson(db, anna.id)).toHaveLength(0)
+    expect(comms.listMessages(db, t.id)[0].person_id).toBeNull()
+    expect(comms.listThreads(db, {})[0].person_id).toBeNull()
+  })
+
+  it('deleting a person cascades identities and nulls message links', () => {
+    const anna = people.upsertPerson(db, { name: 'Anna', email: 'anna@example.com' }, T0)
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sender_handle: 'anna@example.com',
+      sent_at: T0.toISOString(), body_text: 'hi'
+    }, T0)
+
+    people.deletePerson(db, anna.id)
+    expect(db.all('SELECT * FROM comms_identities')).toHaveLength(0)
+    expect(comms.listMessages(db, t.id)[0].person_id).toBeNull()
+    expect(people.getPerson(db, anna.id)).toBeUndefined()
+  })
 })
 
 describe('outbox', () => {

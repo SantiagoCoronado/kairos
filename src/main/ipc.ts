@@ -27,6 +27,7 @@ import * as comms from '../core/repo/comms'
 import * as calendarRepo from '../core/repo/calendar'
 import { localDate } from '../core/ids'
 import { CommsSyncManager } from './comms/manager'
+import { CommsNotifier } from './comms/notifier'
 import { CalendarSyncManager } from './gcal/manager'
 import { TerminalManager } from './terminal'
 import { spawn as ptySpawn } from 'node-pty'
@@ -436,6 +437,7 @@ export function registerIpc(): void {
   handle('terminal:resize', (sessionId, cols, rows) => terminals.resize(sessionId, cols, rows))
   handle('terminal:kill', (sessionId) => terminals.kill(sessionId))
 
+  const notifier = new CommsNotifier(db, (view, id) => broadcast('nav:goto', { view, id }))
   const manager = new CommsSyncManager(
     db,
     (event) => broadcast('comms:event', event),
@@ -443,7 +445,9 @@ export function registerIpc(): void {
     (provider) => {
       emitAppEvent('message_received')
       if (provider === 'gmail') emitAppEvent('email_received')
-    }
+      notifier.noteInbound(provider)
+    },
+    (threadIds) => notifier.noteLabeled(threadIds)
   )
   commsManager = manager
 

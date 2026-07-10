@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join, normalize, extname } from 'node:path'
 import { networkInterfaces, hostname } from 'node:os'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { IpcEvents, RemoteStatus } from '../../shared/ipc-contract'
 import { getSettings, saveSettings } from '../settings'
@@ -46,16 +47,63 @@ export function remoteBroadcast<K extends keyof IpcEvents>(
   }
 }
 
-export function getRemoteStatus(): RemoteStatus {
+export async function getRemoteStatus(): Promise<RemoteStatus> {
   const s = getSettings()
+  const ts = server ? await tailscaleInfo() : { dns: null, serveActive: false }
   return {
     running: server !== null,
     port: server ? runningPort : s.remotePort,
     token: s.remoteToken,
     urls: server && s.remoteToken ? connectUrls(runningPort, s.remoteToken) : [],
+    httpsUrl:
+      server && ts.dns && s.remoteToken ? `https://${ts.dns}/#token=${s.remoteToken}` : null,
+    serveActive: ts.serveActive,
     clients: wss?.clients.size ?? 0,
     error: lastError
   }
+}
+
+// --- tailscale detection (best-effort) -------------------------------------
+// The HTTPS URL matters on iOS: PWA install + push need a secure context,
+// and `tailscale serve` provides it with a real cert on the tailnet name.
+// If the CLI isn't there, everything silently falls back to the plain URLs.
+
+const TAILSCALE_BINS = ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', 'tailscale']
+let tsCache: { dns: string | null; serveActive: boolean; at: number } | null = null
+
+function tsExec(args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    const tryBin = (i: number): void => {
+      if (i >= TAILSCALE_BINS.length) return resolve(null)
+      execFile(TAILSCALE_BINS[i], args, { timeout: 3000 }, (err, stdout) => {
+        if (err) tryBin(i + 1)
+        else resolve(String(stdout))
+      })
+    }
+    tryBin(0)
+  })
+}
+
+async function tailscaleInfo(): Promise<{ dns: string | null; serveActive: boolean }> {
+  if (tsCache && Date.now() - tsCache.at < 30_000) return tsCache
+  let dns: string | null = null
+  let serveActive = false
+  const status = await tsExec(['status', '--json'])
+  if (status) {
+    try {
+      dns = String((JSON.parse(status) as { Self?: { DNSName?: string } }).Self?.DNSName ?? '')
+        .replace(/\.$/, '')
+      if (!dns) dns = null
+    } catch {
+      dns = null
+    }
+  }
+  if (dns) {
+    const serve = await tsExec(['serve', 'status'])
+    serveActive = serve !== null && serve.includes(`:${runningPort}`)
+  }
+  tsCache = { dns, serveActive, at: Date.now() }
+  return tsCache
 }
 
 /** reconcile server state with settings — call at startup and after settings:set */
@@ -154,6 +202,7 @@ const MIME: Record<string, string> = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.woff2': 'font/woff2',
   '.map': 'application/json'
 }

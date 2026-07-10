@@ -17,6 +17,14 @@ window.addEventListener('unhandledrejection', (e) => {
   logError(`unhandledrejection: ${r instanceof Error ? (r.stack ?? r.message) : String(r)}`)
 })
 
+// remote client only: install the PWA service worker (registration silently
+// no-ops on plain-http LAN visits — not a secure context — which is fine)
+if (!window.api && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}
+
 interface BoundaryState {
   error: Error | null
 }

@@ -80,6 +80,16 @@ describe('tasks', () => {
     expect(reopened.completed_at).toBeNull()
   })
 
+  it('creates directly into a status (board column add)', () => {
+    const t = tasks.createTask(db, { title: 'wip', status: 'in_progress' }, T0)
+    expect(t.status).toBe('in_progress')
+    expect(t.completed_at).toBeNull()
+
+    const d = tasks.createTask(db, { title: 'already shipped', status: 'done' }, T0)
+    expect(d.status).toBe('done')
+    expect(d.completed_at).toBe(T0.toISOString())
+  })
+
   it('filters by due_before and status', () => {
     tasks.createTask(db, { title: 'a', due_date: '2026-07-01' }, T0)
     tasks.createTask(db, { title: 'b', due_date: '2026-07-20' }, T0)

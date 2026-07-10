@@ -1367,6 +1367,9 @@ function VoiceNoteChip({
   mine: boolean
 }): React.JSX.Element {
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  // guards the await in ensureAudio: without it, unmounting mid-fetch lets
+  // the resolved promise create + play an Audio nothing can ever stop
+  const aliveRef = useRef(true)
   const [busy, setBusy] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [progress, setProgress] = useState(0) // 0..1
@@ -1374,19 +1377,21 @@ function VoiceNoteChip({
   const [error, setError] = useState<string | null>(null)
 
   // leaving the thread must stop playback
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
       audioRef.current?.pause()
       audioRef.current = null
-    },
-    []
-  )
+    }
+  }, [])
 
   const ensureAudio = async (): Promise<HTMLAudioElement | null> => {
     if (audioRef.current) return audioRef.current
     setBusy(true)
     try {
       const res = await api.invoke('comms:attachmentData', a.id)
+      if (!aliveRef.current) return null
       if (!res.ok) {
         setError(res.message)
         return null
@@ -1409,6 +1414,10 @@ function VoiceNoteChip({
         audio.currentTime = 0
         if (Number.isFinite(audio.duration)) setClock(fmtClock(audio.duration))
       })
+      audio.addEventListener('error', () => {
+        setPlaying(false)
+        setError('could not play this voice message')
+      })
       audioRef.current = audio
       return audio
     } finally {
@@ -1419,7 +1428,7 @@ function VoiceNoteChip({
   const toggle = async (): Promise<void> => {
     setError(null)
     const audio = await ensureAudio()
-    if (!audio) return
+    if (!audio || !aliveRef.current) return
     if (audio.paused) {
       void audio.play().catch((e) => setError(e instanceof Error ? e.message : String(e)))
     } else {

@@ -3,7 +3,7 @@
 // sockets) and the outbox drain. All sends — composer, agent, MCP — go
 // through comms_outbox; the drain is the single delivery path.
 import { join } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { shell } from 'electron'
 import type { DbDriver } from '../../core/driver'
 import type { CommsAccount } from '../../core/comms-types'
@@ -27,6 +27,8 @@ import { loadMacContacts } from '../contacts'
 import { logLine } from '../logger'
 
 const GMAIL_INTERVAL_MS = 15_000 // incremental history.list is ~free; poll tight so mail feels live
+/** in-app preview (data URL) size ceiling — bigger files use download+open */
+const MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 const SLACK_INTERVAL_MS = 90_000
 const DRAIN_INTERVAL_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
@@ -322,8 +324,17 @@ export class CommsSyncManager {
     if (!res.ok) return res
     const att = repo.getAttachment(this.db, attachmentId)
     const mime = att?.mime_type?.split(';')[0] || 'application/octet-stream'
-    const bytes = readFileSync(res.path)
-    return { ok: true, dataUrl: `data:${mime};base64,${bytes.toString('base64')}` }
+    try {
+      // readFileSync + base64 both block the main process — refuse anything
+      // that isn't preview-sized (voice notes are ~100KB)
+      if (statSync(res.path).size > MAX_PREVIEW_BYTES) {
+        return { ok: false, message: 'attachment too large to preview — use download' }
+      }
+      const bytes = readFileSync(res.path)
+      return { ok: true, dataUrl: `data:${mime};base64,${bytes.toString('base64')}` }
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    }
   }
 
   /** Ensure the attachment's bytes exist on disk (cached via local_path). */

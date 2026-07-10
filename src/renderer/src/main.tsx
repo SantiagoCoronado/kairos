@@ -1,12 +1,13 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import { api } from './lib/api'
 import './styles.css'
 
 // ship every renderer failure to ~/Kairos/logs/app.log — a silent white
 // screen with no trace is not debuggable
 const logError = (message: string): void => {
-  void window.api.invoke('log:renderer', 'error', message).catch(() => {})
+  void api.invoke('log:renderer', 'error', message).catch(() => {})
 }
 window.addEventListener('error', (e) => {
   logError(`window.onerror: ${e.message} (${e.filename}:${e.lineno})${e.error?.stack ? `\n${e.error.stack}` : ''}`)

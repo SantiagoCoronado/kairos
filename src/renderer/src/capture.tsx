@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client'
 import { Zap } from 'lucide-react'
 import './styles.css'
 
+// the capture window only exists inside Electron, so the bridge is always there
+const api = window.api!
+
 type Flash = { ok: boolean; message: string } | null
 
 function Capture(): React.JSX.Element {
@@ -11,7 +14,7 @@ function Capture(): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    return window.api.on('capture:reset', () => {
+    return api.on('capture:reset', () => {
       setText('')
       setFlash(null)
       inputRef.current?.focus()
@@ -21,16 +24,16 @@ function Capture(): React.JSX.Element {
   const submit = async (): Promise<void> => {
     const raw = text.trim()
     if (!raw) {
-      void window.api.invoke('capture:hide')
+      void api.invoke('capture:hide')
       return
     }
-    const result = await window.api.invoke('capture:submit', raw)
+    const result = await api.invoke('capture:submit', raw)
     setFlash(result)
     if (result.ok) {
       setText('')
       setTimeout(() => {
         setFlash(null)
-        void window.api.invoke('capture:hide')
+        void api.invoke('capture:hide')
       }, 550)
     }
   }
@@ -49,7 +52,7 @@ function Capture(): React.JSX.Element {
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') void submit()
-            if (e.key === 'Escape') void window.api.invoke('capture:hide')
+            if (e.key === 'Escape') void api.invoke('capture:hide')
           }}
           placeholder='capture…  ("p Anna had coffee" · @work !1 due:fri)'
           className="flex-1 bg-transparent text-[15px] text-text placeholder:text-faint focus:outline-none"

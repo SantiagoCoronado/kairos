@@ -20,7 +20,10 @@ const DEFAULTS: Settings = {
   googleClientSecret: null,
   slackClientId: null,
   slackClientSecret: null,
-  automationsSeenAt: null
+  automationsSeenAt: null,
+  remoteAccess: false,
+  remoteToken: null,
+  remotePort: 4699
 }
 
 const FILE = join(DATA_DIR, 'settings.json')

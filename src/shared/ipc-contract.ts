@@ -232,6 +232,9 @@ export interface IpcApi {
   'settings:set': (patch: Partial<AppSettings>) => AppSettings
   'settings:authStatus': () => Promise<AuthStatus>
 
+  /** remote-access (phone/browser) server: live state + connect URLs */
+  'remote:status': () => RemoteStatus
+
   /** today's Claude Code token usage, parsed from ~/.claude session transcripts */
   'usage:claudeToday': () => Promise<ClaudeUsageToday>
   /** all-time Claude Code stats: heatmap days, streaks, totals */
@@ -390,6 +393,22 @@ export interface AppSettings {
   /** UI cursor, not a user preference: newest automation run already seen
    *  in the Automations view (drives the sidebar unseen-runs badge) */
   automationsSeenAt: string | null
+  /** serve the UI over HTTP+WebSocket so a phone/browser can connect */
+  remoteAccess: boolean
+  /** bearer token required on the WebSocket handshake; generated on first enable */
+  remoteToken: string | null
+  remotePort: number
+}
+
+export interface RemoteStatus {
+  running: boolean
+  port: number
+  token: string | null
+  /** connect URLs, one per usable interface (tailscale/LAN), token in the hash */
+  urls: string[]
+  clients: number
+  /** last bind/start failure, if any (e.g. port in use) */
+  error: string | null
 }
 
 export type AuthStatus =

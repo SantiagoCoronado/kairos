@@ -17,6 +17,7 @@ export type DbEntity =
   | 'calendars'
   | 'calendar_accounts'
   | 'settings'
+  | 'terminal'
   | 'all'
 
 export type InteractionKind = 'call' | 'message' | 'email' | 'meeting' | 'coffee' | 'other'

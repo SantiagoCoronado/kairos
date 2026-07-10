@@ -134,3 +134,71 @@ describe('TerminalManager', () => {
     expect(manager.list()).toEqual([])
   })
 })
+
+describe('bell attention (agent-finished badge)', () => {
+  let ptys: FakePty[]
+  let manager: TerminalManager
+  let attentionPings: number
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    const fake = makeFakeSpawn()
+    ptys = fake.ptys
+    attentionPings = 0
+    manager = new TerminalManager(
+      fake.spawn,
+      () => {},
+      () => attentionPings++
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a standalone BEL flags the session while the view is closed', () => {
+    manager.create()
+    ptys[0].emitData('done!\x07')
+    expect(manager.attentionCount()).toBe(1)
+    expect(attentionPings).toBe(1)
+    // more bells on an already-flagged session don't re-ping
+    ptys[0].emitData('\x07')
+    expect(attentionPings).toBe(1)
+  })
+
+  it('BELs terminating OSC sequences are protocol noise, not bells', () => {
+    manager.create()
+    ptys[0].emitData('\x1b]0;my title\x07regular output')
+    expect(manager.attentionCount()).toBe(0)
+    // OSC spanning two chunks, ST-terminated, then a real bell
+    ptys[0].emitData('\x1b]7;file://host/dir')
+    ptys[0].emitData('rest of the osc\x1b\\')
+    expect(manager.attentionCount()).toBe(0)
+    ptys[0].emitData('\x07')
+    expect(manager.attentionCount()).toBe(1)
+  })
+
+  it('no flag while the view is open; opening the view clears flags', () => {
+    manager.create()
+    manager.setViewActive(true)
+    ptys[0].emitData('\x07')
+    expect(manager.attentionCount()).toBe(0)
+
+    manager.setViewActive(false)
+    ptys[0].emitData('\x07')
+    expect(manager.attentionCount()).toBe(1)
+    manager.setViewActive(true)
+    expect(manager.attentionCount()).toBe(0)
+    expect(attentionPings).toBe(2) // one for the flag, one for the clear
+  })
+
+  it('session exit drops its flag from the count', () => {
+    manager.create()
+    manager.create()
+    ptys[0].emitData('\x07')
+    ptys[1].emitData('\x07')
+    expect(manager.attentionCount()).toBe(2)
+    ptys[0].emitExit(0)
+    expect(manager.attentionCount()).toBe(1)
+  })
+})

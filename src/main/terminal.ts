@@ -29,14 +29,22 @@ interface Session {
   backlogBytes: number
   pending: string[]
   flushTimer: ReturnType<typeof setTimeout> | null
+  /** rang the bell while the Terminal view was closed (agent finished) */
+  attention: boolean
+  /** bell scanner state: inside an OSC escape sequence (may span chunks) */
+  inOsc: boolean
 }
 
 export class TerminalManager {
   private sessions = new Map<string, Session>()
+  /** whether the renderer currently shows the Terminal view */
+  private viewActive = false
 
   constructor(
     private spawn: PtySpawn,
-    private emit: (event: TerminalEvent) => void
+    private emit: (event: TerminalEvent) => void,
+    /** the set of attention-flagged sessions changed (sidebar badge) */
+    private onAttention?: () => void
   ) {}
 
   create(): TerminalSessionInfo {
@@ -64,11 +72,19 @@ export class TerminalManager {
       backlog: [],
       backlogBytes: 0,
       pending: [],
-      flushTimer: null
+      flushTimer: null,
+      attention: false,
+      inOsc: false
     }
     this.sessions.set(id, session)
 
     pty.onData((data) => {
+      // scan unconditionally — the OSC state machine must see every byte
+      const bell = this.scanForBell(session, data)
+      if (bell && !this.viewActive && !session.attention) {
+        session.attention = true
+        this.onAttention?.()
+      }
       session.backlog.push(data)
       session.backlogBytes += data.length
       while (session.backlogBytes > BACKLOG_CAP_BYTES && session.backlog.length > 1) {
@@ -86,10 +102,59 @@ export class TerminalManager {
     pty.onExit(({ exitCode }) => {
       if (session.flushTimer) clearTimeout(session.flushTimer)
       this.sessions.delete(id)
+      if (session.attention) this.onAttention?.() // its badge count just dropped
       this.emit({ sessionId: id, kind: 'exit', exitCode })
     })
 
     return { id, title: session.title }
+  }
+
+  /**
+   * BEL detector for the "agent finished" badge. BELs that terminate an OSC
+   * sequence (title/cwd reports end in BEL) are protocol noise — only a
+   * standalone BEL is something ringing the terminal bell, which is what
+   * Claude Code & co. do on completion.
+   */
+  private scanForBell(session: Session, data: string): boolean {
+    let bell = false
+    for (let i = 0; i < data.length; i++) {
+      const c = data.charCodeAt(i)
+      if (session.inOsc) {
+        if (c === 0x07) {
+          session.inOsc = false
+        } else if (c === 0x1b && data.charCodeAt(i + 1) === 0x5c) {
+          session.inOsc = false // ST terminator (ESC \)
+          i++
+        }
+      } else if (c === 0x1b && data[i + 1] === ']') {
+        session.inOsc = true
+        i++
+      } else if (c === 0x07) {
+        bell = true
+      }
+    }
+    return bell
+  }
+
+  /** Renderer visibility report; opening the view clears every flag. */
+  setViewActive(active: boolean): void {
+    this.viewActive = active
+    if (!active) return
+    let changed = false
+    for (const s of this.sessions.values()) {
+      if (s.attention) {
+        s.attention = false
+        changed = true
+      }
+    }
+    if (changed) this.onAttention?.()
+  }
+
+  /** Sessions that rang the bell since the view was last open. */
+  attentionCount(): number {
+    let n = 0
+    for (const s of this.sessions.values()) if (s.attention) n++
+    return n
   }
 
   list(): TerminalSessionInfo[] {

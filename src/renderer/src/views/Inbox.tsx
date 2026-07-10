@@ -17,7 +17,10 @@ import {
   Pin,
   Check,
   Sparkles,
-  Tag
+  Tag,
+  Play,
+  Pause,
+  Mic
 } from 'lucide-react'
 import type {
   CommsAccount,
@@ -1282,6 +1285,11 @@ function MessageBubble({
     minute: '2-digit'
   })
   const html = m.body_html
+  const audioAtts = attachments?.filter((a) => a.mime_type?.startsWith('audio/')) ?? []
+  const fileAtts = attachments?.filter((a) => !a.mime_type?.startsWith('audio/')) ?? []
+  // a voice note's body is just the '[voice message]' placeholder — the
+  // player replaces it rather than showing both
+  const voiceOnly = audioAtts.length > 0 && !html && m.body_text === '[voice message]'
   return (
     <div className={cn(html ? 'max-w-full' : 'max-w-[85%]', m.is_me ? 'ml-auto' : '')}>
       <div className="flex items-baseline gap-2 mb-0.5 relative">
@@ -1319,7 +1327,7 @@ function MessageBubble({
         <div className="rounded-lg overflow-hidden border border-border bg-white">
           <HtmlBody html={html} />
         </div>
-      ) : (
+      ) : voiceOnly ? null : (
         <div
           className={cn(
             'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words',
@@ -1329,11 +1337,144 @@ function MessageBubble({
           {m.body_text || <span className="text-faint italic">(no text)</span>}
         </div>
       )}
-      {attachments?.map((a) => <AttachmentChip key={a.id} attachment={a} />)}
+      {audioAtts.map((a) => (
+        <VoiceNoteChip key={a.id} attachment={a} mine={m.is_me === 1} />
+      ))}
+      {fileAtts.map((a) => (
+        <AttachmentChip key={a.id} attachment={a} />
+      ))}
       {m.has_attachments === 1 && !attachments?.length && (
         <div className="mt-1 text-[11px] text-faint">
           📎 attachment (synced before download support — open in the app)
         </div>
+      )}
+    </div>
+  )
+}
+
+function fmtClock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** Inline player for voice notes / audio attachments. Bytes come over IPC as
+ *  a data URL on first play (then cached on disk main-side). */
+function VoiceNoteChip({
+  attachment: a,
+  mine
+}: {
+  attachment: CommsAttachment
+  mine: boolean
+}): React.JSX.Element {
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  const [progress, setProgress] = useState(0) // 0..1
+  const [clock, setClock] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // leaving the thread must stop playback
+  useEffect(
+    () => () => {
+      audioRef.current?.pause()
+      audioRef.current = null
+    },
+    []
+  )
+
+  const ensureAudio = async (): Promise<HTMLAudioElement | null> => {
+    if (audioRef.current) return audioRef.current
+    setBusy(true)
+    try {
+      const res = await api.invoke('comms:attachmentData', a.id)
+      if (!res.ok) {
+        setError(res.message)
+        return null
+      }
+      const audio = new Audio(res.dataUrl)
+      audio.addEventListener('loadedmetadata', () => {
+        if (Number.isFinite(audio.duration)) setClock(fmtClock(audio.duration))
+      })
+      audio.addEventListener('timeupdate', () => {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          setProgress(audio.currentTime / audio.duration)
+          setClock(fmtClock(audio.currentTime))
+        }
+      })
+      audio.addEventListener('play', () => setPlaying(true))
+      audio.addEventListener('pause', () => setPlaying(false))
+      audio.addEventListener('ended', () => {
+        setPlaying(false)
+        setProgress(0)
+        audio.currentTime = 0
+        if (Number.isFinite(audio.duration)) setClock(fmtClock(audio.duration))
+      })
+      audioRef.current = audio
+      return audio
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggle = async (): Promise<void> => {
+    setError(null)
+    const audio = await ensureAudio()
+    if (!audio) return
+    if (audio.paused) {
+      void audio.play().catch((e) => setError(e instanceof Error ? e.message : String(e)))
+    } else {
+      audio.pause()
+    }
+  }
+
+  const seek = (e: React.MouseEvent<HTMLDivElement>): void => {
+    const audio = audioRef.current
+    if (!audio || !Number.isFinite(audio.duration) || audio.duration === 0) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    audio.currentTime = ((e.clientX - rect.left) / rect.width) * audio.duration
+  }
+
+  return (
+    <div className="mt-1">
+      <div
+        className={cn(
+          'inline-flex items-center gap-2 w-60 max-w-full px-2.5 py-1.5 rounded-full border',
+          mine ? 'bg-accent/10 border-accent/20' : 'bg-panel border-border'
+        )}
+      >
+        <button
+          onClick={() => void toggle()}
+          disabled={busy}
+          title={playing ? 'Pause' : 'Play voice message'}
+          className="shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-full bg-raised hover:bg-border text-text disabled:opacity-60"
+        >
+          {busy ? (
+            <RefreshCw size={11} className="animate-spin text-faint" />
+          ) : playing ? (
+            <Pause size={11} />
+          ) : (
+            <Play size={11} className="ml-0.5" />
+          )}
+        </button>
+        <div
+          className="flex-1 h-1 rounded-full bg-border cursor-pointer"
+          onClick={seek}
+          title="Seek"
+        >
+          <div
+            className="h-1 rounded-full bg-accent"
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+        </div>
+        <span className="shrink-0 font-mono text-[10px] text-faint inline-flex items-center gap-1">
+          <Mic size={10} />
+          {clock ?? '· · ·'}
+        </span>
+      </div>
+      {error && (
+        <p className="text-[10.5px] text-danger truncate" title={error}>
+          {error}
+        </p>
       )}
     </div>
   )

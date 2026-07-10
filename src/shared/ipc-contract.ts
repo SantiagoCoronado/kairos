@@ -220,6 +220,8 @@ export interface IpcApi {
   'comms:threadAttachments': (threadId: string) => CommsAttachment[]
   /** fetch the bytes (cached on disk after the first download), then open the file */
   'comms:downloadAttachment': (attachmentId: string) => Promise<CommsDownloadResult>
+  /** fetch the bytes as a data URL for in-app rendering (voice notes) */
+  'comms:attachmentData': (attachmentId: string) => Promise<CommsAttachmentDataResult>
   'comms:markRead': (threadId: string) => void
   /** re-flag the newest inbound message unread; gmail propagates remotely */
   'comms:markUnread': (threadId: string) => void
@@ -250,6 +252,9 @@ export interface IpcApi {
 }
 
 export type CommsDownloadResult = { ok: true; path: string } | { ok: false; message: string }
+export type CommsAttachmentDataResult =
+  | { ok: true; dataUrl: string }
+  | { ok: false; message: string }
 
 export interface CommsSendInput {
   accountId: string

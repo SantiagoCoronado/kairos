@@ -151,6 +151,28 @@ describe('people + upsert', () => {
     expect(people.listPeople(db, { search: 'initech' })).toHaveLength(1)
     expect(people.listPeople(db, { search: 'nobody' })).toHaveLength(0)
   })
+
+  it('archive → archived list → unarchive → delete lifecycle', () => {
+    const p = people.upsertPerson(db, { name: 'Vero' }, T0)
+    people.archivePerson(db, p.id, T0)
+    expect(people.listPeople(db)).toHaveLength(0)
+    expect(people.listPeople(db, { archived: true }).map((x) => x.name)).toEqual(['Vero'])
+
+    people.unarchivePerson(db, p.id, T0)
+    expect(people.listPeople(db)).toHaveLength(1)
+    expect(people.listPeople(db, { archived: true })).toHaveLength(0)
+
+    people.deletePerson(db, p.id)
+    expect(people.getPerson(db, p.id)).toBeUndefined()
+  })
+
+  it('clearSnooze empties snoozed_until', () => {
+    const p = people.upsertPerson(db, { name: 'Anna' }, T0)
+    people.snoozeFollowup(db, p.id, '2026-08-01', T0)
+    expect(people.getPerson(db, p.id)?.snoozed_until).toBe('2026-08-01')
+    people.clearSnooze(db, p.id, T0)
+    expect(people.getPerson(db, p.id)?.snoozed_until).toBeNull()
+  })
 })
 
 describe('followup cadence math (injected clock)', () => {

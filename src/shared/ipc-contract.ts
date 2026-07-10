@@ -42,6 +42,7 @@ import type {
 import type {
   CommsAccount,
   CommsAttachment,
+  CommsIdentity,
   CommsThread,
   CommsThreadListItem,
   CommsMessage,
@@ -115,12 +116,18 @@ export interface IpcApi {
   'people:detail': (id: string) => PersonDetail | null
   'people:upsert': (input: PersonUpsert) => Person
   'people:archive': (id: string) => void
+  'people:unarchive': (id: string) => void
+  /** hard delete — interactions/identity links cascade, tasks/messages unlink */
+  'people:delete': (id: string) => void
+  /** linked comms handles for the detail view's unlink list */
+  'people:identities': (personId: string) => CommsIdentity[]
 
   'interactions:log': (input: NewInteraction) => Interaction
 
   'followups:due': () => FollowupDue[]
   'followups:statuses': () => FollowupDue[]
   'followups:snooze': (personId: string, untilDate: string) => void
+  'followups:clearSnooze': (personId: string) => void
 
   'objectives:list': (f: {
     period?: string
@@ -238,6 +245,8 @@ export interface IpcApi {
   'comms:send': (input: CommsSendInput) => Promise<CommsSendResult>
   'comms:syncNow': (accountId?: string) => void
   'comms:linkSender': (provider: CommsProvider, handle: string, personId: string) => void
+  /** inverse of linkSender: drop the identity and clear person_id on its messages */
+  'comms:unlinkSender': (provider: CommsProvider, handle: string) => void
   'comms:setThreadSync': (threadId: string, enabled: boolean) => void
   /** bulk channel opt-in/out — one db:changed instead of one per checkbox */
   'comms:setThreadsSync': (threadIds: string[], enabled: boolean) => void

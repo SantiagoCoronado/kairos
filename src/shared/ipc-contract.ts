@@ -233,7 +233,7 @@ export interface IpcApi {
   'settings:authStatus': () => Promise<AuthStatus>
 
   /** remote-access (phone/browser) server: live state + connect URLs */
-  'remote:status': () => RemoteStatus
+  'remote:status': () => Promise<RemoteStatus>
 
   /** today's Claude Code token usage, parsed from ~/.claude session transcripts */
   'usage:claudeToday': () => Promise<ClaudeUsageToday>
@@ -406,6 +406,11 @@ export interface RemoteStatus {
   token: string | null
   /** connect URLs, one per usable interface (tailscale/LAN), token in the hash */
   urls: string[]
+  /** https://<mac>.<tailnet>.ts.net/#token=… when the Tailscale CLI is present —
+   *  the URL the iPhone should use (secure context: PWA install + push) */
+  httpsUrl: string | null
+  /** whether `tailscale serve` is currently proxying to our port */
+  serveActive: boolean
   clients: number
   /** last bind/start failure, if any (e.g. port in use) */
   error: string | null

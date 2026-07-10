@@ -573,8 +573,54 @@ function RemoteSection({
               {status.urls.length > 1 ? ' · hover the link for every address' : ''}
             </p>
           )}
+          {status.running && status.httpsUrl && status.serveActive && (
+            <RemoteHttpsRow url={status.httpsUrl} />
+          )}
+          {status.running && !status.httpsUrl && (
+            <p className="text-[11px] text-faint">
+              For the iPhone: install Tailscale on Mac + phone (same account), then run{' '}
+              <code className="font-mono">
+                tailscale serve --bg localhost:{status.port}
+              </code>{' '}
+              once — an HTTPS link will appear here.
+            </p>
+          )}
+          {status.running && status.httpsUrl && !status.serveActive && (
+            <p className="text-[11px] text-faint">
+              Tailscale found — run{' '}
+              <code className="font-mono">
+                tailscale serve --bg localhost:{status.port}
+              </code>{' '}
+              once to activate the HTTPS link for the iPhone.
+            </p>
+          )}
         </div>
       )}
+    </div>
+  )
+}
+
+function RemoteHttpsRow({ url }: { url: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <div className="space-y-0.5">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-accent">
+        iphone (https)
+      </span>
+      <div className="flex items-center gap-2">
+        <code className="flex-1 truncate font-mono text-[11px] text-muted bg-raised border border-border rounded px-2 py-1">
+          {url}
+        </code>
+        <Button variant="ghost" onClick={copy}>
+          {copied ? 'copied' : 'copy link'}
+        </Button>
+      </div>
     </div>
   )
 }

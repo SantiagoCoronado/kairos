@@ -1,6 +1,7 @@
 import type { DbDriver, SqlValue } from '../driver'
 import type { Person, PersonUpsert, PeopleFilter, PersonDetail, Task, Interaction } from '../types'
 import { newId, nowIso } from '../ids'
+import { canonicalPhoneDigits } from './comms'
 
 export function listPeople(db: DbDriver, f: PeopleFilter = {}): Person[] {
   const where: string[] = []
@@ -21,6 +22,41 @@ export function listPeople(db: DbDriver, f: PeopleFilter = {}): Person[] {
 
 export function getPerson(db: DbDriver, id: string): Person | undefined {
   return db.get<Person>('SELECT * FROM people WHERE id = ?', id)
+}
+
+/**
+ * Dedupe lookup for the Contacts autocomplete: does any non-archived person
+ * already own one of these emails/phones? Phones compare by canonical digits
+ * with an 8-digit-suffix tolerance (country-code formatting differences),
+ * mirroring the WhatsApp contact matching in repo/comms.
+ */
+export function findPersonByContact(
+  db: DbDriver,
+  emails: string[],
+  phones: string[]
+): Person | undefined {
+  for (const email of emails) {
+    const p = db.get<Person>(
+      'SELECT * FROM people WHERE archived_at IS NULL AND email IS NOT NULL AND lower(email) = lower(?)',
+      email
+    )
+    if (p) return p
+  }
+  const digits = phones
+    .map((p) => canonicalPhoneDigits(p.replace(/\D/g, '')))
+    .filter((d) => d.length >= 7)
+  if (digits.length === 0) return undefined
+  const candidates = db.all<Person>(
+    "SELECT * FROM people WHERE archived_at IS NULL AND phone IS NOT NULL AND phone != ''"
+  )
+  for (const person of candidates) {
+    const pd = canonicalPhoneDigits(person.phone!.replace(/\D/g, ''))
+    if (pd.length < 7) continue
+    if (digits.some((d) => d === pd || (d.length >= 8 && pd.length >= 8 && d.slice(-8) === pd.slice(-8)))) {
+      return person
+    }
+  }
+  return undefined
 }
 
 export function getPersonDetail(db: DbDriver, id: string): PersonDetail | undefined {

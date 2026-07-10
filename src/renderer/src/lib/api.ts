@@ -27,6 +27,10 @@ export function useInvoke<K extends IpcChannel>(
   useEffect(() => reload(), [reload])
 
   useEffect(() => {
+    // watch: [] opts out of db-driven refresh entirely — those hooks back
+    // non-db data (macOS calendar helper, usage logs) that a broadcast
+    // entity 'all' (e.g. the MCP-write poll) must not reload
+    if (watchKey === '') return undefined
     const entities = watchKey.split(',') as DbEntity[]
     return api.on('db:changed', (p) => {
       if (p.entity === 'all' || entities.includes(p.entity) || entities.includes('all')) reload()

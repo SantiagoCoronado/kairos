@@ -205,6 +205,10 @@ export interface IpcApi {
   'export:markdown': () => { files: number; dir: string }
 
   'chat:send': (localSessionId: string | null, text: string) => { localSessionId: string }
+  /** stage files for the next message via the OS file picker */
+  'chat:attach': () => Promise<ChatAttachment[]>
+  /** stage dropped files (renderer resolves File → absolute path first) */
+  'chat:attachPaths': (paths: string[]) => ChatAttachment[]
   'chat:interrupt': (localSessionId: string) => void
   'chat:sessions': () => ChatSessionInfo[]
   /** replay a session's persisted transcript; falls back to an automation run's stored result */
@@ -311,6 +315,14 @@ export interface ChatDraftInput {
 }
 
 export type ChatDraftResult = { ok: true; draft: string } | { ok: false; message: string }
+
+/** a file staged into chat-uploads, ready to reference in a prompt */
+export interface ChatAttachment {
+  name: string
+  /** absolute path of the staged copy (inside DATA_DIR/chat-uploads) */
+  path: string
+  size: number
+}
 
 export type CommsConnectResult = { ok: true; account: CommsAccount } | { ok: false; message: string }
 
@@ -510,4 +522,6 @@ export type RendererApi = {
     ...args: Parameters<IpcApi[K]>
   ): Promise<Awaited<ReturnType<IpcApi[K]>>>
   on<K extends IpcEventChannel>(channel: K, cb: (payload: IpcEvents[K]) => void): () => void
+  /** absolute path of a DataTransfer File (webUtils bridge; drag-drop only) */
+  pathForFile(file: File): string
 }

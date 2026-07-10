@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, Square, Plus, Wrench } from 'lucide-react'
-import type { ChatStreamEvent } from '../../../shared/ipc-contract'
+import { Sparkles, Square, Plus, Wrench, Paperclip, X } from 'lucide-react'
+import type { ChatAttachment, ChatStreamEvent } from '../../../shared/ipc-contract'
 import { api } from '../lib/api'
 import { Button, cn } from '../components/ui'
 
@@ -22,6 +22,9 @@ export function ChatView({
   const [bubbles, setBubbles] = useState<Bubble[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+  const [dragging, setDragging] = useState(false)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<string | null>(null)
   sessionRef.current = sessionId
@@ -86,12 +89,36 @@ export function ChatView({
 
   const send = async (): Promise<void> => {
     const text = input.trim()
-    if (!text || busy) return
+    if ((!text && attachments.length === 0) || busy) return
+    // staged paths ride inside the prompt — the agent's Read is scoped to
+    // exactly the uploads dir, so a bare path is all it needs
+    const attachNote =
+      attachments.length > 0
+        ? `${text ? '\n\n' : ''}[attached file${attachments.length > 1 ? 's' : ''} — read as needed]\n` +
+          attachments.map((a) => `- ${a.path}`).join('\n')
+        : ''
+    const prompt = text + attachNote
     setInput('')
+    setAttachments([])
+    if (inputRef.current) inputRef.current.style.height = 'auto'
     setBusy(true)
-    setBubbles((prev) => [...prev, { role: 'user', text, tools: [] }])
-    const { localSessionId } = await api.invoke('chat:send', sessionId, text)
+    setBubbles((prev) => [...prev, { role: 'user', text: prompt, tools: [] }])
+    const { localSessionId } = await api.invoke('chat:send', sessionId, prompt)
     setSessionId(localSessionId)
+  }
+
+  const attach = async (): Promise<void> => {
+    const staged = await api.invoke('chat:attach')
+    if (staged.length > 0) setAttachments((prev) => [...prev, ...staged])
+  }
+
+  const onDrop = async (e: React.DragEvent): Promise<void> => {
+    e.preventDefault()
+    setDragging(false)
+    const paths = [...e.dataTransfer.files].map((f) => api.pathForFile(f)).filter(Boolean)
+    if (paths.length === 0) return
+    const staged = await api.invoke('chat:attachPaths', paths)
+    if (staged.length > 0) setAttachments((prev) => [...prev, ...staged])
   }
 
   const stop = (): void => {
@@ -105,7 +132,21 @@ export function ChatView({
   }
 
   return (
-    <div className="h-full flex flex-col max-w-3xl mx-auto w-full">
+    <div
+      className="h-full flex flex-col max-w-3xl mx-auto w-full"
+      onDragOver={(e) => {
+        // only real OS file drags count — not text selections dragged around
+        if ([...e.dataTransfer.types].includes('Files')) {
+          e.preventDefault()
+          setDragging(true)
+        }
+      }}
+      onDragLeave={(e) => {
+        // ignore leaves into child elements; only leaving the container ends the drag
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false)
+      }}
+      onDrop={(e) => void onDrop(e)}
+    >
       <div className="flex items-center justify-between px-6 pt-4">
         <span className="text-[12px] text-faint">
           Runs on your Claude Code subscription — the rest of the app works without it.
@@ -161,24 +202,82 @@ export function ChatView({
         )}
       </div>
 
-      <div className="px-6 pb-5 pt-1 flex gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && void send()}
-          placeholder="Ask about your people, tasks, objectives…"
-          className="flex-1 bg-raised border border-border rounded-lg px-3.5 py-2.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong"
-        />
-        {busy ? (
-          <Button onClick={stop} title="Stop">
-            <Square size={14} />
-          </Button>
-        ) : (
-          <Button variant="accent" onClick={() => void send()} disabled={!input.trim()}>
-            Send
-          </Button>
+      <div className="px-6 pb-5 pt-1">
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pb-1.5">
+            {attachments.map((a) => (
+              <span
+                key={a.path}
+                className="inline-flex items-center gap-1.5 max-w-64 px-2 py-1 rounded border border-border bg-raised text-[11.5px]"
+              >
+                <Paperclip size={11} className="shrink-0 text-faint" />
+                <span className="truncate">{a.name}</span>
+                <span className="shrink-0 text-faint">{humanKb(a.size)}</span>
+                <button
+                  title="Remove"
+                  className="shrink-0 text-faint hover:text-danger"
+                  onClick={() => setAttachments((prev) => prev.filter((x) => x.path !== a.path))}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
         )}
+        <div
+          className={cn(
+            'flex items-end gap-2 rounded-lg border bg-raised px-2 py-1.5 transition-colors',
+            dragging ? 'border-accent border-dashed' : 'border-border focus-within:border-border-strong'
+          )}
+        >
+          <button
+            title="Attach files (or drop them anywhere here)"
+            onClick={() => void attach()}
+            className="shrink-0 p-1.5 rounded text-faint hover:text-text hover:bg-border/50"
+          >
+            <Paperclip size={14} />
+          </button>
+          <textarea
+            ref={inputRef}
+            value={input}
+            rows={1}
+            onChange={(e) => {
+              setInput(e.target.value)
+              // auto-grow to content, capped by the max-h class below
+              e.target.style.height = 'auto'
+              e.target.style.height = `${e.target.scrollHeight}px`
+            }}
+            onKeyDown={(e) => {
+              // Shift+Enter = newline; plain Enter sends (but never mid-IME composition)
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                void send()
+              }
+            }}
+            placeholder={dragging ? 'Drop files to attach' : 'Ask about your people, tasks, objectives… (Shift+Enter for a new line)'}
+            className="flex-1 max-h-44 resize-none overflow-y-auto bg-transparent py-1 text-[13px] text-text placeholder:text-faint focus:outline-none"
+          />
+          {busy ? (
+            <Button onClick={stop} title="Stop">
+              <Square size={14} />
+            </Button>
+          ) : (
+            <Button
+              variant="accent"
+              onClick={() => void send()}
+              disabled={!input.trim() && attachments.length === 0}
+            >
+              Send
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   )
+}
+
+function humanKb(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }

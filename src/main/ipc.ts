@@ -29,6 +29,7 @@ import * as calendarRepo from '../core/repo/calendar'
 import { localDate } from '../core/ids'
 import { CommsSyncManager } from './comms/manager'
 import { CommsNotifier } from './comms/notifier'
+import { attachViaDialog, attachPaths } from './chat/uploads'
 import { CalendarSyncManager } from './gcal/manager'
 import { TerminalManager } from './terminal'
 import { spawn as ptySpawn } from 'node-pty'
@@ -480,6 +481,8 @@ export function registerIpc(): void {
     (entity) => broadcast('db:changed', { entity })
   )
   handle('chat:send', (localSessionId, text) => chat.send(localSessionId, text))
+  handle('chat:attach', () => attachViaDialog())
+  handle('chat:attachPaths', (paths) => attachPaths(paths))
   handle('notes:solve', (id, itemIndex) => {
     const note = notes.getNote(db, id)
     if (!note) throw new Error(`note not found: ${id}`)

@@ -129,7 +129,9 @@ export function PeopleView({
 
       <div className="flex-1 min-w-0 overflow-y-auto">
         {selectedId ? (
-          <PersonDetail id={selectedId} onGone={() => setSelectedId(null)} />
+          // key: switching person must remount — otherwise an armed delete
+          // confirm (or open snooze popover) carries over to the new person
+          <PersonDetail key={selectedId} id={selectedId} onGone={() => setSelectedId(null)} />
         ) : (
           <EmptyState>
             {showArchived ? 'Select an archived person.' : 'Select a person, or add someone new.'}
@@ -236,7 +238,14 @@ function PersonDetail({
                 <BellOff size={14} />
               </Button>
               {snoozeOpen && (
-                <div className="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-panel shadow-lg overflow-hidden">
+                // click-catcher: any outside click closes the popover
+                <div className="fixed inset-0 z-10" onMouseDown={() => setSnoozeOpen(false)} />
+              )}
+              {snoozeOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-panel shadow-lg overflow-hidden"
+                  onKeyDown={(e) => e.key === 'Escape' && setSnoozeOpen(false)}
+                >
                   <p className="px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-faint border-b border-border/50">
                     snooze follow-up for
                   </p>
@@ -356,7 +365,7 @@ function PersonDetail({
               <Chip tone="muted">{ident.provider}</Chip>
               <span className="truncate text-muted">{ident.handle}</span>
               <button
-                title="Unlink — messages from this handle stop pointing at this person"
+                title="Unlink this handle. If the person's email/phone still matches it, the next incoming message re-links — clear that field too for a permanent unlink"
                 onClick={() => void api.invoke('comms:unlinkSender', ident.provider, ident.handle)}
                 className="text-faint hover:text-danger"
               >

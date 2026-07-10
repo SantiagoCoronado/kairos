@@ -1312,7 +1312,7 @@ function MessageBubble({
             {m.person_id && m.sender_handle && (
               <button
                 className="text-faint hover:text-danger opacity-0 group-hover/sender:opacity-100"
-                title="Unlink this sender from the person"
+                title="Unlink this sender. If the person's email/phone still matches, the next incoming message re-links"
                 onClick={() => void api.invoke('comms:unlinkSender', m.provider, m.sender_handle)}
               >
                 <Unlink size={11} />

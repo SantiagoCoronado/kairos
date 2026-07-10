@@ -8,6 +8,7 @@ import { registerIpc, getCommsManager, getTaskRunner, getTerminalManager, getCal
 import { Scheduler } from './scheduler'
 import { closeDb, getDb } from './db'
 import { logLine } from './logger'
+import { pruneChatUploads } from './chat/uploads'
 
 // crash forensics — everything lands in ~/Kairos/logs/app.log
 process.on('uncaughtException', (err) => {
@@ -64,6 +65,7 @@ if (!gotLock) {
       }
     }
     registerIpc()
+    pruneChatUploads()
     getCommsManager()?.start()
     getCalendarManager()?.start()
     // remote calendar edits and new mail should be visible the moment the

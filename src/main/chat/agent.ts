@@ -15,6 +15,7 @@ import type {
 } from '../../shared/ipc-contract'
 import * as comms from '../../core/repo/comms'
 import { appendChatMessage, listChatMessages } from '../../core/repo/chat'
+import { CHAT_UPLOADS_DIR } from './uploads'
 import { getRunBySession, getAgentTask } from '../../core/repo/agent-tasks'
 import { DATA_DIR } from '../db'
 import { getSettings } from '../settings'
@@ -121,6 +122,11 @@ export const DISALLOWED_TOOLS = [
   'WebFetch',
   'NotebookEdit'
 ]
+
+// The chat panel alone gets Read back, scoped to staged attachments: without
+// a permission prompt handler, any Read outside this pattern is denied.
+const CHAT_DISALLOWED = DISALLOWED_TOOLS.filter((t) => t !== 'Read')
+const CHAT_READ_SCOPE = `Read(${CHAT_UPLOADS_DIR}/**)`
 
 export class ChatManager {
   private db: DbDriver
@@ -303,8 +309,8 @@ export class ChatManager {
         prompt: text,
         options: {
           mcpServers: { kairos: this.server },
-          allowedTools: this.allowedTools,
-          disallowedTools: DISALLOWED_TOOLS,
+          allowedTools: [...this.allowedTools, CHAT_READ_SCOPE],
+          disallowedTools: CHAT_DISALLOWED,
           permissionMode: 'default',
           // isolate from the user's global Claude config: without these the
           // CLI also loads user-scope MCP servers (including the standalone

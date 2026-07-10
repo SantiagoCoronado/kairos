@@ -17,6 +17,7 @@ export type DbEntity =
   | 'calendars'
   | 'calendar_accounts'
   | 'settings'
+  | 'terminal'
   | 'all'
 
 export type InteractionKind = 'call' | 'message' | 'email' | 'meeting' | 'coffee' | 'other'
@@ -378,6 +379,8 @@ export interface PeopleFilter {
   area?: Area
   search?: string
   includeArchived?: boolean
+  /** true = only archived people (the Archived section) */
+  archived?: boolean
 }
 
 export interface PersonUpsert {
@@ -415,6 +418,7 @@ export interface TaskFilter {
 export interface NewTask {
   title: string
   notes?: string
+  status?: TaskStatus
   area?: Area
   priority?: number
   project_id?: string | null

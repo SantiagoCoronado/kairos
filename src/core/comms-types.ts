@@ -90,6 +90,15 @@ export interface CommsAttachment {
   created_at: string
 }
 
+/** durable (provider, handle) → person link, created by manual linking or auto-resolve */
+export interface CommsIdentity {
+  id: string
+  person_id: string
+  provider: CommsProvider
+  handle: string
+  created_at: string
+}
+
 export interface AttachmentUpsert {
   filename?: string
   mime_type?: string

@@ -42,6 +42,7 @@ import type {
 import type {
   CommsAccount,
   CommsAttachment,
+  CommsIdentity,
   CommsThread,
   CommsThreadListItem,
   CommsMessage,
@@ -61,6 +62,18 @@ export interface CalendarEvent {
 
 export type CalendarResult =
   | { events: CalendarEvent[] }
+  | { error: 'not-authorized' | 'helper-missing' | 'helper-failed' }
+
+export interface MacContact {
+  name: string
+  /** organization name; helpers built before the org field omit it */
+  org?: string
+  phones: string[]
+  emails: string[]
+}
+
+export type ContactsResult =
+  | { contacts: MacContact[] }
   | { error: 'not-authorized' | 'helper-missing' | 'helper-failed' }
 
 export interface IpcApi {
@@ -119,12 +132,20 @@ export interface IpcApi {
   'people:detail': (id: string) => PersonDetail | null
   'people:upsert': (input: PersonUpsert) => Person
   'people:archive': (id: string) => void
+  'people:unarchive': (id: string) => void
+  /** hard delete — interactions/identity links cascade, tasks/messages unlink */
+  'people:delete': (id: string) => void
+  /** linked comms handles for the detail view's unlink list */
+  'people:identities': (personId: string) => CommsIdentity[]
+  /** dedupe lookup against the FULL roster (email exact, phone canonical-suffix) */
+  'people:findByContact': (emails: string[], phones: string[]) => Person | null
 
   'interactions:log': (input: NewInteraction) => Interaction
 
   'followups:due': () => FollowupDue[]
   'followups:statuses': () => FollowupDue[]
   'followups:snooze': (personId: string, untilDate: string) => void
+  'followups:clearSnooze': (personId: string) => void
 
   'objectives:list': (f: {
     period?: string
@@ -152,6 +173,9 @@ export interface IpcApi {
   'today:get': () => TodayPayload
 
   'calendar:today': () => Promise<CalendarResult>
+
+  /** macOS address-book autocomplete for the People view (TCC-gated) */
+  'contacts:search': (query: string) => Promise<ContactsResult>
 
   /** DB-backed calendar (local events + google sync) — distinct from the
    *  read-only macOS EventKit 'calendar:today' above */
@@ -195,6 +219,10 @@ export interface IpcApi {
   'terminal:input': (sessionId: string, data: string) => void
   'terminal:resize': (sessionId: string, cols: number, rows: number) => void
   'terminal:kill': (sessionId: string) => void
+  /** renderer reports Terminal view visibility; opening clears attention flags */
+  'terminal:setViewActive': (active: boolean) => void
+  /** sessions that rang the bell (agent finished) since the view was open */
+  'terminal:attentionCount': () => number
 
   'settings:get': () => AppSettings
   'settings:set': (patch: Partial<AppSettings>) => AppSettings
@@ -224,6 +252,8 @@ export interface IpcApi {
   'comms:threadAttachments': (threadId: string) => CommsAttachment[]
   /** fetch the bytes (cached on disk after the first download), then open the file */
   'comms:downloadAttachment': (attachmentId: string) => Promise<CommsDownloadResult>
+  /** fetch the bytes as a data URL for in-app rendering (voice notes) */
+  'comms:attachmentData': (attachmentId: string) => Promise<CommsAttachmentDataResult>
   'comms:markRead': (threadId: string) => void
   /** re-flag the newest inbound message unread; gmail propagates remotely */
   'comms:markUnread': (threadId: string) => void
@@ -242,6 +272,8 @@ export interface IpcApi {
   'comms:send': (input: CommsSendInput) => Promise<CommsSendResult>
   'comms:syncNow': (accountId?: string) => void
   'comms:linkSender': (provider: CommsProvider, handle: string, personId: string) => void
+  /** inverse of linkSender: drop the identity and clear person_id on its messages */
+  'comms:unlinkSender': (provider: CommsProvider, handle: string) => void
   'comms:setThreadSync': (threadId: string, enabled: boolean) => void
   /** bulk channel opt-in/out — one db:changed instead of one per checkbox */
   'comms:setThreadsSync': (threadIds: string[], enabled: boolean) => void
@@ -254,6 +286,9 @@ export interface IpcApi {
 }
 
 export type CommsDownloadResult = { ok: true; path: string } | { ok: false; message: string }
+export type CommsAttachmentDataResult =
+  | { ok: true; dataUrl: string }
+  | { ok: false; message: string }
 
 export interface CommsSendInput {
   accountId: string
@@ -325,6 +360,9 @@ export interface AppSettings {
   showClaudeUsage: boolean
   /** background email auto-labeling (haiku batches via the Claude Code login) */
   autoLabel: boolean
+  /** native notifications for new messages: DMs + action-needed email
+   *  ('important'), everything ('all'), or never ('off') */
+  notifyInbox: 'off' | 'important' | 'all'
   chatProvider: ChatProvider
   /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
   chatModel: string | null

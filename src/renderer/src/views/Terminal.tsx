@@ -54,6 +54,12 @@ export function TerminalView({ active }: { active: boolean }): React.JSX.Element
     []
   )
 
+  // tell main whether the view is visible — bells only badge while it isn't,
+  // and opening the view clears the badge
+  useEffect(() => {
+    void api.invoke('terminal:setViewActive', active)
+  }, [active])
+
   // ⌘T: new tab while the terminal view is showing
   useEffect(() => {
     if (!active) return undefined
@@ -194,9 +200,11 @@ function TerminalPane({
   }, [visible])
 
   return (
-    <div
-      ref={containerRef}
-      className={`absolute inset-0 px-3 py-2 ${visible ? '' : 'invisible'}`}
-    />
+    // padding lives on the wrapper, NOT on the element xterm mounts into:
+    // FitAddon reads the mount element's border-box height, so padding there
+    // makes the grid one row too tall and clips the bottom line
+    <div className={`absolute inset-0 px-3 py-2 ${visible ? '' : 'invisible'}`}>
+      <div ref={containerRef} className="h-full w-full" />
+    </div>
   )
 }

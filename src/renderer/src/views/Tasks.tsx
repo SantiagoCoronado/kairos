@@ -63,6 +63,15 @@ export function TasksView(): React.JSX.Element {
     setQuickTitle('')
   }
 
+  const addToColumn = async (status: TaskStatus, title: string): Promise<void> => {
+    await api.invoke('tasks:create', {
+      title,
+      status,
+      area: area === 'all' ? 'personal' : area,
+      project_id: projectId || null
+    })
+  }
+
   const addProject = async (): Promise<void> => {
     const name = newProjectName.trim()
     if (!name) return
@@ -188,7 +197,12 @@ export function TasksView(): React.JSX.Element {
           ))}
         </div>
       ) : (
-        <TaskBoard tasks={taskList ?? []} projects={projectList ?? []} onDropTask={dropTask} />
+        <TaskBoard
+          tasks={taskList ?? []}
+          projects={projectList ?? []}
+          onDropTask={dropTask}
+          onAdd={addToColumn}
+        />
       )}
     </div>
   )
@@ -375,13 +389,28 @@ const COLUMNS: { status: TaskStatus; label: string }[] = [
 function TaskBoard({
   tasks,
   projects,
-  onDropTask
+  onDropTask,
+  onAdd
 }: {
   tasks: Task[]
   projects: Project[]
   onDropTask: (draggedId: string, target: Task, edge: 'before' | 'after') => void
+  onAdd: (status: TaskStatus, title: string) => Promise<void>
 }): React.JSX.Element {
   const [dragOver, setDragOver] = useState<TaskStatus | null>(null)
+  const [addingCol, setAddingCol] = useState<TaskStatus | null>(null)
+  const [newTitle, setNewTitle] = useState('')
+
+  const submitAdd = (status: TaskStatus): void => {
+    const title = newTitle.trim()
+    if (!title) {
+      setAddingCol(null)
+      return
+    }
+    // keep the input open so several cards can be added in a row
+    void onAdd(status, title)
+    setNewTitle('')
+  }
 
   const dropOnColumn = (e: React.DragEvent, status: TaskStatus): void => {
     e.preventDefault()
@@ -413,12 +442,40 @@ function TaskBoard({
               dragOver === col.status ? 'border-accent/60 bg-accent/5' : 'border-border'
             )}
           >
-            <div className="flex items-center justify-between px-1 pb-1 select-none">
+            <div className="group/col flex items-center justify-between px-1 pb-1 select-none">
               <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
                 {col.label}
               </span>
-              <span className="font-mono text-[10px] text-faint">{colTasks.length}</span>
+              <span className="flex items-center gap-1.5">
+                <button
+                  title={`Add to ${col.label}`}
+                  onClick={() => {
+                    setAddingCol(col.status)
+                    setNewTitle('')
+                  }}
+                  className="text-faint hover:text-text opacity-0 group-hover/col:opacity-100"
+                >
+                  <Plus size={12} />
+                </button>
+                <span className="font-mono text-[10px] text-faint">{colTasks.length}</span>
+              </span>
             </div>
+            {addingCol === col.status && (
+              <Input
+                autoFocus
+                className="py-1 text-[12.5px]"
+                placeholder={`Add to ${col.label.toLowerCase()}… (Enter)`}
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitAdd(col.status)
+                  if (e.key === 'Escape') setAddingCol(null)
+                }}
+                onBlur={() => {
+                  if (!newTitle.trim()) setAddingCol(null)
+                }}
+              />
+            )}
             {colTasks.map((t) => (
               <BoardCard key={t.id} task={t} projects={projects} onDropTask={onDropTask} />
             ))}

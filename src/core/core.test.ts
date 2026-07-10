@@ -80,6 +80,16 @@ describe('tasks', () => {
     expect(reopened.completed_at).toBeNull()
   })
 
+  it('creates directly into a status (board column add)', () => {
+    const t = tasks.createTask(db, { title: 'wip', status: 'in_progress' }, T0)
+    expect(t.status).toBe('in_progress')
+    expect(t.completed_at).toBeNull()
+
+    const d = tasks.createTask(db, { title: 'already shipped', status: 'done' }, T0)
+    expect(d.status).toBe('done')
+    expect(d.completed_at).toBe(T0.toISOString())
+  })
+
   it('filters by due_before and status', () => {
     tasks.createTask(db, { title: 'a', due_date: '2026-07-01' }, T0)
     tasks.createTask(db, { title: 'b', due_date: '2026-07-20' }, T0)
@@ -150,6 +160,42 @@ describe('people + upsert', () => {
     people.upsertPerson(db, { name: 'Jane Doe', company: 'Initech' }, T0)
     expect(people.listPeople(db, { search: 'initech' })).toHaveLength(1)
     expect(people.listPeople(db, { search: 'nobody' })).toHaveLength(0)
+  })
+
+  it('archive → archived list → unarchive → delete lifecycle', () => {
+    const p = people.upsertPerson(db, { name: 'Vero' }, T0)
+    people.archivePerson(db, p.id, T0)
+    expect(people.listPeople(db)).toHaveLength(0)
+    expect(people.listPeople(db, { archived: true }).map((x) => x.name)).toEqual(['Vero'])
+
+    people.unarchivePerson(db, p.id, T0)
+    expect(people.listPeople(db)).toHaveLength(1)
+    expect(people.listPeople(db, { archived: true })).toHaveLength(0)
+
+    people.deletePerson(db, p.id)
+    expect(people.getPerson(db, p.id)).toBeUndefined()
+  })
+
+  it('clearSnooze empties snoozed_until', () => {
+    const p = people.upsertPerson(db, { name: 'Anna' }, T0)
+    people.snoozeFollowup(db, p.id, '2026-08-01', T0)
+    expect(people.getPerson(db, p.id)?.snoozed_until).toBe('2026-08-01')
+    people.clearSnooze(db, p.id, T0)
+    expect(people.getPerson(db, p.id)?.snoozed_until).toBeNull()
+  })
+
+  it('findPersonByContact matches email exactly and phones by canonical suffix', () => {
+    const anna = people.upsertPerson(db, { name: 'Anna', email: 'Anna@Example.com' }, T0)
+    const bo = people.upsertPerson(db, { name: 'Bo', phone: '55 1234 5678' }, T0)
+
+    expect(people.findPersonByContact(db, ['anna@example.com'], [])?.id).toBe(anna.id)
+    // formatting + country-code differences still match (canonical last-8)
+    expect(people.findPersonByContact(db, [], ['+52 1 55 1234 5678'])?.id).toBe(bo.id)
+    expect(people.findPersonByContact(db, ['x@y.z'], ['999'])).toBeUndefined()
+
+    // archived people never dedupe-match
+    people.archivePerson(db, anna.id, T0)
+    expect(people.findPersonByContact(db, ['anna@example.com'], [])).toBeUndefined()
   })
 })
 

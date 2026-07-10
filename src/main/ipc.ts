@@ -4,6 +4,7 @@ import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
 import { calendarToday } from './calendar'
+import { searchMacContacts } from './contacts'
 import { ChatManager } from './chat/agent'
 import { getSettings, saveSettings } from './settings'
 import { getClaudeLimits, getClaudeUsageStats, getClaudeUsageToday } from './claude-usage'
@@ -27,6 +28,7 @@ import * as comms from '../core/repo/comms'
 import * as calendarRepo from '../core/repo/calendar'
 import { localDate } from '../core/ids'
 import { CommsSyncManager } from './comms/manager'
+import { CommsNotifier } from './comms/notifier'
 import { CalendarSyncManager } from './gcal/manager'
 import { TerminalManager } from './terminal'
 import { spawn as ptySpawn } from 'node-pty'
@@ -248,8 +250,22 @@ export function registerIpc(): void {
   })
   handle('people:archive', (id) => {
     people.archivePerson(db, id)
+    // archived people disappear from thread person-joins too
     broadcast('db:changed', { entity: 'people' })
+    broadcast('db:changed', { entity: 'comms' })
   })
+  handle('people:unarchive', (id) => {
+    people.unarchivePerson(db, id)
+    broadcast('db:changed', { entity: 'people' })
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('people:delete', (id) => {
+    people.deletePerson(db, id)
+    broadcast('db:changed', { entity: 'people' })
+    broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('people:identities', (personId) => comms.listIdentitiesForPerson(db, personId))
+  handle('people:findByContact', (emails, phones) => people.findPersonByContact(db, emails, phones) ?? null)
 
   handle('interactions:log', (input) => {
     const i = interactions.logInteraction(db, input)
@@ -263,6 +279,10 @@ export function registerIpc(): void {
   handle('followups:statuses', () => followups.followupStatuses(db))
   handle('followups:snooze', (personId, untilDate) => {
     people.snoozeFollowup(db, personId, untilDate)
+    broadcast('db:changed', { entity: 'people' })
+  })
+  handle('followups:clearSnooze', (personId) => {
+    people.clearSnooze(db, personId)
     broadcast('db:changed', { entity: 'people' })
   })
 
@@ -319,6 +339,8 @@ export function registerIpc(): void {
   handle('today:get', () => todayAgenda(db))
 
   handle('calendar:today', () => calendarToday())
+
+  handle('contacts:search', (query) => searchMacContacts(query))
 
   // DB-backed calendar: local CRUD on SQLite, with the CalendarSyncManager
   // pushing dirty rows to Google and pulling remote changes in the background.
@@ -453,7 +475,11 @@ export function registerIpc(): void {
   handle('chat:history', (localSessionId) => chat.getHistory(localSessionId))
   handle('chat:draft', (input) => chat.draftReply(input))
 
-  const terminals = new TerminalManager(ptySpawn, (event) => broadcast('terminal:event', event))
+  const terminals = new TerminalManager(
+    ptySpawn,
+    (event) => broadcast('terminal:event', event),
+    () => broadcast('db:changed', { entity: 'terminal' })
+  )
   terminalManager = terminals
   handle('terminal:create', () => terminals.create())
   handle('terminal:list', () => terminals.list())
@@ -461,7 +487,10 @@ export function registerIpc(): void {
   handle('terminal:input', (sessionId, data) => terminals.input(sessionId, data))
   handle('terminal:resize', (sessionId, cols, rows) => terminals.resize(sessionId, cols, rows))
   handle('terminal:kill', (sessionId) => terminals.kill(sessionId))
+  handle('terminal:setViewActive', (active) => terminals.setViewActive(active))
+  handle('terminal:attentionCount', () => terminals.attentionCount())
 
+  const notifier = new CommsNotifier(db, (view, id) => broadcast('nav:goto', { view, id }))
   const manager = new CommsSyncManager(
     db,
     (event) => broadcast('comms:event', event),
@@ -469,7 +498,9 @@ export function registerIpc(): void {
     (provider) => {
       emitAppEvent('message_received')
       if (provider === 'gmail') emitAppEvent('email_received')
-    }
+      notifier.noteInbound(provider)
+    },
+    (threadIds) => notifier.noteLabeled(threadIds)
   )
   commsManager = manager
 
@@ -482,6 +513,7 @@ export function registerIpc(): void {
   handle('comms:messages', (threadId) => comms.listMessages(db, threadId))
   handle('comms:threadAttachments', (threadId) => comms.listThreadAttachments(db, threadId))
   handle('comms:downloadAttachment', (attachmentId) => manager.downloadAttachment(attachmentId))
+  handle('comms:attachmentData', (attachmentId) => manager.getAttachmentData(attachmentId))
   handle('comms:markRead', (threadId) => {
     manager.markRead(threadId) // local immediately; gmail propagation in background
     broadcast('db:changed', { entity: 'comms' })
@@ -510,6 +542,11 @@ export function registerIpc(): void {
   handle('comms:linkSender', (provider, handle_, personId) => {
     comms.linkHandleToPerson(db, provider, handle_.trim().toLowerCase(), personId)
     broadcast('db:changed', { entity: 'comms' })
+  })
+  handle('comms:unlinkSender', (provider, handle_) => {
+    comms.unlinkHandle(db, provider, handle_.trim().toLowerCase())
+    broadcast('db:changed', { entity: 'comms' })
+    broadcast('db:changed', { entity: 'people' })
   })
   handle('comms:setThreadSync', (threadId, enabled) => {
     comms.setThreadSyncEnabled(db, threadId, enabled)

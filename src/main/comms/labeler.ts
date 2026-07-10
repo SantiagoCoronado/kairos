@@ -49,7 +49,9 @@ export class CommsLabeler {
 
   constructor(
     private db: DbDriver,
-    private onChanged: () => void
+    private onChanged: () => void,
+    /** fired with the thread ids classified in a sweep (notification hook) */
+    private onLabeled?: (threadIds: string[]) => void
   ) {}
 
   start(): void {
@@ -90,11 +92,13 @@ export class CommsLabeler {
     try {
       // pass 1: free — gmail categories + keyword rules
       const needModel: typeof threads = []
+      const labeledIds: string[] = []
       let heuristic = 0
       for (const t of threads) {
         const quick = heuristicLabels(labelIdsFromRawJson(t.newest_raw), t.title, t.snippet)
         if (quick) {
           repo.setThreadLabels(this.db, t.id, quick)
+          labeledIds.push(t.id)
           heuristic++
         } else {
           needModel.push(t)
@@ -114,12 +118,16 @@ export class CommsLabeler {
         }))
         const text = await this.classify(buildLabelPrompt(candidates), bin)
         const result = parseLabelResponse(text, candidates)
-        for (const [threadId, labels] of result) repo.setThreadLabels(this.db, threadId, labels)
+        for (const [threadId, labels] of result) {
+          repo.setThreadLabels(this.db, threadId, labels)
+          labeledIds.push(threadId)
+        }
         modeled = result.size
       }
 
       if (heuristic + modeled > 0) {
         this.onChanged()
+        this.onLabeled?.(labeledIds)
         logLine('info', 'comms', `auto-labeled ${heuristic + modeled} threads (${heuristic} heuristic, ${modeled} model)`)
       }
     } catch (err) {

@@ -12,6 +12,7 @@ const DEFAULTS: Settings = {
   translucency: 0,
   showClaudeUsage: true,
   autoLabel: false,
+  notifyInbox: 'important',
   chatProvider: 'claude',
   chatModel: null,
   chatEffort: null,

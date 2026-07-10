@@ -3,7 +3,7 @@ import { X } from 'lucide-react'
 import type { AppSettings, AuthStatus, ChatEffort } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
 import { applyTranslucency } from '../lib/translucency'
-import { Input, Button, Chip, Select } from '../components/ui'
+import { Input, Button, Chip, Select, Segmented } from '../components/ui'
 
 const MODELS: { value: string; label: string }[] = [
   { value: '', label: 'Default (Claude Code)' },
@@ -125,6 +125,27 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
                 checked={settings.autoLabel}
                 onChange={(e) => save({ autoLabel: e.target.checked })}
                 className="accent-accent w-4 h-4 shrink-0"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+                  message notifications
+                </span>
+                <p className="text-[11px] text-faint">
+                  Native notifications for new messages while the app is in the background.
+                  Important = DMs plus email labeled action-needed (needs auto-label on).
+                </p>
+              </div>
+              <Segmented
+                value={settings.notifyInbox}
+                onChange={(v) => save({ notifyInbox: v })}
+                options={[
+                  { value: 'off', label: 'Off' },
+                  { value: 'important', label: 'Important' },
+                  { value: 'all', label: 'All' }
+                ]}
               />
             </div>
 

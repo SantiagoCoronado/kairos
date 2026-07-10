@@ -53,9 +53,11 @@ export class CommsSyncManager {
     private emit: (e: CommsEvent) => void,
     private onDbChanged: () => void,
     /** fired once per sync batch that stored ≥1 new inbound unread message */
-    private onInbound?: (provider: CommsAccount['provider']) => void
+    private onInbound?: (provider: CommsAccount['provider']) => void,
+    /** fired with the thread ids the labeler classified (notification hook) */
+    onLabeled?: (threadIds: string[]) => void
   ) {
-    this.labeler = new CommsLabeler(db, () => this.notifyChanged())
+    this.labeler = new CommsLabeler(db, () => this.notifyChanged(), onLabeled)
   }
 
   start(): void {

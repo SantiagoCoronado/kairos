@@ -352,6 +352,9 @@ export interface AppSettings {
   showClaudeUsage: boolean
   /** background email auto-labeling (haiku batches via the Claude Code login) */
   autoLabel: boolean
+  /** native notifications for new messages: DMs + action-needed email
+   *  ('important'), everything ('all'), or never ('off') */
+  notifyInbox: 'off' | 'important' | 'all'
   chatProvider: ChatProvider
   /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
   chatModel: string | null

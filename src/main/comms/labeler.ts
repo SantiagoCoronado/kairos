@@ -8,10 +8,15 @@
 //   3. scope is bounded: inbox threads from the last 60 days, and a hard cap
 //      of model batches per day, so a huge backlog can never melt a quota.
 //
-// OFF unless Settings → auto-label email is enabled; heuristics and model
-// alike are idempotent — only threads with labels = '' are ever picked, and
-// every classified thread ends with ≥1 label so nothing loops. Auth rides
-// the user's Claude Code login (same as the chat panel and reply drafts).
+// OFF unless Settings → auto-label email is enabled — with one exception:
+// notifyInbox 'important' routes email pings through the action-needed label,
+// so it needs classification even when auto-label is off. That mode sweeps
+// only mail fresh enough to still produce a banner (the notifier's recency
+// window), so its token spend stays a fraction of a full sweep's.
+// Heuristics and model alike are idempotent — only threads with labels = ''
+// are ever picked, and every classified thread ends with ≥1 label so nothing
+// loops. Auth rides the user's Claude Code login (same as the chat panel and
+// reply drafts).
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { DbDriver } from '../../core/driver'
 import * as repo from '../../core/repo/comms'
@@ -24,6 +29,7 @@ import {
 } from '../../core/labels'
 import { resolveClaudeBinary } from '../chat/agent'
 import { buildChildEnv } from '../child-env'
+import { RECENT_WINDOW_MS } from './notifier'
 import { getSettings } from '../settings'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
@@ -82,8 +88,14 @@ export class CommsLabeler {
 
   private async sweep(): Promise<void> {
     if (this.running || this.stopped) return
-    if (!getSettings().autoLabel) return
-    const sinceIso = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    const settings = getSettings()
+    // notification-only mode: important-email pings hinge on the
+    // action-needed label, so classify fresh mail even with auto-label off —
+    // but ONLY fresh mail (anything older can't produce a banner anyway)
+    const notifyOnly = !settings.autoLabel && settings.notifyInbox === 'important'
+    if (!settings.autoLabel && !notifyOnly) return
+    const windowMs = notifyOnly ? RECENT_WINDOW_MS : WINDOW_DAYS * 24 * 60 * 60 * 1000
+    const sinceIso = new Date(Date.now() - windowMs).toISOString()
     const threads = repo.listUnlabeledEmailThreads(this.db, sinceIso, BATCH_SIZE)
     if (threads.length === 0) return
 

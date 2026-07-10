@@ -18,7 +18,9 @@ import { createMainWindow } from '../windows/main-window'
 import { getSettings } from '../settings'
 import { logLine } from '../logger'
 
-const RECENT_WINDOW_MS = 30 * 60_000
+/** exported for the labeler: in notification-only mode it classifies just
+ *  the mail fresh enough to still produce a banner */
+export const RECENT_WINDOW_MS = 30 * 60_000
 const NOTIFIED_CAP = 500
 const MAX_PER_BATCH = 3
 

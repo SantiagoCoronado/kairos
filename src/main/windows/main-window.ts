@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
+import { getTerminalManager } from '../ipc'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -47,6 +48,10 @@ export function createMainWindow(): BrowserWindow {
   })
   mainWindow.on('closed', () => {
     mainWindow = null
+    // the renderer died with the window and can't report visibility anymore;
+    // without this a Terminal tab open at close time would leave viewActive
+    // stuck true and mute the bell badge until the view is toggled again
+    getTerminalManager()?.setViewActive(false)
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

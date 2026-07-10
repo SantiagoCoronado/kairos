@@ -54,6 +54,12 @@ export function TerminalView({ active }: { active: boolean }): React.JSX.Element
     []
   )
 
+  // tell main whether the view is visible — bells only badge while it isn't,
+  // and opening the view clears the badge
+  useEffect(() => {
+    void api.invoke('terminal:setViewActive', active)
+  }, [active])
+
   // ⌘T: new tab while the terminal view is showing
   useEffect(() => {
     if (!active) return undefined

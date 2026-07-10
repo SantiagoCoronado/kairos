@@ -449,7 +449,11 @@ export function registerIpc(): void {
   handle('chat:history', (localSessionId) => chat.getHistory(localSessionId))
   handle('chat:draft', (input) => chat.draftReply(input))
 
-  const terminals = new TerminalManager(ptySpawn, (event) => broadcast('terminal:event', event))
+  const terminals = new TerminalManager(
+    ptySpawn,
+    (event) => broadcast('terminal:event', event),
+    () => broadcast('db:changed', { entity: 'terminal' })
+  )
   terminalManager = terminals
   handle('terminal:create', () => terminals.create())
   handle('terminal:list', () => terminals.list())
@@ -457,6 +461,8 @@ export function registerIpc(): void {
   handle('terminal:input', (sessionId, data) => terminals.input(sessionId, data))
   handle('terminal:resize', (sessionId, cols, rows) => terminals.resize(sessionId, cols, rows))
   handle('terminal:kill', (sessionId) => terminals.kill(sessionId))
+  handle('terminal:setViewActive', (active) => terminals.setViewActive(active))
+  handle('terminal:attentionCount', () => terminals.attentionCount())
 
   const notifier = new CommsNotifier(db, (view, id) => broadcast('nav:goto', { view, id }))
   const manager = new CommsSyncManager(

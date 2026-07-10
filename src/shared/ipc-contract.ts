@@ -215,6 +215,10 @@ export interface IpcApi {
   'terminal:input': (sessionId: string, data: string) => void
   'terminal:resize': (sessionId: string, cols: number, rows: number) => void
   'terminal:kill': (sessionId: string) => void
+  /** renderer reports Terminal view visibility; opening clears attention flags */
+  'terminal:setViewActive': (active: boolean) => void
+  /** sessions that rang the bell (agent finished) since the view was open */
+  'terminal:attentionCount': () => number
 
   'settings:get': () => AppSettings
   'settings:set': (patch: Partial<AppSettings>) => AppSettings

@@ -536,23 +536,33 @@ export function applyGmailLabelEvent(
 
 /**
  * Mark a thread unread again: flag its newest inbound message so the thread
- * resurfaces with unread_count 1 (not the whole history). Returns that
- * message's external id (for the remote label add), or null if none exists.
+ * resurfaces with unread_count 1 (not the whole history). A thread with no
+ * inbound messages at all (self-sent automation mail, note-to-self chats)
+ * falls back to its newest message — the toggle must still work there.
+ * Returns the flagged message's external id (for the remote label add), or
+ * null if the thread has no messages.
  */
 export function markThreadUnread(db: DbDriver, threadId: string, now: Date = new Date()): string | null {
-  const msg = db.get<{ id: string; external_id: string }>(
-    'SELECT id, external_id FROM comms_messages WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC LIMIT 1',
-    threadId
-  )
+  const msg =
+    db.get<{ id: string; external_id: string }>(
+      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC LIMIT 1',
+      threadId
+    ) ??
+    db.get<{ id: string; external_id: string }>(
+      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1',
+      threadId
+    )
   if (!msg) return null
   db.transaction(() => {
     db.run('UPDATE comms_messages SET is_read = 0 WHERE id = ?', msg.id)
     db.run(
       `UPDATE comms_threads SET
-         unread_count = (SELECT COUNT(*) FROM comms_messages WHERE thread_id = ? AND is_read = 0 AND is_me = 0),
+         unread_count = (SELECT COUNT(*) FROM comms_messages
+                         WHERE thread_id = ? AND is_read = 0 AND (is_me = 0 OR id = ?)),
          updated_at = ?
        WHERE id = ?`,
       threadId,
+      msg.id,
       nowIso(now),
       threadId
     )
@@ -586,12 +596,16 @@ export function fillMessageHtml(
   )
 }
 
-/** Recount a thread's unread_count and (gmail) is_archived from its messages. */
+/** Recount a thread's unread_count and (gmail) is_archived from its messages.
+ *  Gmail-only caller: is_read mirrors the UNREAD label there, which gmail
+ *  applies to self-sent mail too — so unlike the other providers' counts,
+ *  this one must NOT filter on is_me, or a mark-unread on a self-sent thread
+ *  gets wiped by the label-history recompute on the next sync tick. */
 export function recomputeThreadState(db: DbDriver, threadId: string, now: Date = new Date()): void {
   db.transaction(() => {
     db.run(
       `UPDATE comms_threads SET
-         unread_count = (SELECT COUNT(*) FROM comms_messages WHERE thread_id = ? AND is_read = 0 AND is_me = 0),
+         unread_count = (SELECT COUNT(*) FROM comms_messages WHERE thread_id = ? AND is_read = 0),
          updated_at = ?
        WHERE id = ?`,
       threadId,
@@ -782,7 +796,10 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
         input.thread_id
       )
     }
-    if (!input.is_me && !input.is_read) {
+    // gmail: UNREAD is authoritative for self-sent mail too (mail to yourself
+    // arrives unread) — count it, so the badge matches gmail and survives the
+    // recompute. Other providers never treat own outbound as unread.
+    if (!input.is_read && (!input.is_me || input.provider === 'gmail')) {
       db.run('UPDATE comms_threads SET unread_count = unread_count + 1 WHERE id = ?', input.thread_id)
     }
     return true

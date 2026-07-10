@@ -35,6 +35,11 @@ HOME=$SCRATCH/vhome KAIROS_TEST_BASE=$SCRATCH/vhome \
 `DATA_DIR` (src/main/db.ts) is `join(homedir(), 'Kairos')` and Node's
 `homedir()` respects `$HOME`, so the DB lands in `$SCRATCH/vhome/Kairos/data.db`.
 
+The contacts/calendar helpers resolve via `app.getAppPath()` = the dir of
+test-main.js, so `contacts:search` returns `helper-missing` unless you
+`ln -sfn /abs/path/kairos-app/resources $SCRATCH/resources`. Also launch
+the app OUTSIDE the sandbox (TCC-gated helpers fail inside it).
+
 ## 2. Seed
 
 The DB is created on first boot (migrations run automatically). Seed with the

@@ -87,6 +87,23 @@ export function getCalendarManager(): CalendarSyncManager | null {
 export function registerIpc(): void {
   const db = getDb()
 
+  // MCP-twin writes (dist-mcp shares the WAL db from another process) never
+  // pass through these handlers, so nothing broadcasts for them. SQLite's
+  // data_version bumps only when a DIFFERENT connection commits — poll it
+  // and refresh the whole UI when it moves.
+  let dataVersion: number | null = null
+  setInterval(() => {
+    try {
+      const v = db.get<{ data_version: number }>('PRAGMA data_version')?.data_version ?? null
+      if (dataVersion !== null && v !== null && v !== dataVersion) {
+        broadcast('db:changed', { entity: 'all' })
+      }
+      dataVersion = v
+    } catch {
+      // a transient read failure must never kill the poll loop
+    }
+  }, 4000)
+
   handle('app:ping', () => 'pong')
   handle('log:renderer', (level, message) => logLine(level, 'renderer', message.slice(0, 4000)))
 

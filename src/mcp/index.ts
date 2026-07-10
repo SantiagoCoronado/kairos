@@ -1,9 +1,11 @@
-// Standalone stdio MCP server for terminal Claude Code.
+// Standalone stdio MCP server for terminal agents (Claude Code, Codex, …).
 // Runs on plain Node >=22.5 (node:sqlite — no native rebuilds), sharing the
 // same WAL database the app has open. stdout carries ONLY protocol frames;
 // all logging goes to stderr.
 //
-// Register: claude mcp add --scope user kairos -- node <repo>/dist-mcp/index.js
+// Register (or just `npm run mcp:install` for Claude Code):
+//   claude mcp add --scope user kairos -- node <repo>/dist-mcp/index.mjs
+//   codex mcp add kairos -- node <repo>/dist-mcp/index.mjs
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'

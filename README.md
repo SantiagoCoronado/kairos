@@ -22,15 +22,29 @@ Data lives in `~/Kairos/data.db` (SQLite, WAL). Settings in
 1. **In-app chat** (Chat tab) — a Claude agent with tools over your data
    (log interactions, plan your week, review objectives). Uses your
    `claude login` subscription; never an API key.
-2. **From terminal Claude Code** — an MCP server exposing the same 18 tools:
+2. **From terminal agents — Claude Code, Codex, anything MCP** — a standalone
+   stdio server exposing the same 18 tools:
+
+   ```sh
+   npm run mcp:install   # builds + registers with Claude Code (user scope)
+   ```
+
+   or by hand:
 
    ```sh
    npm run build:mcp
+
+   # Claude Code
    claude mcp add --scope user kairos -- node <repo>/dist-mcp/index.mjs
+
+   # Codex CLI (or add [mcp_servers.kairos] to ~/.codex/config.toml)
+   codex mcp add kairos -- node <repo>/dist-mcp/index.mjs
    ```
 
-   Then in any `claude` session: "what follow-ups are due?", "add a task to…".
-   The app and the MCP server can be open simultaneously (WAL).
+   Then in any session: "what follow-ups are due?", "add a task to…".
+   Works with the app open (WAL — both processes share `~/Kairos/data.db`)
+   or closed (the server opens and migrates the DB itself). While the app
+   is open, changes made over MCP appear in the UI within a few seconds.
 
 ## Development
 

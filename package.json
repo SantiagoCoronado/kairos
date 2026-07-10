@@ -11,6 +11,7 @@
     "postinstall": "electron-rebuild -f -w better-sqlite3,node-pty && node scripts/patch-dev-electron-plist.js",
     "build": "electron-vite build && npm run build:mcp",
     "build:mcp": "tsup",
+    "mcp:install": "npm run build:mcp && claude mcp add --scope user kairos -- node \"$(pwd)/dist-mcp/index.mjs\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "helper:build": "bash scripts/build-calendar-helper.sh && bash scripts/build-contacts-helper.sh",

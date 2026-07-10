@@ -127,6 +127,8 @@ export interface IpcApi {
   'people:detail': (id: string) => PersonDetail | null
   'people:upsert': (input: PersonUpsert) => Person
   'people:archive': (id: string) => void
+  /** dedupe lookup against the FULL roster (email exact, phone canonical-suffix) */
+  'people:findByContact': (emails: string[], phones: string[]) => Person | null
 
   'interactions:log': (input: NewInteraction) => Interaction
 

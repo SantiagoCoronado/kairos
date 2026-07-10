@@ -5,7 +5,6 @@ import type { MacContact } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Select, Chip, Segmented, EmptyState, InlineText, cn } from '../components/ui'
 
-const normPhone = (p: string): string => p.replace(/\D/g, '')
 
 const KINDS: InteractionKind[] = ['coffee', 'call', 'message', 'email', 'meeting', 'other']
 
@@ -37,8 +36,8 @@ export function PeopleView({
   const addPerson = async (): Promise<void> => {
     const name = newName.trim()
     if (!name) return
+    setNewName('') // clear synchronously — a second Enter must not double-create
     const p = await api.invoke('people:upsert', { name, area: area === 'all' ? 'personal' : area })
-    setNewName('')
     setSelectedId(p.id)
   }
 
@@ -52,8 +51,10 @@ export function PeopleView({
       setSuggestHint(null)
       return undefined
     }
+    let stale = false // a newer keystroke's response must win over this one's
     const t = setTimeout(() => {
       void api.invoke('contacts:search', q).then((res) => {
+        if (stale) return
         if ('error' in res) {
           setSuggestions([])
           setSuggestHint(
@@ -67,19 +68,19 @@ export function PeopleView({
         }
       })
     }, 150)
-    return () => clearTimeout(t)
+    return () => {
+      stale = true
+      clearTimeout(t)
+    }
   }, [newName])
 
   const addFromContact = async (c: MacContact): Promise<void> => {
-    // an existing person with the same email/phone gets selected, not duplicated
-    const existing = persons?.find(
-      (p) =>
-        (p.email && c.emails.some((e) => e.toLowerCase() === p.email!.toLowerCase())) ||
-        (p.phone && c.phones.some((ph) => normPhone(ph) === normPhone(p.phone!)))
-    )
+    // clear synchronously — a second click/Enter must not double-create
+    setNewName('')
+    setSuggestions([])
+    // dedupe against the FULL roster in the db, not the filtered sidebar list
+    const existing = await api.invoke('people:findByContact', c.emails, c.phones)
     if (existing) {
-      setNewName('')
-      setSuggestions([])
       setSelectedId(existing.id)
       return
     }
@@ -90,8 +91,6 @@ export function PeopleView({
       company: c.org || null,
       area: area === 'all' ? 'personal' : area
     })
-    setNewName('')
-    setSuggestions([])
     setSelectedId(p.id)
   }
 
@@ -127,6 +126,9 @@ export function PeopleView({
                   if (e.key === 'Enter') void addPerson()
                   if (e.key === 'Escape') setSuggestions([])
                 }}
+                // suggestion clicks preventDefault on mousedown, so a real blur
+                // means focus moved elsewhere — dismiss the dropdown
+                onBlur={() => setSuggestions([])}
               />
               <Button variant="ghost" onClick={() => void addPerson()}>
                 <Plus size={14} />

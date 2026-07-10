@@ -151,6 +151,20 @@ describe('people + upsert', () => {
     expect(people.listPeople(db, { search: 'initech' })).toHaveLength(1)
     expect(people.listPeople(db, { search: 'nobody' })).toHaveLength(0)
   })
+
+  it('findPersonByContact matches email exactly and phones by canonical suffix', () => {
+    const anna = people.upsertPerson(db, { name: 'Anna', email: 'Anna@Example.com' }, T0)
+    const bo = people.upsertPerson(db, { name: 'Bo', phone: '55 1234 5678' }, T0)
+
+    expect(people.findPersonByContact(db, ['anna@example.com'], [])?.id).toBe(anna.id)
+    // formatting + country-code differences still match (canonical last-8)
+    expect(people.findPersonByContact(db, [], ['+52 1 55 1234 5678'])?.id).toBe(bo.id)
+    expect(people.findPersonByContact(db, ['x@y.z'], ['999'])).toBeUndefined()
+
+    // archived people never dedupe-match
+    people.archivePerson(db, anna.id, T0)
+    expect(people.findPersonByContact(db, ['anna@example.com'], [])).toBeUndefined()
+  })
 })
 
 describe('followup cadence math (injected clock)', () => {

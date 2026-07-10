@@ -15,15 +15,19 @@ function helperPath(): string {
 }
 
 let cache: { at: number; result: ContactsResult } | null = null
+let inflight: Promise<ContactsResult> | null = null
 const CACHE_MS = 30 * 60 * 1000
 
 export async function loadMacContacts(): Promise<ContactsResult> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.result
+  // concurrent callers (autocomplete keystrokes + comms name sweep) share one
+  // helper run instead of each spawning the binary
+  if (inflight) return inflight
 
   const bin = helperPath()
   if (!existsSync(bin)) return { error: 'helper-missing' }
 
-  const result = await new Promise<ContactsResult>((resolve) => {
+  inflight = new Promise<ContactsResult>((resolve) => {
     execFile(bin, [], { timeout: 35_000, maxBuffer: 32 * 1024 * 1024 }, (err, stdout) => {
       if (err) {
         const denied = typeof err.code === 'number' && err.code === 2
@@ -37,6 +41,8 @@ export async function loadMacContacts(): Promise<ContactsResult> {
       }
     })
   })
+  const result = await inflight
+  inflight = null
 
   // only cache successes — an error here is usually the TCC prompt still
   // pending (or just answered), and caching it would blind us for 30 minutes

@@ -225,6 +225,7 @@ export function registerIpc(): void {
     people.archivePerson(db, id)
     broadcast('db:changed', { entity: 'people' })
   })
+  handle('people:findByContact', (emails, phones) => people.findPersonByContact(db, emails, phones) ?? null)
 
   handle('interactions:log', (input) => {
     const i = interactions.logInteraction(db, input)

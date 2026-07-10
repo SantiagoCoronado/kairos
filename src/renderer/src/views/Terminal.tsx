@@ -194,9 +194,11 @@ function TerminalPane({
   }, [visible])
 
   return (
-    <div
-      ref={containerRef}
-      className={`absolute inset-0 px-3 py-2 ${visible ? '' : 'invisible'}`}
-    />
+    // padding lives on the wrapper, NOT on the element xterm mounts into:
+    // FitAddon reads the mount element's border-box height, so padding there
+    // makes the grid one row too tall and clips the bottom line
+    <div className={`absolute inset-0 px-3 py-2 ${visible ? '' : 'invisible'}`}>
+      <div ref={containerRef} className="h-full w-full" />
+    </div>
   )
 }

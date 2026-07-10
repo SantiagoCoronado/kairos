@@ -50,17 +50,20 @@ export function listTasks(db: DbDriver, f: TaskFilter = {}): Task[] {
 export function createTask(db: DbDriver, input: NewTask, now: Date = new Date()): Task {
   const id = newId()
   const ts = nowIso(now)
+  const status = input.status ?? 'todo'
   db.run(
-    `INSERT INTO tasks (id, title, notes, status, area, priority, project_id, person_id, due_date, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, (SELECT COALESCE(MIN(sort_order), 1) - 1 FROM tasks), ?, ?)`,
+    `INSERT INTO tasks (id, title, notes, status, area, priority, project_id, person_id, due_date, completed_at, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MIN(sort_order), 1) - 1 FROM tasks), ?, ?)`,
     id,
     input.title,
     input.notes ?? '',
+    status,
     input.area ?? 'personal',
     input.priority ?? 2,
     input.project_id ?? null,
     input.person_id ?? null,
     input.due_date ?? null,
+    status === 'done' ? ts : null,
     ts,
     ts
   )

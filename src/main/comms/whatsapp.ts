@@ -10,6 +10,7 @@ import {
   downloadMediaMessage,
   proto,
   DisconnectReason,
+  Browsers,
   type WASocket,
   type WAMessage,
   type WAMessageKey
@@ -103,6 +104,9 @@ interface WaOpts {
 export class WhatsAppConnection {
   private sock: WASocket | null = null
   private stopped = false
+  /** set while the Mac is asleep — see pause()/resume() */
+  private paused = false
+  private reconnectTimer: NodeJS.Timeout | null = null
   private reconnectDelay = 2_000
   /** jid → chat/contact display name, fed by history + contact events */
   private names = new Map<string, string>()
@@ -135,7 +139,11 @@ export class WhatsAppConnection {
       logger: silentLogger as never,
       markOnlineOnConnect: false,
       // history is only pushed at pairing time — ask for all of it then
-      syncFullHistory: true
+      syncFullHistory: true,
+      // Baileys defaults to Browsers.ubuntu(...), which mislabels every
+      // linked-device sync notification on the phone as "Ubuntu" even though
+      // this runs on macOS
+      browser: Browsers.macOS('Kairos')
     })
     this.sock = sock
 
@@ -174,8 +182,8 @@ export class WhatsAppConnection {
             this.opts.onChanged()
             return
           }
-          if (this.stopped) return
-          setTimeout(() => void this.start(), this.reconnectDelay)
+          if (this.stopped || this.paused) return
+          this.reconnectTimer = setTimeout(() => void this.start(), this.reconnectDelay)
           this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
         }
       })()
@@ -481,8 +489,36 @@ export class WhatsAppConnection {
 
   stop(): void {
     this.stopped = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     this.sock?.end(undefined)
     this.sock = null
+  }
+
+  /**
+   * Called on system sleep: drop the socket and suppress reconnect attempts
+   * until resume(). Without this, Power Nap-style partial wake-ups keep
+   * reconnecting the socket while the lid is closed, and each reconnect
+   * triggers a fresh "synced with [device]" push on the phone.
+   */
+  pause(): void {
+    if (this.paused || this.stopped) return
+    this.paused = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.sock?.end(undefined)
+    this.sock = null
+  }
+
+  /** Called on system wake: reconnect if the socket was paused for sleep. */
+  resume(): void {
+    if (!this.paused) return
+    this.paused = false
+    if (!this.stopped) void this.start()
   }
 }
 

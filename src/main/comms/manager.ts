@@ -4,7 +4,7 @@
 // through comms_outbox; the drain is the single delivery path.
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { shell } from 'electron'
+import { powerMonitor, shell } from 'electron'
 import type { DbDriver } from '../../core/driver'
 import type { CommsAccount } from '../../core/comms-types'
 import type { CommsEvent, CommsSendInput, CommsSendResult } from '../../shared/ipc-contract'
@@ -47,6 +47,12 @@ export class CommsSyncManager {
   private lastPokeAt = 0
   private stopped = false
   private labeler: CommsLabeler
+  private onSuspend = (): void => {
+    for (const conn of this.wa.values()) conn.pause()
+  }
+  private onResume = (): void => {
+    for (const conn of this.wa.values()) conn.resume()
+  }
 
   constructor(
     private db: DbDriver,
@@ -72,6 +78,8 @@ export class CommsSyncManager {
     // periodically, since history chunks keep creating threads after boot
     void this.applyContactNames()
     this.contactsTimer = setInterval(() => void this.applyContactNames(), 5 * 60_000)
+    powerMonitor.on('suspend', this.onSuspend)
+    powerMonitor.on('resume', this.onResume)
   }
 
   /** Sweep macOS Contacts names over placeholder WhatsApp threads/senders. */
@@ -95,6 +103,8 @@ export class CommsSyncManager {
 
   stop(): void {
     this.stopped = true
+    powerMonitor.off('suspend', this.onSuspend)
+    powerMonitor.off('resume', this.onResume)
     this.labeler.stop()
     for (const t of this.timers.values()) clearTimeout(t)
     this.timers.clear()

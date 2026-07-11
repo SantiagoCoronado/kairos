@@ -177,6 +177,7 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
           onCreate={(start, end) => setEditor({ kind: 'create', start, end })}
           onMoveResize={patchTimes}
           onNavigate={onNavigate}
+          onSwipeWeek={step}
         />
       )}
 

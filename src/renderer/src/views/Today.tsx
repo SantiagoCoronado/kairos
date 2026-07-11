@@ -83,7 +83,8 @@ export function TodayView({
                     })}
               </span>
               <span className="text-[13px] truncate">{e.title}</span>
-              <span className="text-[11px] text-faint truncate">{e.calendar}</span>
+              {/* phone width is for the event + time; calendar attribution is desktop-only */}
+              <span className="text-[11px] text-faint truncate hidden md:inline">{e.calendar}</span>
             </div>
           ))}
         </Section>

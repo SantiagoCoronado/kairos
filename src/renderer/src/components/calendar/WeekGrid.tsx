@@ -109,8 +109,11 @@ export function WeekGrid({
 
   const pointToGrid = (ev: PointerEvent): { dayIdx: number; min: number } => {
     const rect = bodyRef.current!.getBoundingClientRect()
-    const colW = (rect.width - GUTTER_PX) / 7
-    const dayIdx = Math.max(0, Math.min(6, Math.floor((ev.clientX - rect.left - GUTTER_PX) / colW)))
+    const colW = (rect.width - GUTTER_PX) / days.length
+    const dayIdx = Math.max(
+      0,
+      Math.min(days.length - 1, Math.floor((ev.clientX - rect.left - GUTTER_PX) / colW))
+    )
     const min = clampMinutes(((ev.clientY - rect.top) / HOUR_PX) * 60)
     return { dayIdx, min }
   }
@@ -266,13 +269,16 @@ export function WeekGrid({
   return (
     <div className="flex flex-col flex-1 min-h-0 cal-touch">
       {/* day headers + all-day lane */}
-      <div className="grid shrink-0 border-b border-border" style={{ gridTemplateColumns: `${GUTTER_PX}px repeat(7, 1fr)` }}>
+      <div
+        className="grid shrink-0 border-b border-border"
+        style={{ gridTemplateColumns: `${GUTTER_PX}px repeat(${days.length}, 1fr)` }}
+      >
         <div />
         {days.map((day, i) => (
           <div key={i} className="px-2 pt-1.5 pb-1 border-l border-border min-w-0">
             <div className="flex items-baseline gap-1.5">
               <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                {WEEKDAYS[i]}
+                {WEEKDAYS[(day.getDay() + 6) % 7]}
               </span>
               <span
                 className={`text-[15px] tabular-nums ${
@@ -322,7 +328,7 @@ export function WeekGrid({
         <div
           ref={bodyRef}
           className="relative grid"
-          style={{ gridTemplateColumns: `${GUTTER_PX}px repeat(7, 1fr)`, height: 24 * HOUR_PX }}
+          style={{ gridTemplateColumns: `${GUTTER_PX}px repeat(${days.length}, 1fr)`, height: 24 * HOUR_PX }}
         >
           {/* gutter */}
           <div className="relative select-none">

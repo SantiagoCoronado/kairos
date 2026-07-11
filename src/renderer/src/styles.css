@@ -144,3 +144,36 @@ textarea,
   border-width: 0;
   pointer-events: none;
 }
+
+/* --- mobile shell (remote client on a phone) ------------------------------ */
+
+/* liquid-glass material for floating mobile chrome (tab bar, future sheets).
+   The web can't get the real SwiftUI Liquid Glass — blur + saturation +
+   a hairline top light is the honest approximation. */
+.glass {
+  background: rgb(23 23 26 / 0.72);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgb(255 255 255 / 0.09);
+}
+
+@media (max-width: 767px) {
+  html,
+  body,
+  #root {
+    /* dvh tracks Safari's collapsing toolbars; plain % leaves a dead strip */
+    height: 100dvh;
+  }
+  body {
+    /* no rubber-banding the whole shell; views scroll internally */
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+  /* iOS zooms the page when focusing any field rendered under 16px */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}

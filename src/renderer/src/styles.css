@@ -181,4 +181,11 @@ textarea,
     padding-top: 0.7rem;
     padding-bottom: 0.7rem;
   }
+  /* xterm has no native scrollable overflow to hand off to the browser —
+     scrollback is driven entirely by JS (see Terminal.tsx's touch handler).
+     touch-action: none stops the browser from claiming the drag gesture for
+     a (nonexistent) native pan before our touchmove preventDefault runs */
+  .xterm-viewport {
+    touch-action: none;
+  }
 }

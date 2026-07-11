@@ -15,7 +15,7 @@ import {
 } from '../../lib/dates'
 import { eventHex } from './colors'
 import { EventCard } from './EventCard'
-import { clampMinutes, snapMinutes, usePointerDrag } from './useCalendarDrag'
+import { clampMinutes, snapMinutes, touchBlockRef, usePointerDrag } from './useCalendarDrag'
 
 export const HOUR_PX = 48
 const GUTTER_PX = 48
@@ -39,15 +39,6 @@ type Drag =
       endMin: number
     }
   | { kind: 'resize'; event: CalendarEventRecord; dayIdx: number; startMin: number; endMin: number }
-  | { kind: 'swipe'; startX: number; dx: number }
-
-const SWIPE_MIN_PX = 50
-
-/** touch drag that reads as clearly horizontal (not a vertical scroll/create
- *  attempt) is a week-swipe, not an event-create drag */
-function isSwipeGesture(e: PointerEvent, delta: { dx: number; dy: number }): boolean {
-  return e.pointerType === 'touch' && Math.abs(delta.dx) > Math.abs(delta.dy) * 1.5
-}
 
 export function WeekGrid({
   days,
@@ -133,25 +124,16 @@ export function WeekGrid({
   }
 
   const beginCreate = usePointerDrag<{ dayIdx: number; anchorMin: number }>({
-    onStart: (ctx, ev, delta) => {
-      if (onSwipeWeek && isSwipeGesture(ev, delta)) {
-        updateDrag({ kind: 'swipe', startX: ev.clientX - delta.dx, dx: delta.dx })
-        return
-      }
+    onSwipe: onSwipeWeek,
+    onStart: (ctx) =>
       updateDrag({
         kind: 'create',
         dayIdx: ctx.dayIdx,
         anchorMin: ctx.anchorMin,
         startMin: ctx.anchorMin,
         endMin: ctx.anchorMin + MIN_EVENT_MIN
-      })
-    },
+      }),
     onMove: (ctx, ev) => {
-      const d = dragRef.current
-      if (d?.kind === 'swipe') {
-        updateDrag({ ...d, dx: ev.clientX - d.startX })
-        return
-      }
       const { min } = pointToGrid(ev)
       const cur = snapMinutes(min)
       updateDrag({
@@ -163,12 +145,7 @@ export function WeekGrid({
       })
     },
     onEnd: (ctx, ev, activated) => {
-      const d = dragRef.current
       updateDrag(null)
-      if (d?.kind === 'swipe') {
-        if (Math.abs(d.dx) >= SWIPE_MIN_PX) onSwipeWeek?.(d.dx < 0 ? 1 : -1)
-        return
-      }
       if (!activated) {
         // plain click: 1-hour draft at the clicked slot
         const [s, e] = commitTimes(ctx.dayIdx, ctx.anchorMin, Math.min(24 * 60, ctx.anchorMin + 60))
@@ -185,6 +162,9 @@ export function WeekGrid({
   })
 
   const beginMove = usePointerDrag<{ event: CalendarEventRecord; seg: Segment; dayIdx: number }>({
+    // a fast horizontal touch drag starting on an event is still a week swipe;
+    // moving the event itself requires the long-press arm
+    onSwipe: onSwipeWeek,
     onStart: (ctx, ev) => {
       const { min } = pointToGrid(ev)
       const evStart = parseEventDate(ctx.event.start_at)
@@ -280,11 +260,11 @@ export function WeekGrid({
     return map
   }, [overlay])
 
-  const dragging = drag !== null && drag.kind !== 'swipe'
-  const draggedId = drag && drag.kind !== 'create' && drag.kind !== 'swipe' ? drag.event.id : null
+  const dragging = drag !== null
+  const draggedId = drag && drag.kind !== 'create' ? drag.event.id : null
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 cal-touch">
       {/* day headers + all-day lane */}
       <div className="grid shrink-0 border-b border-border" style={{ gridTemplateColumns: `${GUTTER_PX}px repeat(7, 1fr)` }}>
         <div />
@@ -368,6 +348,7 @@ export function WeekGrid({
             return (
               <div
                 key={dayIdx}
+                ref={touchBlockRef}
                 className="relative border-l border-border"
                 onPointerDown={(e) => {
                   if (e.target !== e.currentTarget) return
@@ -420,7 +401,7 @@ export function WeekGrid({
                 ))}
 
                 {/* drag ghost */}
-                {drag && drag.kind !== 'swipe' && drag.dayIdx === dayIdx && (
+                {drag && drag.dayIdx === dayIdx && (
                   <div
                     className="absolute inset-x-0.5 z-20 rounded border border-accent/60 bg-accent/15 pointer-events-none px-1.5 py-0.5"
                     style={{

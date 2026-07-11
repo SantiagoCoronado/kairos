@@ -77,6 +77,10 @@ export function fmtMonthTitle(d: Date): string {
   return `${d.toLocaleString('en-US', { month: 'long' })} ${d.getFullYear()}`
 }
 
+export function fmtDayTitle(d: Date): string {
+  return `${WEEKDAYS[(d.getDay() + 6) % 7]}, ${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
+}
+
 export function fmtWeekTitle(days: Date[]): string {
   const a = days[0]
   const b = days[days.length - 1]

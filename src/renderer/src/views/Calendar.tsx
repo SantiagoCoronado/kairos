@@ -7,12 +7,15 @@ import { Button, Chip, Segmented } from '../components/ui'
 import {
   addDays,
   addMonths,
+  fmtDayTitle,
   fmtMonthTitle,
   fmtWeekTitle,
   monthGrid,
+  startOfDay,
   startOfWeek,
   weekDays
 } from '../lib/dates'
+import { useIsMobile } from '../lib/mobile'
 import { MonthGrid, shiftEventDays } from '../components/calendar/MonthGrid'
 import { WeekGrid } from '../components/calendar/WeekGrid'
 import { EventEditor, type EditorTarget } from '../components/calendar/EventEditor'
@@ -20,15 +23,21 @@ import { calendarHex } from '../components/calendar/colors'
 
 const MODE_KEY = 'kairos.calendarMode'
 
+type CalendarMode = 'month' | 'week' | 'day'
+
 export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }): React.JSX.Element {
-  const [mode, setMode] = useState<'month' | 'week'>(
-    () => (localStorage.getItem(MODE_KEY) === 'week' ? 'week' : 'month')
-  )
+  const mobile = useIsMobile()
+  const [mode, setMode] = useState<CalendarMode>(() => {
+    const stored = localStorage.getItem(MODE_KEY)
+    if (stored === 'week' || stored === 'day' || stored === 'month') return stored
+    // a 7-column grid is unreadable at phone width — day is the usable default
+    return mobile ? 'day' : 'month'
+  })
   const [anchor, setAnchor] = useState(() => new Date())
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [showCalendars, setShowCalendars] = useState(false)
 
-  const setModePersist = (m: 'month' | 'week'): void => {
+  const setModePersist = (m: CalendarMode): void => {
     localStorage.setItem(MODE_KEY, m)
     setMode(m)
   }
@@ -38,10 +47,11 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
     void api.invoke('calendar:pokeSync')
   }, [])
 
-  const days = useMemo(
-    () => (mode === 'month' ? monthGrid(anchor) : weekDays(anchor)),
-    [mode, anchor]
-  )
+  const days = useMemo(() => {
+    if (mode === 'month') return monthGrid(anchor)
+    if (mode === 'day') return [startOfDay(anchor)]
+    return weekDays(anchor)
+  }, [mode, anchor])
   // ±1 day buffer so events spilling over midnight land in the fetch window
   const rangeStart = useMemo(() => addDays(days[0], -1).toISOString(), [days])
   const rangeEnd = useMemo(() => addDays(days[days.length - 1], 2).toISOString(), [days])
@@ -60,7 +70,11 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
   const calendarMap = useMemo(() => new Map((calendars ?? []).map((c) => [c.id, c])), [calendars])
 
   const step = (dir: 1 | -1): void => {
-    setAnchor((a) => (mode === 'month' ? addMonths(a, dir) : addDays(startOfWeek(a), dir * 7)))
+    setAnchor((a) => {
+      if (mode === 'month') return addMonths(a, dir)
+      if (mode === 'day') return addDays(a, dir)
+      return addDays(startOfWeek(a), dir * 7)
+    })
   }
 
   // keyboard: arrows navigate, t = today, n = new event
@@ -99,9 +113,10 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
     void api.invoke('calendarEvents:update', e.id, shiftEventDays(e, dayDelta)).catch(() => {})
   }
 
-  const showDayWeek = (day: Date): void => {
+  // month-grid date taps: a whole week doesn't fit a phone, land on the day
+  const showDay = (day: Date): void => {
     setAnchor(day)
-    setModePersist('week')
+    setModePersist(mobile ? 'day' : 'week')
   }
 
   return (
@@ -109,7 +124,7 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
       {/* toolbar — title takes its own row on phones so the controls wrap under it */}
       <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 pt-3 pb-2.5">
         <h1 className="text-[15px] font-medium text-text basis-full md:basis-auto md:min-w-44">
-          {mode === 'month' ? fmtMonthTitle(anchor) : fmtWeekTitle(days)}
+          {mode === 'month' ? fmtMonthTitle(anchor) : mode === 'day' ? fmtDayTitle(days[0]) : fmtWeekTitle(days)}
         </h1>
         <Button variant="ghost" className="!px-1.5 !py-1" onClick={() => step(-1)} title="Previous (←)">
           <ChevronLeft size={15} />
@@ -125,7 +140,8 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
           value={mode}
           options={[
             { value: 'month', label: 'Month' },
-            { value: 'week', label: 'Week' }
+            { value: 'week', label: 'Week' },
+            { value: 'day', label: 'Day' }
           ]}
           onChange={setModePersist}
         />
@@ -164,7 +180,7 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
             setEditor({ kind: 'create', start, end: new Date(start.getTime() + 60 * 60_000) })
           }}
           onEventMove={moveByDays}
-          onShowDay={showDayWeek}
+          onShowDay={showDay}
           onNavigate={onNavigate}
         />
       ) : (

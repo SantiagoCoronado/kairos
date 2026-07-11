@@ -21,7 +21,8 @@ import {
   Tag,
   Play,
   Pause,
-  Mic
+  Mic,
+  ChevronLeft
 } from 'lucide-react'
 import type {
   CommsAccount,
@@ -34,6 +35,7 @@ import type {
 } from '../../../core/comms-types'
 import { COMMS_LABELS } from '../../../core/labels'
 import { api, useInvoke } from '../lib/api'
+import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
 import { SettingsModal } from '../components/SettingsModal'
 import {
@@ -103,6 +105,7 @@ function threadLabel(t: CommsThreadListItem): { name: string | null; title: stri
 }
 
 export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => void }): React.JSX.Element {
+  const mobile = useIsMobile()
   const [accountId, setAccountId] = useState<string | null>(null)
   // provider-wide view with no account selected ("All email" = every gmail inbox)
   const [provider, setProvider] = useState<CommsProvider | null>(null)
@@ -368,11 +371,115 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     })
   }
 
+  // channel manager and compose are desktop modes; shrinking mid-mode
+  // must not strand the phone on a pane it has no button to leave
+  useEffect(() => {
+    if (mobile && mode !== 'threads') setMode('threads')
+  }, [mobile, mode])
+
   if (accounts && accounts.length === 0) {
     return (
       <EmptyState>
         No accounts connected yet — open Settings (sidebar gear) → Connections.
       </EmptyState>
+    )
+  }
+
+  if (mobile) {
+    return (
+      <div className="flex flex-col h-full">
+        {thread ? (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <ThreadPane
+              key={thread.id}
+              thread={thread}
+              onBack={closeThread}
+              onOpenPerson={onOpenPerson}
+              onArchive={() => archiveThread(thread)}
+              onDelete={() => deleteThread(thread)}
+              onMarkUnread={() => markUnread(thread)}
+              onTogglePin={() => togglePin(thread)}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="px-3 pt-2 pb-2 space-y-2 border-b border-border">
+              <div className="flex gap-1.5 overflow-x-auto -mx-3 px-3 pb-0.5">
+                <MobileAccountChip
+                  active={accountId === null && provider === null}
+                  label="All"
+                  onClick={() => selectAccount(null)}
+                />
+                {accounts?.some((a) => a.provider === 'gmail') && (
+                  <MobileAccountChip
+                    active={accountId === null && provider === 'gmail'}
+                    label="All email"
+                    onClick={() => selectProvider('gmail')}
+                  />
+                )}
+                {accounts?.map((a) => (
+                  <MobileAccountChip
+                    key={a.id}
+                    active={accountId === a.id}
+                    label={a.display_name}
+                    error={a.status === 'error' || a.status === 'needs_auth'}
+                    onClick={() => selectAccount(a.id)}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Input
+                  className="flex-1"
+                  placeholder="Search conversations…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <FilterButton
+                  active={box === 'archived'}
+                  onClick={() => setBox(box === 'archived' ? 'inbox' : 'archived')}
+                >
+                  Archived
+                </FilterButton>
+                <FilterButton active={unreadOnly} onClick={() => setUnreadOnly((v) => !v)}>
+                  Unread
+                </FilterButton>
+              </div>
+              {actionError && (
+                <p className="text-[11px] text-danger truncate" title={actionError}>
+                  {actionError}
+                </p>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {displayThreads?.length === 0 && !debouncedSearch && (
+                <EmptyState>Nothing here yet.</EmptyState>
+              )}
+              {displayThreads?.map((t) => (
+                <ThreadRow
+                  key={t.id}
+                  thread={t}
+                  showProvider={accountId === null && provider === null}
+                  active={false}
+                  leaving={leaving.has(t.id)}
+                  onClick={() => openThread(t)}
+                  onTogglePin={() => togglePin(t)}
+                />
+              ))}
+              {debouncedSearch && displayThreads && (
+                <MessageHits
+                  query={debouncedSearch}
+                  accountId={accountId}
+                  provider={provider}
+                  excludeThreadIds={new Set(displayThreads.map((t) => t.id))}
+                  noThreadMatches={displayThreads.length === 0}
+                  onOpen={openThread}
+                />
+              )}
+            </div>
+          </>
+        )}
+        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      </div>
     )
   }
 
@@ -577,6 +684,32 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
       </div>
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
+  )
+}
+
+/** phone account filter — horizontal chip rail above the thread list */
+function MobileAccountChip({
+  active,
+  label,
+  error,
+  onClick
+}: {
+  active: boolean
+  label: string
+  error?: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'shrink-0 px-3 py-1.5 rounded-full border text-[12.5px] whitespace-nowrap transition-colors',
+        active ? 'bg-raised border-border-strong text-text' : 'border-border text-muted',
+        error && 'text-danger'
+      )}
+    >
+      {label}
+    </button>
   )
 }
 
@@ -1097,7 +1230,8 @@ function ThreadPane({
   onArchive,
   onDelete,
   onMarkUnread,
-  onTogglePin
+  onTogglePin,
+  onBack
 }: {
   thread: CommsThreadListItem
   onOpenPerson?: (id: string) => void
@@ -1106,6 +1240,9 @@ function ThreadPane({
   onDelete: () => void
   onMarkUnread: () => void
   onTogglePin: () => void
+  /** mobile: the pane is the whole screen — render a back button (also
+   *  signals touch-sized targets throughout the header) */
+  onBack?: () => void
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
   const { data: threadAttachments } = useInvoke('comms:threadAttachments', [thread.id], ['comms'])
@@ -1149,9 +1286,20 @@ function ThreadPane({
     return () => window.removeEventListener('keydown', down)
   }, [thread.id, thread.provider, onArchive, onDelete, onMarkUnread, onTogglePin])
 
+  const actionBtn = onBack ? 'h-9 w-9' : 'h-6 w-6'
+
   return (
     <>
-      <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+      <div className={cn('border-b border-border flex items-center gap-2', onBack ? 'pl-1 pr-3 py-2' : 'px-4 py-3')}>
+        {onBack && (
+          <button
+            onClick={onBack}
+            title="Back to list"
+            className="shrink-0 h-9 w-9 rounded-md flex items-center justify-center text-muted active:bg-raised"
+          >
+            <ChevronLeft size={20} />
+          </button>
+        )}
         <span className="text-[13.5px] font-medium truncate flex-1">
           {thread.person_id && onOpenPerson ? (
             <>
@@ -1175,36 +1323,37 @@ function ThreadPane({
           onClick={onTogglePin}
           title={thread.pinned === 1 ? 'Unpin (p)' : 'Pin to top (p)'}
           className={cn(
-            'shrink-0 h-6 w-6 rounded flex items-center justify-center hover:bg-raised',
+            'shrink-0 rounded flex items-center justify-center hover:bg-raised',
+            actionBtn,
             thread.pinned === 1 ? 'text-accent' : 'text-muted hover:text-text'
           )}
         >
-          <Pin size={14} className={thread.pinned === 1 ? 'fill-current' : undefined} />
+          <Pin size={onBack ? 16 : 14} className={thread.pinned === 1 ? 'fill-current' : undefined} />
         </button>
         <button
           onClick={onMarkUnread}
           title="Mark as unread (u)"
-          className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised"
+          className={cn('shrink-0 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised', actionBtn)}
         >
-          <Mail size={14} />
+          <Mail size={onBack ? 16 : 14} />
         </button>
         <button
           onClick={onArchive}
           title={archived ? 'Move back to inbox (e)' : 'Archive (e)'}
-          className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised"
+          className={cn('shrink-0 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised', actionBtn)}
         >
-          {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+          {archived ? <ArchiveRestore size={onBack ? 16 : 14} /> : <Archive size={onBack ? 16 : 14} />}
         </button>
         {thread.provider === 'gmail' && (
           <button
             onClick={onDelete}
             title="Delete (⌫) — moves to Gmail trash"
-            className="shrink-0 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-danger hover:bg-raised"
+            className={cn('shrink-0 rounded flex items-center justify-center text-muted hover:text-danger hover:bg-raised', actionBtn)}
           >
-            <Trash2 size={14} />
+            <Trash2 size={onBack ? 16 : 14} />
           </button>
         )}
-        <Chip tone="muted">{thread.provider}</Chip>
+        {!onBack && <Chip tone="muted">{thread.provider}</Chip>}
       </div>
       <div className="fade-in flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
         {messages?.map((m) => (

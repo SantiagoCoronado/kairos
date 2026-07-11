@@ -176,4 +176,9 @@ textarea,
   select {
     font-size: 16px;
   }
+  /* finger-sized inbox rows (the desktop density is for pointers) */
+  .thread-row {
+    padding-top: 0.7rem;
+    padding-bottom: 0.7rem;
+  }
 }

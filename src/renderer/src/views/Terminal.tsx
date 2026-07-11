@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Plus, X } from 'lucide-react'
 import type { TerminalSessionInfo } from '../../../shared/ipc-contract'
 import { api } from '../lib/api'
+import { useIsMobile } from '../lib/mobile'
 import '@xterm/xterm/css/xterm.css'
 
 // Ptys live in the main process and survive view switches and window
@@ -15,6 +16,8 @@ export function TerminalView({ active }: { active: boolean }): React.JSX.Element
   const [activeId, setActiveId] = useState<string | null>(null)
   // StrictMode double-runs the mount effect; without the guard two shells spawn
   const initRef = useRef(false)
+  // touch has no :hover — the close button must stay visible, not hover-revealed
+  const isMobile = useIsMobile()
 
   const newTab = (): void => {
     void api.invoke('terminal:create').then((s) => {
@@ -95,7 +98,9 @@ export function TerminalView({ active }: { active: boolean }): React.JSX.Element
                 void api.invoke('terminal:kill', s.id)
               }}
               title="Close tab"
-              className="opacity-0 group-hover:opacity-100 text-faint hover:text-accent transition-opacity"
+              className={`text-faint hover:text-accent transition-opacity ${
+                isMobile ? 'opacity-70' : 'opacity-0 group-hover:opacity-100'
+              }`}
             >
               <X size={11} />
             </button>
@@ -111,7 +116,12 @@ export function TerminalView({ active }: { active: boolean }): React.JSX.Element
       </div>
       <div className="flex-1 min-h-0 relative">
         {sessions.map((s) => (
-          <TerminalPane key={s.id} sessionId={s.id} visible={s.id === activeId && active} />
+          <TerminalPane
+            key={s.id}
+            sessionId={s.id}
+            visible={s.id === activeId && active}
+            isMobile={isMobile}
+          />
         ))}
       </div>
     </div>
@@ -120,14 +130,24 @@ export function TerminalView({ active }: { active: boolean }): React.JSX.Element
 
 function TerminalPane({
   sessionId,
-  visible
+  visible,
+  isMobile
 }: {
   sessionId: string
   visible: boolean
+  isMobile: boolean
 }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Xterm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+
+  // readline's quoted-insert (Ctrl-V) makes the next byte literal, so a
+  // following \r lands as a real newline in the line buffer instead of
+  // submitting it — the standard trick for a multi-line shell prompt
+  const insertNewline = (): void => {
+    void api.invoke('terminal:input', sessionId, '\x16\r')
+    termRef.current?.focus()
+  }
 
   useEffect(() => {
     const el = containerRef.current
@@ -155,7 +175,13 @@ function TerminalPane({
     // let app-level ⌘ shortcuts bubble instead of going to the shell;
     // Ctrl must always reach the pty (Ctrl+C, readline bindings)
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey) return true
+      if (e.type !== 'keydown') return true
+      // Shift+Enter: insert a literal newline instead of submitting the line
+      if (e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        insertNewline()
+        return false
+      }
+      if (!e.metaKey || e.ctrlKey || e.altKey) return true
       if (/^[1-9]$/.test(e.key)) return false // ⌘1–⌘9 view jumps
       if (['k', 'b', 't'].includes(e.key)) return false // palette, sidebar, new tab
       return true
@@ -181,10 +207,48 @@ function TerminalPane({
     })
     observer.observe(el)
 
+    // xterm has no native scrollable content (.xterm-viewport's scrollHeight
+    // always equals its clientHeight — scrollback is repainted, not scrolled
+    // via the DOM) and only reacts to wheel events, which touch drags never
+    // fire. Translate vertical drag distance into scrollLines() calls so
+    // dragging the terminal on a phone actually moves the scrollback.
+    let touchStartY: number | null = null
+    let dragRemainder = 0
+    const onTouchStart = (ev: TouchEvent): void => {
+      if (ev.touches.length !== 1) return
+      touchStartY = ev.touches[0].clientY
+      dragRemainder = 0
+    }
+    const onTouchMove = (ev: TouchEvent): void => {
+      if (touchStartY === null || ev.touches.length !== 1) return
+      const y = ev.touches[0].clientY
+      const lineHeight = el.clientHeight / Math.max(term.rows, 1)
+      if (lineHeight <= 0) return
+      dragRemainder += touchStartY - y
+      touchStartY = y
+      const lines = Math.trunc(dragRemainder / lineHeight)
+      if (lines !== 0) {
+        term.scrollLines(lines)
+        dragRemainder -= lines * lineHeight
+      }
+      ev.preventDefault()
+    }
+    const onTouchEnd = (): void => {
+      touchStartY = null
+    }
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: false })
+    el.addEventListener('touchend', onTouchEnd, { passive: true })
+    el.addEventListener('touchcancel', onTouchEnd, { passive: true })
+
     return () => {
       offEvents()
       observer.disconnect()
       if (resizeTimer) clearTimeout(resizeTimer)
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+      el.removeEventListener('touchcancel', onTouchEnd)
       term.dispose() // the pty stays alive in main; unmount ≠ close
       termRef.current = null
       fitRef.current = null
@@ -205,6 +269,20 @@ function TerminalPane({
     // makes the grid one row too tall and clips the bottom line
     <div className={`absolute inset-0 px-3 py-2 ${visible ? '' : 'invisible'}`}>
       <div ref={containerRef} className="h-full w-full" />
+      {/* touch keyboards have no Shift+Enter — give mobile an explicit way
+          to insert a line break without submitting the line */}
+      {isMobile && (
+        <button
+          // preventDefault keeps the hidden xterm textarea focused so the
+          // on-screen keyboard doesn't flicker closed-then-open on tap
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={insertNewline}
+          title="Insert line break"
+          className="absolute bottom-4 right-4 px-2.5 py-1.5 rounded-md glass text-muted hover:text-text font-mono text-[11px]"
+        >
+          ↵ newline
+        </button>
+      )}
     </div>
   )
 }

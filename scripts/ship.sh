@@ -9,6 +9,10 @@ npx electron-vite build
 npm run build:mcp
 npx electron-builder --mac --dir
 
+# electron-builder's ad-hoc sign sometimes leaves the resource seal broken,
+# which makes macOS refuse to open the app ("may be damaged or incomplete")
+codesign --force --deep --sign - dist/mac-arm64/Kairos.app
+
 # quit the running app gracefully so it releases the single-instance lock
 osascript -e 'quit app "Kairos"' 2>/dev/null || true
 for _ in $(seq 1 20); do

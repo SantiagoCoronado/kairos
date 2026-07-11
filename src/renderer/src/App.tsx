@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sidebar, SidebarToggle, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
-import { useIsMobile, useKeyboardInset } from './lib/mobile'
+import { useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
 import { TodayView } from './views/Today'
 import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
@@ -31,12 +31,14 @@ const VIEW_ORDER: ViewId[] = [
 ]
 
 /** views the phone shell can host: the tabs plus People, which stays
- *  reachable through person links on Today/Inbox even without its own tab */
+ *  reachable through person links on Today/Inbox even without its own tab.
+ *  Terminal is appended only when it's reachable (opt-in over remote). */
 const MOBILE_VIEWS: ViewId[] = ['today', 'inbox', 'chat', 'notes', 'calendar', 'people']
 
 export default function App(): React.JSX.Element {
   const [view, setView] = useState<ViewId>('today')
   const mobile = useIsMobile()
+  const terminalOk = useTerminalAvailable()
   const keyboard = useKeyboardInset(mobile)
   const [personId, setPersonId] = useState<string | null>(null)
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
@@ -91,10 +93,12 @@ export default function App(): React.JSX.Element {
   }
 
   // shrinking into the phone shell while on a desktop-only view strands the
-  // user on a blank pane — snap home instead (also catches nav:goto deep links)
+  // user on a blank pane — snap home instead (also catches nav:goto deep links).
+  // Terminal counts as hostable only when it's actually reachable here.
+  const mobileViews = terminalOk ? [...MOBILE_VIEWS, 'terminal' as ViewId] : MOBILE_VIEWS
   useEffect(() => {
-    if (mobile && !MOBILE_VIEWS.includes(view)) setView('today')
-  }, [mobile, view])
+    if (mobile && !mobileViews.includes(view)) setView('today')
+  }, [mobile, view, terminalOk])
 
   const commonViews = (
     <>
@@ -111,6 +115,20 @@ export default function App(): React.JSX.Element {
 
   if (mobile) {
     const keyboardOpen = keyboard > 50
+    // terminal manages its own scroll/height; give it the whole pane
+    if (view === 'terminal' && terminalOk) {
+      return (
+        <div className="h-full flex flex-col bg-bg">
+          <div
+            className="flex-1 min-h-0 overflow-hidden"
+            style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: keyboardOpen ? `${keyboard}px` : 'calc(4.5rem + env(safe-area-inset-bottom))' }}
+          >
+            <TerminalView active />
+          </div>
+          {!keyboardOpen && <MobileTabBar view={view} onNavigate={setView} />}
+        </div>
+      )
+    }
     return (
       <div className="h-full flex flex-col bg-bg">
         <main

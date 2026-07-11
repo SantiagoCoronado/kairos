@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useInvoke } from '../lib/api'
-import { IS_REMOTE } from '../lib/mobile'
+import { useTerminalAvailable } from '../lib/mobile'
 
 export type ViewId =
   | 'today'
@@ -64,9 +64,11 @@ export function Sidebar({
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
-  // terminal is denied over remote access — don't offer it or poll its badge
-  const { data: termAttention } = useInvoke('terminal:attentionCount', [], ['terminal'], !IS_REMOTE)
-  const nav = IS_REMOTE ? NAV.filter((n) => n.id !== 'terminal') : NAV
+  // terminal is denied over remote access unless the user opted in — don't
+  // offer it or poll its badge where it isn't reachable
+  const terminalOk = useTerminalAvailable()
+  const { data: termAttention } = useInvoke('terminal:attentionCount', [], ['terminal'], terminalOk)
+  const nav = terminalOk ? NAV : NAV.filter((n) => n.id !== 'terminal')
   return (
     <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col select-none">
       {/* space for macOS traffic lights */}

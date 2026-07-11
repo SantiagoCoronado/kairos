@@ -594,6 +594,21 @@ function RemoteSection({
               once to activate the HTTPS link for the iPhone.
             </p>
           )}
+          <label className="flex items-start justify-between gap-4 pt-1.5 cursor-pointer">
+            <div>
+              <span className="text-[12px] text-text">Allow terminal access</span>
+              <p className="text-[11px] text-danger/90">
+                Grants a shell on this Mac to anyone with the link. Only enable on a trusted
+                private network.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={settings.remoteTerminal}
+              onChange={(e) => save({ remoteTerminal: e.target.checked })}
+              className="accent-danger w-4 h-4 shrink-0 mt-0.5"
+            />
+          </label>
         </div>
       )}
     </div>

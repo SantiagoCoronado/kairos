@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react'
+import { useInvoke } from './api'
 
 /** true when running in a plain browser over remote access (no preload bridge) */
 export const IS_REMOTE = !window.api
+
+/** Is the Terminal view reachable here? Always in Electron; over remote only
+ *  when the user opted in (Settings → remote access → allow terminal). The
+ *  server enforces this independently — this just hides a dead tab/nav item. */
+export function useTerminalAvailable(): boolean {
+  const { data: settings } = useInvoke('settings:get', [], ['settings'], IS_REMOTE)
+  if (!IS_REMOTE) return true
+  return settings?.remoteTerminal ?? false
+}
 
 const MQ = '(max-width: 767px)'
 

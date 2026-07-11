@@ -398,6 +398,9 @@ export interface AppSettings {
   /** bearer token required on the WebSocket handshake; generated on first enable */
   remoteToken: string | null
   remotePort: number
+  /** allow terminal (shell) access over remote — the token then grants a
+   *  shell on this Mac, so it's a separate, default-off opt-in */
+  remoteTerminal: boolean
 }
 
 export interface RemoteStatus {

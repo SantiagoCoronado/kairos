@@ -1,8 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import { Sparkles, Square, Plus, Wrench, Paperclip, X } from 'lucide-react'
 import type { ChatAttachment, ChatStreamEvent } from '../../../shared/ipc-contract'
-import { api } from '../lib/api'
+import { api, getRemoteToken } from '../lib/api'
+import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Button, cn } from '../components/ui'
+
+/** remote client: file bytes travel over HTTP into the Mac's staging dir —
+ *  the native dialog and pathForFile only exist inside Electron */
+async function uploadFiles(files: File[]): Promise<{ staged: ChatAttachment[]; failed: string[] }> {
+  const staged: ChatAttachment[] = []
+  const failed: string[] = []
+  for (const f of files) {
+    try {
+      const res = await fetch(`/upload?name=${encodeURIComponent(f.name)}`, {
+        method: 'POST',
+        headers: { 'x-kairos-token': getRemoteToken() ?? '' },
+        body: f
+      })
+      if (!res.ok) throw new Error(await res.text())
+      staged.push((await res.json()) as ChatAttachment)
+    } catch (err) {
+      failed.push(`${f.name}: ${err instanceof Error ? err.message : 'upload failed'}`)
+    }
+  }
+  return { staged, failed }
+}
 
 interface Bubble {
   role: 'user' | 'assistant' | 'error'
@@ -23,8 +45,11 @@ export function ChatView({
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
+  const [attachError, setAttachError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const mobile = useIsMobile()
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<string | null>(null)
   sessionRef.current = sessionId
@@ -107,7 +132,23 @@ export function ChatView({
     setSessionId(localSessionId)
   }
 
+  const addUploads = async (files: File[]): Promise<void> => {
+    setAttachError(null)
+    const { staged, failed } = await uploadFiles(files)
+    if (staged.length > 0) setAttachments((prev) => [...prev, ...staged])
+    if (failed.length > 0) {
+      setAttachError(failed.join(' · '))
+      setTimeout(() => setAttachError(null), 6000)
+    }
+  }
+
   const attach = async (): Promise<void> => {
+    if (IS_REMOTE) {
+      // browser file picker → HTTP upload; the Electron path would pop a
+      // native dialog on the Mac, not the phone
+      fileInputRef.current?.click()
+      return
+    }
     const staged = await api.invoke('chat:attach')
     if (staged.length > 0) setAttachments((prev) => [...prev, ...staged])
   }
@@ -115,7 +156,13 @@ export function ChatView({
   const onDrop = async (e: React.DragEvent): Promise<void> => {
     e.preventDefault()
     setDragging(false)
-    const paths = [...e.dataTransfer.files].map((f) => api.pathForFile(f)).filter(Boolean)
+    const files = [...e.dataTransfer.files]
+    if (files.length === 0) return
+    if (IS_REMOTE) {
+      await addUploads(files)
+      return
+    }
+    const paths = files.map((f) => api.pathForFile(f)).filter(Boolean)
     if (paths.length === 0) return
     const staged = await api.invoke('chat:attachPaths', paths)
     if (staged.length > 0) setAttachments((prev) => [...prev, ...staged])
@@ -147,10 +194,12 @@ export function ChatView({
       }}
       onDrop={(e) => void onDrop(e)}
     >
-      <div className="flex items-center justify-between px-6 pt-4">
-        <span className="text-[12px] text-faint">
-          Runs on your Claude Code subscription — the rest of the app works without it.
-        </span>
+      <div className={cn('flex items-center px-6', mobile ? 'justify-end pt-1' : 'justify-between pt-4')}>
+        {!mobile && (
+          <span className="text-[12px] text-faint">
+            Runs on your Claude Code subscription — the rest of the app works without it.
+          </span>
+        )}
         <Button variant="ghost" onClick={newChat}>
           <span className="inline-flex items-center gap-1">
             <Plus size={13} /> new chat
@@ -202,7 +251,24 @@ export function ChatView({
         )}
       </div>
 
-      <div className="px-6 pb-5 pt-1">
+      <div className={cn('px-6 pt-1', mobile ? 'pb-2' : 'pb-5')}>
+        {/* remote picker target — never rendered as UI */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])]
+            e.target.value = ''
+            if (files.length > 0) void addUploads(files)
+          }}
+        />
+        {attachError && (
+          <p className="pb-1.5 text-[11px] text-danger truncate" title={attachError}>
+            {attachError}
+          </p>
+        )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1.5 pb-1.5">
             {attachments.map((a) => (
@@ -254,7 +320,13 @@ export function ChatView({
                 void send()
               }
             }}
-            placeholder={dragging ? 'Drop files to attach' : 'Ask about your people, tasks, objectives… (Shift+Enter for a new line)'}
+            placeholder={
+              dragging
+                ? 'Drop files to attach'
+                : mobile
+                  ? 'Ask anything…'
+                  : 'Ask about your people, tasks, objectives… (Shift+Enter for a new line)'
+            }
             className="flex-1 max-h-44 resize-none overflow-y-auto bg-transparent py-1 text-[13px] text-text placeholder:text-faint focus:outline-none"
           />
           {busy ? (

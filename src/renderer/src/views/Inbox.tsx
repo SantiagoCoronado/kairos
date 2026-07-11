@@ -1856,6 +1856,7 @@ function LinkSenderPopover({
 }
 
 function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
+  const mobile = useIsMobile()
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1924,7 +1925,7 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
           id="inbox-reply"
           className="flex-1 bg-raised border border-border rounded-md px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none"
           rows={2}
-          placeholder="Reply… ⌘↩ to send"
+          placeholder={mobile ? 'Reply…' : 'Reply… ⌘↩ to send'}
           value={body}
           onChange={(e) => setBody(e.target.value)}
           onKeyDown={(e) => {

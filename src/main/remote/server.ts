@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { IpcEvents, RemoteStatus } from '../../shared/ipc-contract'
 import { getSettings, saveSettings } from '../settings'
+import { stageBuffer } from '../chat/uploads'
 import { logLine } from '../logger'
 
 /**
@@ -129,7 +130,7 @@ export function stopRemoteServer(): void {
 
 function start(port: number): void {
   lastError = null
-  const httpServer = createServer((req, res) => void serveStatic(req, res))
+  const httpServer = createServer((req, res) => void handleHttp(req, res))
   const sockets = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES })
 
   httpServer.on('upgrade', (req, socket, head) => {
@@ -207,12 +208,19 @@ const MIME: Record<string, string> = {
   '.map': 'application/json'
 }
 
-async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
+/** chat attachments from the phone; invoke payloads stay small but files don't */
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  if (req.method === 'POST' && url.pathname === '/upload') {
+    handleUpload(req, res, url)
+    return
+  }
   if (req.method !== 'GET') {
     res.writeHead(405).end()
     return
   }
-  const url = new URL(req.url ?? '/', 'http://localhost')
   let rel = decodeURIComponent(url.pathname)
   if (rel === '/') rel = '/index.html'
   const path = normalize(join(STATIC_ROOT, rel))
@@ -230,6 +238,42 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<v
   } catch {
     res.writeHead(404).end('not found')
   }
+}
+
+/** POST /upload?name=… — raw file bytes in, staged ChatAttachment JSON out.
+ *  Token-gated like the WS: uploads write to disk, so no anonymous writes. */
+function handleUpload(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  const token = String(req.headers['x-kairos-token'] ?? url.searchParams.get('token') ?? '')
+  if (!tokenOk(token)) {
+    res.writeHead(401).end()
+    return
+  }
+  const name = url.searchParams.get('name') ?? 'file'
+  const chunks: Buffer[] = []
+  let total = 0
+  let aborted = false
+  req.on('data', (c: Buffer) => {
+    if (aborted) return
+    total += c.length
+    if (total > MAX_UPLOAD_BYTES) {
+      aborted = true
+      res.writeHead(413).end('file too large (50MB max)')
+      req.destroy()
+      return
+    }
+    chunks.push(c)
+  })
+  req.on('end', () => {
+    if (aborted) return
+    try {
+      const att = stageBuffer(name, Buffer.concat(chunks))
+      logLine('info', 'remote', `staged upload ${att.name} (${att.size} bytes)`)
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(att))
+    } catch (err) {
+      logLine('error', 'remote', `upload failed: ${err instanceof Error ? err.message : String(err)}`)
+      res.writeHead(500).end('upload failed')
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

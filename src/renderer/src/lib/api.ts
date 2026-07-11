@@ -8,6 +8,15 @@ import type {
   RendererApi
 } from '../../../shared/ipc-contract'
 
+// assigned inside makeRemoteApi, which runs from the `api` initializer below —
+// must be declared first or module init dies in the temporal dead zone
+let remoteToken: string | null = null
+
+/** the remote session's bearer token — HTTP uploads need it alongside the WS */
+export function getRemoteToken(): string | null {
+  return remoteToken
+}
+
 /**
  * Inside Electron the preload bridge provides window.api (ipcRenderer).
  * In a plain browser (remote access: phone/tablet hitting the Mac's server)
@@ -23,6 +32,7 @@ function makeRemoteApi(): RendererApi {
     history.replaceState(null, '', window.location.pathname)
   }
   const token = fromHash ?? localStorage.getItem('kairos-remote-token') ?? ''
+  remoteToken = token || null
 
   // pasting a #token=… link into an already-open tab is a same-document
   // navigation — this module never re-runs, so pick the token up via reload

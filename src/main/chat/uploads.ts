@@ -3,7 +3,7 @@
 // agent gets a Read permission scoped to exactly this directory. Staging
 // copies (never links) so the conversation survives the original moving.
 import { dialog } from 'electron'
-import { copyFileSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { ulid } from 'ulid'
 import type { ChatAttachment } from '../../shared/ipc-contract'
@@ -22,6 +22,16 @@ function stage(srcPath: string): ChatAttachment {
   const dest = join(CHAT_UPLOADS_DIR, `${ulid().slice(0, 8).toLowerCase()}-${name}`)
   copyFileSync(srcPath, dest)
   return { name, path: dest, size: statSync(dest).size }
+}
+
+/** Remote-client entry point: the bytes arrive over HTTP — no path on this Mac. */
+export function stageBuffer(name: string, data: Buffer): ChatAttachment {
+  mkdirSync(CHAT_UPLOADS_DIR, { recursive: true })
+  // basename + separator strip: a crafted name must never escape the uploads dir
+  const safe = basename(name).replace(/[/\\]/g, '') || 'file'
+  const dest = join(CHAT_UPLOADS_DIR, `${ulid().slice(0, 8).toLowerCase()}-${safe}`)
+  writeFileSync(dest, data)
+  return { name: safe, path: dest, size: data.length }
 }
 
 /** File-picker entry point (the composer's paperclip button). */

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sidebar, SidebarToggle, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
-import { useIsMobile } from './lib/mobile'
+import { useIsMobile, useKeyboardInset } from './lib/mobile'
 import { TodayView } from './views/Today'
 import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
@@ -37,6 +37,7 @@ const MOBILE_VIEWS: ViewId[] = ['today', 'inbox', 'chat', 'notes', 'people']
 export default function App(): React.JSX.Element {
   const [view, setView] = useState<ViewId>('today')
   const mobile = useIsMobile()
+  const keyboard = useKeyboardInset(mobile)
   const [personId, setPersonId] = useState<string | null>(null)
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
   const [sidebarHidden, setSidebarHidden] = useState(
@@ -108,19 +109,23 @@ export default function App(): React.JSX.Element {
   )
 
   if (mobile) {
+    const keyboardOpen = keyboard > 50
     return (
       <div className="h-full flex flex-col bg-bg">
         <main
           className="flex-1 min-h-0 overflow-y-auto"
           style={{
             paddingTop: 'env(safe-area-inset-top)',
-            // keep content clear of the floating tab bar + home indicator
-            paddingBottom: 'calc(4.5rem + env(safe-area-inset-bottom))'
+            // keyboard open: hug it (tab bar hides); closed: clear the
+            // floating tab bar + home indicator
+            paddingBottom: keyboardOpen
+              ? `${keyboard + 8}px`
+              : 'calc(4.5rem + env(safe-area-inset-bottom))'
           }}
         >
           {commonViews}
         </main>
-        <MobileTabBar view={view} onNavigate={setView} />
+        {!keyboardOpen && <MobileTabBar view={view} onNavigate={setView} />}
       </div>
     )
   }

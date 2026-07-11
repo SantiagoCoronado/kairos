@@ -23,7 +23,8 @@ const DEFAULTS: Settings = {
   automationsSeenAt: null,
   remoteAccess: false,
   remoteToken: null,
-  remotePort: 4699
+  remotePort: 4699,
+  remoteTerminal: false
 }
 
 const FILE = join(DATA_DIR, 'settings.json')

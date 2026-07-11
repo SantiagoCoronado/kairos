@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useInvoke } from '../lib/api'
+import { IS_REMOTE } from '../lib/mobile'
 
 export type ViewId =
   | 'today'
@@ -63,7 +64,9 @@ export function Sidebar({
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
-  const { data: termAttention } = useInvoke('terminal:attentionCount', [], ['terminal'])
+  // terminal is denied over remote access — don't offer it or poll its badge
+  const { data: termAttention } = useInvoke('terminal:attentionCount', [], ['terminal'], !IS_REMOTE)
+  const nav = IS_REMOTE ? NAV.filter((n) => n.id !== 'terminal') : NAV
   return (
     <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col select-none">
       {/* space for macOS traffic lights */}
@@ -71,7 +74,7 @@ export function Sidebar({
         <SidebarToggle hidden={false} onToggle={onHide} />
       </div>
       <nav className="flex-1 px-2 py-2 space-y-0.5">
-        {NAV.map(({ id, label, icon: Icon }, i) => (
+        {nav.map(({ id, label, icon: Icon }, i) => (
           <button
             key={id}
             onClick={() => onNavigate(id)}

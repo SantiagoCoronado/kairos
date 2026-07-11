@@ -111,16 +111,19 @@ type Result<K extends IpcChannel> = Awaited<ReturnType<IpcApi[K]>>
 export function useInvoke<K extends IpcChannel>(
   channel: K,
   args: Parameters<IpcApi[K]>,
-  watch: DbEntity[]
+  watch: DbEntity[],
+  /** false skips the invoke entirely (e.g. channels denied over remote access) */
+  enabled = true
 ): { data: Result<K> | undefined; reload: () => void } {
   const [data, setData] = useState<Result<K> | undefined>(undefined)
   const argsKey = JSON.stringify(args)
   const watchKey = watch.join(',')
 
   const reload = useCallback(() => {
+    if (!enabled) return
     void api.invoke(channel, ...(JSON.parse(argsKey) as Parameters<IpcApi[K]>)).then(setData)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channel, argsKey])
+  }, [channel, argsKey, enabled])
 
   useEffect(() => reload(), [reload])
 

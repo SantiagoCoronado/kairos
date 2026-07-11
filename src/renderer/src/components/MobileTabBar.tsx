@@ -1,10 +1,11 @@
-import { Sun, Inbox, Sparkles, StickyNote } from 'lucide-react'
+import { Sun, Inbox, Sparkles, StickyNote, CalendarDays } from 'lucide-react'
 import type { ViewId } from './Sidebar'
 import { useInvoke } from '../lib/api'
 
 const TABS: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
   { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'chat', label: 'Chat', icon: Sparkles },
   { id: 'notes', label: 'Notes', icon: StickyNote }
 ]

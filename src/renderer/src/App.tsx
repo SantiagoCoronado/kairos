@@ -30,9 +30,9 @@ const VIEW_ORDER: ViewId[] = [
   'terminal'
 ]
 
-/** views the phone shell can host: the four tabs plus People, which stays
+/** views the phone shell can host: the tabs plus People, which stays
  *  reachable through person links on Today/Inbox even without its own tab */
-const MOBILE_VIEWS: ViewId[] = ['today', 'inbox', 'chat', 'notes', 'people']
+const MOBILE_VIEWS: ViewId[] = ['today', 'inbox', 'chat', 'notes', 'calendar', 'people']
 
 export default function App(): React.JSX.Element {
   const [view, setView] = useState<ViewId>('today')
@@ -102,6 +102,7 @@ export default function App(): React.JSX.Element {
       {view === 'inbox' && <InboxView onOpenPerson={openPerson} />}
       {view === 'people' && <PeopleView selectedId={personId} onSelect={setPersonId} />}
       {view === 'notes' && <NotesView onOpenSession={openChatSession} />}
+      {view === 'calendar' && <CalendarView onNavigate={setView} />}
       {view === 'chat' && (
         <ChatView key={chatSessionId ?? 'default'} initialSessionId={chatSessionId} />
       )}
@@ -149,7 +150,6 @@ export default function App(): React.JSX.Element {
         <div className="flex-1 min-h-0 overflow-y-auto">
           {commonViews}
           {view === 'tasks' && <TasksView />}
-          {view === 'calendar' && <CalendarView onNavigate={setView} />}
           {view === 'objectives' && <ObjectivesView />}
           {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}
           {terminalOpened && (

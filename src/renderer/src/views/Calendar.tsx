@@ -106,9 +106,9 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
 
   return (
     <div className="h-full flex flex-col">
-      {/* toolbar */}
-      <div className="shrink-0 flex items-center gap-2 px-4 pt-3 pb-2.5">
-        <h1 className="text-[15px] font-medium text-text min-w-44">
+      {/* toolbar — title takes its own row on phones so the controls wrap under it */}
+      <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 pt-3 pb-2.5">
+        <h1 className="text-[15px] font-medium text-text basis-full md:basis-auto md:min-w-44">
           {mode === 'month' ? fmtMonthTitle(anchor) : fmtWeekTitle(days)}
         </h1>
         <Button variant="ghost" className="!px-1.5 !py-1" onClick={() => step(-1)} title="Previous (←)">

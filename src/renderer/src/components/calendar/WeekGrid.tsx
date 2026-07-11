@@ -39,6 +39,15 @@ type Drag =
       endMin: number
     }
   | { kind: 'resize'; event: CalendarEventRecord; dayIdx: number; startMin: number; endMin: number }
+  | { kind: 'swipe'; startX: number; dx: number }
+
+const SWIPE_MIN_PX = 50
+
+/** touch drag that reads as clearly horizontal (not a vertical scroll/create
+ *  attempt) is a week-swipe, not an event-create drag */
+function isSwipeGesture(e: PointerEvent, delta: { dx: number; dy: number }): boolean {
+  return e.pointerType === 'touch' && Math.abs(delta.dx) > Math.abs(delta.dy) * 1.5
+}
 
 export function WeekGrid({
   days,
@@ -48,7 +57,8 @@ export function WeekGrid({
   onEventClick,
   onCreate,
   onMoveResize,
-  onNavigate
+  onNavigate,
+  onSwipeWeek
 }: {
   days: Date[]
   events: CalendarEventRecord[]
@@ -58,6 +68,7 @@ export function WeekGrid({
   onCreate: (startAt: Date, endAt: Date) => void
   onMoveResize: (id: string, startAt: Date, endAt: Date) => void
   onNavigate: (view: ViewId) => void
+  onSwipeWeek?: (dir: 1 | -1) => void
 }): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -122,15 +133,25 @@ export function WeekGrid({
   }
 
   const beginCreate = usePointerDrag<{ dayIdx: number; anchorMin: number }>({
-    onStart: (ctx) =>
+    onStart: (ctx, ev, delta) => {
+      if (onSwipeWeek && isSwipeGesture(ev, delta)) {
+        updateDrag({ kind: 'swipe', startX: ev.clientX - delta.dx, dx: delta.dx })
+        return
+      }
       updateDrag({
         kind: 'create',
         dayIdx: ctx.dayIdx,
         anchorMin: ctx.anchorMin,
         startMin: ctx.anchorMin,
         endMin: ctx.anchorMin + MIN_EVENT_MIN
-      }),
+      })
+    },
     onMove: (ctx, ev) => {
+      const d = dragRef.current
+      if (d?.kind === 'swipe') {
+        updateDrag({ ...d, dx: ev.clientX - d.startX })
+        return
+      }
       const { min } = pointToGrid(ev)
       const cur = snapMinutes(min)
       updateDrag({
@@ -142,7 +163,12 @@ export function WeekGrid({
       })
     },
     onEnd: (ctx, ev, activated) => {
+      const d = dragRef.current
       updateDrag(null)
+      if (d?.kind === 'swipe') {
+        if (Math.abs(d.dx) >= SWIPE_MIN_PX) onSwipeWeek?.(d.dx < 0 ? 1 : -1)
+        return
+      }
       if (!activated) {
         // plain click: 1-hour draft at the clicked slot
         const [s, e] = commitTimes(ctx.dayIdx, ctx.anchorMin, Math.min(24 * 60, ctx.anchorMin + 60))
@@ -254,8 +280,8 @@ export function WeekGrid({
     return map
   }, [overlay])
 
-  const dragging = drag !== null
-  const draggedId = drag && drag.kind !== 'create' ? drag.event.id : null
+  const dragging = drag !== null && drag.kind !== 'swipe'
+  const draggedId = drag && drag.kind !== 'create' && drag.kind !== 'swipe' ? drag.event.id : null
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -394,7 +420,7 @@ export function WeekGrid({
                 ))}
 
                 {/* drag ghost */}
-                {drag && drag.dayIdx === dayIdx && (
+                {drag && drag.kind !== 'swipe' && drag.dayIdx === dayIdx && (
                   <div
                     className="absolute inset-x-0.5 z-20 rounded border border-accent/60 bg-accent/15 pointer-events-none px-1.5 py-0.5"
                     style={{

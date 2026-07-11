@@ -8,6 +8,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import type { IpcEvents, RemoteStatus } from '../../shared/ipc-contract'
 import { getSettings, saveSettings } from '../settings'
 import { stageBuffer } from '../chat/uploads'
+import { getVapidPublicKey, addPushSubscription, removePushSubscription, sendPushAll } from './push'
 import { logLine } from '../logger'
 
 /**
@@ -217,6 +218,10 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
     handleUpload(req, res, url)
     return
   }
+  if (url.pathname.startsWith('/push/')) {
+    handlePush(req, res, url)
+    return
+  }
   if (req.method !== 'GET') {
     res.writeHead(405).end()
     return
@@ -238,6 +243,56 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
   } catch {
     res.writeHead(404).end('not found')
   }
+}
+
+/** /push/key (GET), /push/subscribe, /push/unsubscribe (POST JSON) — all
+ *  token-gated. Subscribing fires a confirmation push so the device knows
+ *  immediately whether the whole APNs round-trip works. */
+function handlePush(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  const token = String(req.headers['x-kairos-token'] ?? url.searchParams.get('token') ?? '')
+  if (!tokenOk(token)) {
+    res.writeHead(401).end()
+    return
+  }
+  if (req.method === 'GET' && url.pathname === '/push/key') {
+    res
+      .writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ publicKey: getVapidPublicKey() }))
+    return
+  }
+  if (req.method !== 'POST') {
+    res.writeHead(405).end()
+    return
+  }
+  const chunks: Buffer[] = []
+  let total = 0
+  req.on('data', (c: Buffer) => {
+    total += c.length
+    if (total > 64 * 1024) req.destroy()
+    else chunks.push(c)
+  })
+  req.on('end', () => {
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        endpoint?: string
+        keys?: { p256dh: string; auth: string }
+      }
+      if (!body.endpoint) throw new Error('missing endpoint')
+      if (url.pathname === '/push/subscribe') {
+        if (!body.keys?.p256dh || !body.keys.auth) throw new Error('missing keys')
+        const count = addPushSubscription({ endpoint: body.endpoint, keys: body.keys })
+        sendPushAll({ title: 'Kairos', body: 'Notifications enabled on this device.' })
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ count }))
+      } else if (url.pathname === '/push/unsubscribe') {
+        const count = removePushSubscription(body.endpoint)
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ count }))
+      } else {
+        res.writeHead(404).end()
+      }
+    } catch (err) {
+      res.writeHead(400).end(err instanceof Error ? err.message : 'bad request')
+    }
+  })
 }
 
 /** POST /upload?name=… — raw file bytes in, staged ChatAttachment JSON out.

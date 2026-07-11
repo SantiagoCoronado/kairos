@@ -16,6 +16,7 @@ import type { CommsProvider, CommsThreadListItem } from '../../core/comms-types'
 import * as repo from '../../core/repo/comms'
 import { createMainWindow } from '../windows/main-window'
 import { getSettings } from '../settings'
+import { sendPushAll } from '../remote/push'
 import { logLine } from '../logger'
 
 /** exported for the labeler: in notification-only mode it classifies just
@@ -100,6 +101,9 @@ export class CommsNotifier {
   }
 
   private notify(title: string, body: string, threadId?: string): void {
+    // second output: web push to any subscribed phone. Same trigger as the
+    // banner (window unfocused ≈ away from the desk), no-op with no devices.
+    sendPushAll({ title, body, threadId })
     const n = new Notification({ title, body, silent: false })
     n.on('click', () => {
       const win = createMainWindow()

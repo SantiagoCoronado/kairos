@@ -4,6 +4,7 @@ import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
 import { Chip, EmptyState, cn } from '../components/ui'
+import { PushBell } from '../components/PushBell'
 import { ProgressBar } from './Objectives'
 
 export function TodayView({
@@ -55,13 +56,17 @@ export function TodayView({
 
   return (
     <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-lg font-medium">{dateLabel}</h1>
-        <p className="text-[12px] text-faint font-mono mt-0.5">
-          {agenda
-            ? `${agenda.overdue_tasks.length} overdue · ${agenda.due_today_tasks.length} due today · ${agenda.followups.length} follow-ups`
-            : '…'}
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-medium">{dateLabel}</h1>
+          <p className="text-[12px] text-faint font-mono mt-0.5">
+            {agenda
+              ? `${agenda.overdue_tasks.length} overdue · ${agenda.due_today_tasks.length} due today · ${agenda.followups.length} follow-ups`
+              : '…'}
+          </p>
+        </div>
+        {/* remote-only: enable web push on this device (renders null elsewhere) */}
+        <PushBell />
       </div>
 
       {calendar && 'events' in calendar && calendar.events.length > 0 && (

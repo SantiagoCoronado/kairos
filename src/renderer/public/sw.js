@@ -28,6 +28,34 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    /* non-JSON payload — show the shell notification */
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Kairos', {
+      body: data.body || '',
+      // tag collapses repeat pings from the same thread into one banner
+      tag: data.threadId || undefined,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png'
+    })
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+      if (wins[0]) return wins[0].focus()
+      return self.clients.openWindow('/')
+    })
+  )
+})
+
 self.addEventListener('fetch', (event) => {
   const { request } = event
   if (request.method !== 'GET') return

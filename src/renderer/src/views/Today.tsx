@@ -54,7 +54,7 @@ export function TodayView({
     agenda.followups.length === 0
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
+    <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-6">
       <div>
         <h1 className="text-lg font-medium">{dateLabel}</h1>
         <p className="text-[12px] text-faint font-mono mt-0.5">
@@ -163,7 +163,7 @@ export function TodayView({
 
           {stats && stats.messages > 0 && (
             <>
-              <div className="grid grid-cols-4 gap-1.5 mt-2">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 mt-2">
                 {[
                   ['sessions', stats.sessions.toLocaleString()],
                   ['messages', stats.messages.toLocaleString()],
@@ -183,9 +183,12 @@ export function TodayView({
                 ))}
               </div>
 
-              <div className="flex items-end gap-5 mt-3">
+              <div className="flex flex-col gap-4 md:flex-row md:items-end md:gap-5 mt-3">
                 <LimitBars limits={limits ?? null} />
-                <UsageHeatmap days={stats.days} />
+                {/* a year of week-columns is ~700px wide — scroll it on phones */}
+                <div className="max-w-full overflow-x-auto">
+                  <UsageHeatmap days={stats.days} />
+                </div>
               </div>
 
               {stats.totalTokens > GATSBY_TOKENS * 2 && (

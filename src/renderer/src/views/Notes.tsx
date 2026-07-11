@@ -209,7 +209,7 @@ export function NotesView({
   }
 
   return (
-    <div className="p-6 mx-auto max-w-5xl space-y-4">
+    <div className="p-4 md:p-6 mx-auto max-w-5xl space-y-4">
       <div className="flex items-center gap-2">
         <Input
           className="flex-1"
@@ -347,7 +347,7 @@ function NoteGrid({
           {heading}
         </span>
       )}
-      <div className="columns-2 lg:columns-3 gap-3 [&>*]:mb-3">
+      <div className="columns-1 sm:columns-2 lg:columns-3 gap-3 [&>*]:mb-3">
         {notes.map((n) => (
           <NoteCard
             key={n.id}
@@ -862,7 +862,7 @@ function NoteEditor({ note, onClose }: { note: Note; onClose: () => void }): Rea
       onMouseDown={saveAndClose}
     >
       <div
-        className="w-[540px] max-h-[85vh] overflow-y-auto bg-overlay border border-border-strong rounded-xl shadow-2xl p-5 space-y-3"
+        className="w-[540px] max-w-[calc(100vw-2rem)] max-h-[85vh] overflow-y-auto bg-overlay border border-border-strong rounded-xl shadow-2xl p-5 space-y-3"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') saveAndClose()

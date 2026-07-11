@@ -189,7 +189,7 @@ export function EventEditor({
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center" onMouseDown={onClose}>
       <div
-        className="w-[440px] max-h-[85vh] overflow-y-auto bg-overlay border border-border-strong rounded-xl shadow-2xl p-4 space-y-3"
+        className="w-[440px] max-w-[calc(100vw-2rem)] max-h-[85vh] overflow-y-auto bg-overlay border border-border-strong rounded-xl shadow-2xl p-4 space-y-3"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">

@@ -5,7 +5,7 @@ import type { CalendarOverlay } from '../../../../shared/ipc-contract'
 import type { ViewId } from '../Sidebar'
 import { addDays, fmtTime, fromDateKey, isToday, parseEventDate, toDateKey, WEEKDAYS } from '../../lib/dates'
 import { eventHex } from './colors'
-import { usePointerDrag } from './useCalendarDrag'
+import { touchBlockRef, usePointerDrag } from './useCalendarDrag'
 
 const MAX_PILLS = 4
 
@@ -92,7 +92,7 @@ export function MonthGrid({
   })
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col cal-touch">
       <div className="grid grid-cols-7 shrink-0 border-b border-border">
         {WEEKDAYS.map((wd) => (
           <div
@@ -140,6 +140,7 @@ export function MonthGrid({
                 return (
                   <div
                     key={e.id}
+                    ref={touchBlockRef}
                     onPointerDown={
                       e.recurring_event_id
                         ? undefined

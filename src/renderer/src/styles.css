@@ -157,6 +157,15 @@ textarea,
   border: 1px solid rgb(255 255 255 / 0.09);
 }
 
+/* calendar grids: the browser may only use touches here for vertical
+   scrolling (and pinch zoom) — horizontal movement keeps delivering pointer
+   events so week-swipe works instead of panning the page sideways. Callout
+   off so the long-press-to-drag arm doesn't fight the iOS press menu. */
+.cal-touch {
+  touch-action: pan-y pinch-zoom;
+  -webkit-touch-callout: none;
+}
+
 @media (max-width: 767px) {
   html,
   body,
@@ -165,8 +174,11 @@ textarea,
     height: 100dvh;
   }
   body {
-    /* no rubber-banding the whole shell; views scroll internally */
-    overscroll-behavior-y: none;
+    /* no rubber-banding the whole shell; views scroll internally.
+       x included: a stray overflowing element must not let iOS pan the
+       whole page sideways (the phase-1 swipe fiasco) */
+    overscroll-behavior: none;
+    overflow-x: hidden;
     -webkit-tap-highlight-color: transparent;
     -webkit-text-size-adjust: 100%;
   }

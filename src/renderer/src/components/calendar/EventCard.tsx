@@ -1,6 +1,7 @@
 import { Repeat, Video } from 'lucide-react'
 import type { CalendarEventRecord } from '../../../../core/types'
 import { fmtTime, parseEventDate } from '../../lib/dates'
+import { touchBlockRef } from './useCalendarDrag'
 
 /** One timed event block in the week grid, absolutely positioned by the parent. */
 export function EventCard({
@@ -27,6 +28,7 @@ export function EventCard({
   const compact = height < 30
   return (
     <div
+      ref={touchBlockRef}
       className={`absolute z-10 rounded overflow-hidden select-none cursor-pointer transition-opacity ${
         dimmed ? 'opacity-40' : ''
       }`}
@@ -55,6 +57,7 @@ export function EventCard({
       </div>
       {onResizePointerDown && height >= 22 && (
         <div
+          ref={touchBlockRef}
           className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize"
           onPointerDown={onResizePointerDown}
         />

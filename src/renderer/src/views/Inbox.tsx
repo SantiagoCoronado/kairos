@@ -59,6 +59,20 @@ const LIST_W = { def: 320, min: 240, max: 480 }
 
 const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v))
 
+/* --- mobile swipe-to-reveal on thread rows --------------------------------
+   Same touch plumbing as useCalendarDrag: Chromium only delivers cancelable
+   touchmoves to non-passive listeners pre-registered on the touched element
+   itself, so each row registers the shared blocker at mount and it goes hot
+   (preventDefault → no native scroll/pointercancel) only while a swipe owns
+   the gesture. */
+let swipeOwned = false
+const blockScrollWhileSwiping = (e: TouchEvent): void => {
+  if (swipeOwned) e.preventDefault()
+}
+const SWIPE_SLOP_PX = 10
+const SWIPE_STRIP_W = 128 // two 64px action buttons per side
+const SWIPE_COMMIT_FRACTION = 0.55 // full swipe left past this = archive
+
 const storedWidth = (key: string, spec: { def: number; min: number; max: number }): number => {
   const raw = Number(localStorage.getItem(key))
   return Number.isFinite(raw) && raw > 0 ? clamp(raw, spec.min, spec.max) : spec.def
@@ -122,6 +136,8 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   // and without the snapshot React would yank the row mid-fold (the "snap").
   const [leaving, setLeaving] = useState<ReadonlyMap<string, CommsThreadListItem>>(new Map())
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set())
+  // which mobile row has its swipe actions revealed (one at a time, like iOS Mail)
+  const [swipedId, setSwipedId] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [mode, setMode] = useState<'threads' | 'channels' | 'compose'>('threads')
   const [showSettings, setShowSettings] = useState(false)
@@ -201,6 +217,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   }, [displayThreads, threadId])
 
   const openThread = (t: CommsThreadListItem): void => {
+    setSwipedId(null)
     setThreadId(t.id)
     setHeldThread({ ...t, unread_count: 0 })
     setMode('threads')
@@ -240,8 +257,12 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
         m.delete(t.id)
         return m
       })
-      if (next) openThread(next)
-      else closeThread()
+      // advance only when the removed thread was the open one — a list-row
+      // swipe on mobile must stay on the list, not surprise-open a thread
+      if (threadId === t.id) {
+        if (next) openThread(next)
+        else closeThread()
+      }
       const res = await pending
       if (!res.ok) {
         setHiddenIds((prev) => {
@@ -463,6 +484,14 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                   leaving={leaving.has(t.id)}
                   onClick={() => openThread(t)}
                   onTogglePin={() => togglePin(t)}
+                  swipe={{
+                    isOpen: swipedId === t.id,
+                    onOpenChange: (open) =>
+                      setSwipedId((cur) => (open ? t.id : cur === t.id ? null : cur)),
+                    onArchive: () => archiveThread(t),
+                    onDelete: () => deleteThread(t),
+                    onMarkUnread: () => markUnread(t)
+                  }}
                 />
               ))}
               {debouncedSearch && displayThreads && (
@@ -939,13 +968,23 @@ function AddAccount({
   )
 }
 
+/** touch swipe wiring — only the mobile list passes this */
+type RowSwipe = {
+  isOpen: boolean
+  onOpenChange: (open: boolean) => void
+  onArchive: () => void
+  onDelete: () => void
+  onMarkUnread: () => void
+}
+
 function ThreadRow({
   thread,
   active,
   showProvider,
   leaving,
   onClick,
-  onTogglePin
+  onTogglePin,
+  swipe
 }: {
   thread: CommsThreadListItem
   active: boolean
@@ -954,6 +993,7 @@ function ThreadRow({
   leaving: boolean
   onClick: () => void
   onTogglePin: () => void
+  swipe?: RowSwipe
 }): React.JSX.Element {
   const Icon = PROVIDER_ICON[thread.provider]
   const { name, title } = threadLabel(thread)
@@ -963,69 +1003,262 @@ function ThreadRow({
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: 'nearest' })
   }, [active])
+
+  // swipe offset mirrors into a ref so pointer handlers never read stale state
+  const [offset, setOffsetState] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const offsetRef = useRef(0)
+  const setOffset = (v: number): void => {
+    offsetRef.current = v
+    setOffsetState(v)
+  }
+  const gesture = useRef<{
+    x: number
+    y: number
+    id: number
+    base: number
+    mode: 'idle' | 'swipe' | 'scroll'
+  } | null>(null)
+  const suppressClick = useRef(false)
+
+  // another row opened (or the parent closed us) → snap shut
+  useEffect(() => {
+    if (swipe && !swipe.isOpen && offsetRef.current !== 0) setOffset(0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swipe?.isOpen])
+
+  const setRootRef = (el: HTMLDivElement | null): void => {
+    ref.current = el
+    // pre-registered non-passive blocker (idempotent: same fn + options)
+    if (el && swipe) el.addEventListener('touchmove', blockScrollWhileSwiping, { passive: false })
+  }
+
+  const endSwipe = (): void => {
+    swipeOwned = false
+    setDragging(false)
+  }
+
+  const onPointerDown = (e: React.PointerEvent): void => {
+    if (!swipe || e.pointerType !== 'touch') return
+    // a swipe usually generates no click at all, so the suppress flag from the
+    // previous gesture may still be armed — every new touch starts clean
+    suppressClick.current = false
+    gesture.current = {
+      x: e.clientX,
+      y: e.clientY,
+      id: e.pointerId,
+      base: offsetRef.current,
+      mode: 'idle'
+    }
+  }
+
+  const onPointerMove = (e: React.PointerEvent): void => {
+    const s = gesture.current
+    if (!swipe || !s || e.pointerId !== s.id || s.mode === 'scroll') return
+    const dx = e.clientX - s.x
+    const dy = e.clientY - s.y
+    if (s.mode === 'idle') {
+      if (Math.abs(dx) < SWIPE_SLOP_PX && Math.abs(dy) < SWIPE_SLOP_PX) return
+      if (Math.abs(dx) > Math.abs(dy) * 1.2) {
+        s.mode = 'swipe'
+        swipeOwned = true
+        setDragging(true)
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } else {
+        s.mode = 'scroll' // vertical-dominant: hand the gesture to native scroll
+        return
+      }
+    }
+    const w = ref.current?.offsetWidth ?? 390
+    setOffset(clamp(s.base + dx, -w, SWIPE_STRIP_W))
+  }
+
+  const onPointerUp = (e: React.PointerEvent): void => {
+    const s = gesture.current
+    gesture.current = null
+    if (!swipe || !s || e.pointerId !== s.id || s.mode !== 'swipe') return
+    endSwipe()
+    suppressClick.current = true // the tap-end click must not open the thread
+    const off = offsetRef.current
+    const w = ref.current?.offsetWidth ?? 390
+    if (off < -w * SWIPE_COMMIT_FRACTION) {
+      // full swipe left = archive, Gmail-style
+      setOffset(-w)
+      swipe.onOpenChange(false)
+      swipe.onArchive()
+    } else if (off < -SWIPE_STRIP_W / 2) {
+      setOffset(-SWIPE_STRIP_W)
+      swipe.onOpenChange(true)
+    } else if (off > SWIPE_STRIP_W / 2) {
+      setOffset(SWIPE_STRIP_W)
+      swipe.onOpenChange(true)
+    } else {
+      setOffset(0)
+      swipe.onOpenChange(false)
+    }
+  }
+
+  const onPointerCancel = (): void => {
+    const s = gesture.current
+    gesture.current = null
+    if (s?.mode === 'swipe') {
+      endSwipe()
+      setOffset(0)
+      swipe?.onOpenChange(false)
+    }
+  }
+
+  const swipeAction =
+    (fn: () => void) =>
+    (e: React.MouseEvent): void => {
+      e.stopPropagation()
+      setOffset(0)
+      swipe?.onOpenChange(false)
+      fn()
+    }
+
+  const archived = thread.is_archived === 1
   return (
     // div, not button: the pin toggle nests inside and buttons can't nest
     <div
-      ref={ref}
+      ref={setRootRef}
       role="button"
       tabIndex={0}
       onClick={onClick}
+      onClickCapture={(e) => {
+        if (!swipe) return
+        if (suppressClick.current) {
+          suppressClick.current = false
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
+        // a tap on an open row closes it instead of opening the thread
+        if (offsetRef.current !== 0 && !(e.target as Element).closest('[data-swipe-btn]')) {
+          e.preventDefault()
+          e.stopPropagation()
+          setOffset(0)
+          swipe.onOpenChange(false)
+        }
+      }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onClick()}
       className={cn(
-        'thread-row group w-full text-left px-3 py-2 border-b border-border/50 hover:bg-raised/50 cursor-default',
+        'thread-row relative group w-full text-left border-b border-border/50 hover:bg-raised/50 cursor-default',
         active && 'bg-raised',
         leaving && 'thread-row-leaving'
       )}
     >
-      <div className="flex items-center gap-1.5">
-        {showProvider && <Icon size={11} className="shrink-0 text-faint" />}
-        <span
-          className={cn(
-            'text-[13px] truncate flex-1',
-            thread.unread_count > 0 && 'font-semibold'
-          )}
-        >
-          {name && <span className="text-accent">{name} · </span>}
-          {title}
-        </span>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onTogglePin()
-          }}
-          title={thread.pinned === 1 ? 'Unpin' : 'Pin to top'}
-          className={cn(
-            'shrink-0 h-4 w-4 rounded flex items-center justify-center',
-            thread.pinned === 1
-              ? 'text-accent'
-              : 'text-faint hover:text-text opacity-0 group-hover:opacity-100'
-          )}
-        >
-          <Pin size={11} className={thread.pinned === 1 ? 'fill-current' : undefined} />
-        </button>
-        <span className="font-mono text-[10px] text-faint shrink-0">
-          {timeAgo(thread.last_message_at)}
-        </span>
-      </div>
-      <div className="flex items-center gap-1.5 mt-0.5">
-        <span className="text-[11px] text-faint truncate flex-1">{thread.snippet}</span>
-        {thread.labels
-          .split(',')
-          .filter(Boolean)
-          .slice(0, 2)
-          .map((l) => (
-            <span
-              key={l}
-              className="shrink-0 px-1 rounded text-[9.5px] border border-border/70 text-faint"
+      {swipe && offset !== 0 && (
+        <>
+          {/* swipe right → pin + unread (left edge) */}
+          <div className="absolute inset-y-0 left-0 flex">
+            <button
+              data-swipe-btn
+              onClick={swipeAction(onTogglePin)}
+              className="w-16 flex flex-col items-center justify-center gap-0.5 bg-accent text-black/80"
             >
-              {l}
-            </span>
-          ))}
-        {thread.unread_count > 0 && (
-          <span className="shrink-0 min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
-            {thread.unread_count}
+              <Pin size={14} className={thread.pinned === 1 ? 'fill-current' : undefined} />
+              <span className="text-[10px] font-medium">
+                {thread.pinned === 1 ? 'Unpin' : 'Pin'}
+              </span>
+            </button>
+            <button
+              data-swipe-btn
+              onClick={swipeAction(swipe.onMarkUnread)}
+              className="w-16 flex flex-col items-center justify-center gap-0.5 bg-raised text-text"
+            >
+              <Mail size={14} />
+              <span className="text-[10px] font-medium">Unread</span>
+            </button>
+          </div>
+          {/* swipe left → delete + archive (right edge; archive outermost = full-swipe action) */}
+          <div className="absolute inset-y-0 right-0 flex">
+            <button
+              data-swipe-btn
+              onClick={swipeAction(swipe.onDelete)}
+              className="w-16 flex flex-col items-center justify-center gap-0.5 bg-danger text-black/80"
+            >
+              <Trash2 size={14} />
+              <span className="text-[10px] font-medium">Delete</span>
+            </button>
+            <button
+              data-swipe-btn
+              onClick={swipeAction(swipe.onArchive)}
+              className="w-16 flex flex-col items-center justify-center gap-0.5 bg-ok text-black/80"
+            >
+              {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+              <span className="text-[10px] font-medium">{archived ? 'Restore' : 'Archive'}</span>
+            </button>
+          </div>
+        </>
+      )}
+      <div
+        className="thread-row-inner relative px-3 py-2"
+        style={
+          swipe
+            ? {
+                transform: `translateX(${offset}px)`,
+                transition: dragging ? 'none' : 'transform 200ms cubic-bezier(0.25, 1, 0.5, 1)',
+                // opaque while sliding so the strips don't show through the row
+                background: offset !== 0 ? 'var(--color-overlay)' : undefined
+              }
+            : undefined
+        }
+      >
+        <div className="flex items-center gap-1.5">
+          {showProvider && <Icon size={11} className="shrink-0 text-faint" />}
+          <span
+            className={cn(
+              'text-[13px] truncate flex-1',
+              thread.unread_count > 0 && 'font-semibold'
+            )}
+          >
+            {name && <span className="text-accent">{name} · </span>}
+            {title}
           </span>
-        )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onTogglePin()
+            }}
+            title={thread.pinned === 1 ? 'Unpin' : 'Pin to top'}
+            className={cn(
+              'shrink-0 h-4 w-4 rounded flex items-center justify-center',
+              thread.pinned === 1
+                ? 'text-accent'
+                : 'text-faint hover:text-text opacity-0 group-hover:opacity-100'
+            )}
+          >
+            <Pin size={11} className={thread.pinned === 1 ? 'fill-current' : undefined} />
+          </button>
+          <span className="font-mono text-[10px] text-faint shrink-0">
+            {timeAgo(thread.last_message_at)}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-[11px] text-faint truncate flex-1">{thread.snippet}</span>
+          {thread.labels
+            .split(',')
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((l) => (
+              <span
+                key={l}
+                className="shrink-0 px-1 rounded text-[9.5px] border border-border/70 text-faint"
+              >
+                {l}
+              </span>
+            ))}
+          {thread.unread_count > 0 && (
+            <span className="shrink-0 min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
+              {thread.unread_count}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )

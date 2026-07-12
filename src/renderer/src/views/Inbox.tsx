@@ -73,6 +73,142 @@ const SWIPE_SLOP_PX = 10
 const SWIPE_STRIP_W = 128 // two 64px action buttons per side
 const SWIPE_COMMIT_FRACTION = 0.55 // full swipe left past this = archive
 
+/* --- mobile pull-to-refresh on the chats list ------------------------------
+   Vertical sibling of the row swipe above, with one twist: touch-action pan-y
+   leaves downward drags claimable by native scroll, so waiting for React's
+   pointermove to decide ownership loses the race (Chromium claims the pan and
+   fires pointercancel). The pre-registered non-passive touchmove listener
+   therefore runs the dominance test itself and preventDefaults the first
+   qualifying move — the pull only arms when the list is already at the top. */
+const PULL_SLOP_PX = 8
+const PULL_MAX_PX = 96 // resistance cap while dragging
+const PULL_REFRESH_PX = 56 // release past this = refresh
+const PULL_HOLD_PX = 44 // indicator height while the sync runs
+const PULL_RESISTANCE = 0.5
+
+function PullToRefreshList({
+  onRefresh,
+  children
+}: {
+  /** resolves when the refresh is done (spinner collapses) */
+  onRefresh: () => Promise<void>
+  children: React.ReactNode
+}): React.JSX.Element {
+  const [pull, setPullState] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const pullRef = useRef(0)
+  const setPull = (v: number): void => {
+    pullRef.current = v
+    setPullState(v)
+  }
+  const scroller = useRef<HTMLDivElement | null>(null)
+  // idle: no touch · armed: touch started at scrollTop 0 · pull: we own the
+  // gesture (touchmoves preventDefault'ed) · off: handed to scroll/row-swipe
+  const gesture = useRef({ x: 0, y: 0, mode: 'idle' as 'idle' | 'armed' | 'pull' | 'off' })
+
+  // created once so mount-time registration and unmount removal see the same fn
+  const blocker = useRef<((e: TouchEvent) => void) | null>(null)
+  if (!blocker.current) {
+    blocker.current = (e: TouchEvent) => {
+      const g = gesture.current
+      if (g.mode === 'pull') {
+        e.preventDefault()
+        return
+      }
+      if (g.mode !== 'armed') return
+      if (swipeOwned) {
+        g.mode = 'off' // a row swipe claimed this touch
+        return
+      }
+      const t = e.touches[0]
+      if (!t) return
+      const dx = t.clientX - g.x
+      const dy = t.clientY - g.y
+      if (dy > PULL_SLOP_PX && dy > Math.abs(dx) * 1.2) {
+        g.mode = 'pull'
+        e.preventDefault()
+      } else if (Math.abs(dx) > PULL_SLOP_PX || dy < -PULL_SLOP_PX) {
+        g.mode = 'off'
+      }
+    }
+  }
+  const setScrollerRef = (el: HTMLDivElement | null): void => {
+    if (el && el !== scroller.current)
+      el.addEventListener('touchmove', blocker.current!, { passive: false })
+    scroller.current = el
+  }
+
+  const onPointerDown = (e: React.PointerEvent): void => {
+    if (e.pointerType !== 'touch') return
+    const atTop = (scroller.current?.scrollTop ?? 1) <= 0
+    gesture.current = {
+      x: e.clientX,
+      y: e.clientY,
+      mode: atTop && !refreshing ? 'armed' : 'off'
+    }
+  }
+  const onPointerMove = (e: React.PointerEvent): void => {
+    const g = gesture.current
+    if (g.mode !== 'pull') return
+    setDragging(true)
+    setPull(clamp((e.clientY - g.y - PULL_SLOP_PX) * PULL_RESISTANCE, 0, PULL_MAX_PX))
+  }
+  const settle = (commit: boolean): void => {
+    const g = gesture.current
+    if (g.mode === 'pull') {
+      setDragging(false)
+      if (commit && pullRef.current >= PULL_REFRESH_PX) {
+        setPull(PULL_HOLD_PX)
+        setRefreshing(true)
+        // hold the spinner at least long enough to read as an acknowledgement
+        void Promise.all([onRefresh(), new Promise((r) => setTimeout(r, 600))]).finally(() => {
+          setRefreshing(false)
+          setPull(0)
+        })
+      } else {
+        setPull(0)
+      }
+    }
+    g.mode = 'idle'
+  }
+
+  return (
+    <div
+      ref={setScrollerRef}
+      className="flex-1 overflow-y-auto"
+      style={{ overscrollBehaviorY: 'contain' }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => settle(true)}
+      onPointerCancel={() => settle(false)}
+    >
+      <div
+        className="flex items-end justify-center overflow-hidden"
+        style={{
+          height: pull,
+          transition: dragging ? 'none' : 'height 200ms cubic-bezier(0.25, 1, 0.5, 1)'
+        }}
+      >
+        <RefreshCw
+          size={15}
+          className={cn('mb-3 shrink-0', refreshing ? 'animate-spin text-text' : 'text-muted')}
+          style={
+            refreshing
+              ? undefined
+              : {
+                  // wind up as the pull approaches the trigger point
+                  transform: `rotate(${pull * 2.5}deg)`,
+                  opacity: Math.min(1, pull / PULL_REFRESH_PX)
+                }
+          }
+        />
+      </div>
+      {children}
+    </div>
+  )
+}
+
 const storedWidth = (key: string, spec: { def: number; min: number; max: number }): number => {
   const raw = Number(localStorage.getItem(key))
   return Number.isFinite(raw) && raw > 0 ? clamp(raw, spec.min, spec.max) : spec.def
@@ -303,6 +439,28 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     void api.invoke('comms:pinThread', t.id, next)
   }
 
+  /** pull-to-refresh: kick a sync, resolve when the resulting db:changed
+   *  lands (useInvoke reloads on the same event) — or after a timeout, since
+   *  syncNow is fire-and-forget and may sync nothing (WhatsApp is event-
+   *  driven; needs_auth accounts are skipped) */
+  const refreshThreads = (): Promise<void> => {
+    void api.invoke('comms:syncNow', accountId ?? undefined)
+    return new Promise((resolve) => {
+      let done = false
+      const finish = (): void => {
+        if (done) return
+        done = true
+        unsub()
+        window.clearTimeout(timer)
+        resolve()
+      }
+      const unsub = api.on('db:changed', (p) => {
+        if (p.entity === 'comms' || p.entity === 'all') finish()
+      })
+      const timer = window.setTimeout(finish, 5000)
+    })
+  }
+
   const selectAccount = (id: string | null): void => {
     setAccountId(id)
     setProvider(null)
@@ -471,7 +629,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                 </p>
               )}
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <PullToRefreshList onRefresh={refreshThreads}>
               {displayThreads?.length === 0 && !debouncedSearch && (
                 <EmptyState>Nothing here yet.</EmptyState>
               )}
@@ -504,7 +662,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                   onOpen={openThread}
                 />
               )}
-            </div>
+            </PullToRefreshList>
           </>
         )}
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}

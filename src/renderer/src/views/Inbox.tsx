@@ -1771,20 +1771,40 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
     () =>
       `<!doctype html><html><head>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: cid:; style-src 'unsafe-inline' http: https:; font-src http: https: data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <base target="_blank">
 <style>
   html { color-scheme: light; }
   body { margin: 0; padding: 12px; background: #fff; color: #111;
-         font: 13px/1.45 -apple-system, system-ui, sans-serif; word-break: break-word; }
-  img { max-width: 100%; height: auto; }
+         font: 13px/1.45 -apple-system, system-ui, sans-serif; word-break: break-word;
+         overflow-x: hidden; word-wrap: break-word; }
+  /* newsletters are fixed-width (600px+) table layouts; squeeze them to the phone */
+  table, td, img, video, div { max-width: 100% !important; }
+  img { height: auto; }
 </style>
 </head><body>${html}</body></html>`,
     [html]
   )
 
   const measure = (): void => {
-    const body = ref.current?.contentDocument?.body
-    if (body) setHeight(clamp(body.scrollHeight + 4, 40, 2000))
+    const frame = ref.current
+    const body = frame?.contentDocument?.body
+    if (!frame || !body) return
+    // Fixed-width table newsletters defeat the max-width reset (tables won't
+    // shrink below their attribute-forced min-content). Scale those down to
+    // fit, like iOS Mail / Gmail; page-level pinch-zoom still works.
+    const frameW = frame.clientWidth
+    const contentW = body.scrollWidth
+    if (frameW > 0 && contentW > frameW + 1) {
+      const s = frameW / contentW
+      body.style.width = `${contentW}px` // scrollWidth includes padding
+      body.style.boxSizing = 'border-box'
+      body.style.transformOrigin = '0 0'
+      body.style.transform = `scale(${s})`
+      setHeight(clamp(body.scrollHeight * s + 4, 40, 2000))
+    } else {
+      setHeight(clamp(body.scrollHeight + 4, 40, 2000))
+    }
   }
 
   const onLoad = (): void => {

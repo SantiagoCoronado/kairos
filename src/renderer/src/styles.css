@@ -188,10 +188,20 @@ textarea,
   select {
     font-size: 16px;
   }
-  /* finger-sized inbox rows (the desktop density is for pointers) */
-  .thread-row {
+  /* finger-sized inbox rows (the desktop density is for pointers); padding
+     lives on the inner wrapper — it's what slides during swipe-to-reveal */
+  .thread-row-inner {
     padding-top: 0.7rem;
     padding-bottom: 0.7rem;
+  }
+  /* rows own horizontal touch movement (swipe-to-reveal actions); vertical
+     stays native scroll. Callout/selection off so a slow swipe doesn't start
+     the iOS text loupe. */
+  .thread-row {
+    touch-action: pan-y;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   /* xterm has no native scrollable overflow to hand off to the browser —
      scrollback is driven entirely by JS (see Terminal.tsx's touch handler).

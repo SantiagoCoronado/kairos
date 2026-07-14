@@ -268,7 +268,7 @@ function VoiceCaptureButton(): React.JSX.Element {
       {flash && (
         <span
           className={cn(
-            'font-mono text-[11px] truncate max-w-[280px]',
+            'font-mono text-[11px] truncate max-w-[140px] md:max-w-[280px]',
             flash.ok ? 'text-ok' : 'text-danger'
           )}
           title={flash.message}
@@ -291,6 +291,7 @@ function BriefingButton(): React.JSX.Element {
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle')
   const [error, setError] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const pendingRef = useRef<string | null>(null)
 
   useEffect(() => () => audioRef.current?.pause(), [])
 
@@ -300,29 +301,55 @@ function BriefingButton(): React.JSX.Element {
     setState('idle')
   }
 
+  const play = (audio: HTMLAudioElement): void => {
+    audio.onended = stop
+    audio.play().then(
+      () => setState('playing'),
+      () => {
+        // gesture activation expired (Safari) — keep the mp3 for the next tap
+        pendingRef.current = audio.src
+        setState('idle')
+        setError('Ready — tap again to play')
+      }
+    )
+  }
+
   const speak = (): void => {
     if (state === 'playing') return stop()
     if (state === 'loading') return
-    setState('loading')
     setError(null)
+    if (pendingRef.current) {
+      const audio = new Audio(pendingRef.current)
+      pendingRef.current = null
+      audioRef.current = audio
+      play(audio)
+      return
+    }
+    // Safari (iPhone PWA) only lets media play on an element activated during a
+    // user gesture — prime one now, give it its src when synthesis returns
+    const audio = new Audio()
+    void audio.play().catch(() => {})
+    audioRef.current = audio
+    setState('loading')
     void api.invoke('tts:briefing').then((res) => {
+      if (audioRef.current !== audio) return // stopped/replaced meanwhile
       if (!res.ok) {
         setState('idle')
         setError(res.message)
         return
       }
-      const audio = new Audio(res.dataUrl)
-      audioRef.current = audio
-      audio.onended = stop
-      void audio.play()
-      setState('playing')
+      audio.src = res.dataUrl
+      play(audio)
     })
   }
 
   return (
     <div className="flex items-center gap-1.5 min-w-0">
       {error && (
-        <span className="text-[11px] text-danger truncate max-w-[280px]" title={error}>
+        <span
+          className="text-[11px] text-danger truncate max-w-[140px] md:max-w-[280px]"
+          title={error}
+        >
           {error}
         </span>
       )}

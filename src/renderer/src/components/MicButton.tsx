@@ -35,6 +35,11 @@ export function MicButton({
       recRef.current?.stop()
       return
     }
+    // insecure remote contexts (plain-http LAN link) have no mediaDevices at all
+    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      onError('Voice capture needs the HTTPS link (or a newer browser).')
+      return
+    }
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })

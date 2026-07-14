@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, RefreshCw, Sparkles } from 'lucide-react'
+import { CalendarDays, Loader2, RefreshCw, Sparkles, Square, Volume2 } from 'lucide-react'
 import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
@@ -65,8 +65,11 @@ export function TodayView({
               : '…'}
           </p>
         </div>
-        {/* remote-only: enable web push on this device (renders null elsewhere) */}
-        <PushBell />
+        <div className="flex items-center gap-1.5">
+          {settings?.elevenLabsApiKey && <BriefingButton />}
+          {/* remote-only: enable web push on this device (renders null elsewhere) */}
+          <PushBell />
+        </div>
       </div>
 
       {calendar && 'events' in calendar && calendar.events.length > 0 && (
@@ -226,6 +229,56 @@ export function TodayView({
         </Section>
       )}
     </div>
+  )
+}
+
+/** speaker in the header: synthesizes the agenda via ElevenLabs and plays it */
+function BriefingButton(): React.JSX.Element {
+  const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  useEffect(() => () => audioRef.current?.pause(), [])
+
+  const stop = (): void => {
+    audioRef.current?.pause()
+    audioRef.current = null
+    setState('idle')
+  }
+
+  const speak = (): void => {
+    if (state === 'playing') return stop()
+    if (state === 'loading') return
+    setState('loading')
+    setError(null)
+    void api.invoke('tts:briefing').then((res) => {
+      if (!res.ok) {
+        setState('idle')
+        setError(res.message)
+        return
+      }
+      const audio = new Audio(res.dataUrl)
+      audioRef.current = audio
+      audio.onended = stop
+      void audio.play()
+      setState('playing')
+    })
+  }
+
+  return (
+    <button
+      onClick={speak}
+      title={error ?? (state === 'playing' ? 'Stop' : 'Read my day')}
+      className={cn('p-1', error ? 'text-danger' : 'text-faint hover:text-text')}
+    >
+      {state === 'loading' ? (
+        <Loader2 size={15} className="animate-spin" />
+      ) : state === 'playing' ? (
+        <Square size={13} />
+      ) : (
+        <Volume2 size={15} />
+      )}
+    </button>
   )
 }
 

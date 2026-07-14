@@ -1,4 +1,5 @@
 import type { TodayPayload } from './types'
+import { stoicForDate } from './stoic'
 
 /** structurally matches CalendarEvent from the IPC contract — kept local so
  *  core stays independent of shared/ */
@@ -59,7 +60,10 @@ export function composeBriefing(
   }
 
   if (overdue.length === 0 && due.length === 0 && followups.length === 0) {
-    parts.push('Nothing is due today. Clear runway.')
+    const teaching = stoicForDate(now)
+    parts.push(
+      `Nothing is due today. Clear runway. ${teaching.author} reminds you: ${teaching.text}`
+    )
   } else {
     parts.push("That's your day.")
   }

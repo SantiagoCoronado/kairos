@@ -93,6 +93,17 @@ export function parseCapture(raw: string, now: Date = new Date()): CaptureIntent
   return { kind: 'task', title, area, priority, due_date: due }
 }
 
+/** fuzzy person match — exact name/nickname first, then first substring hit */
+export function findPerson(db: DbDriver, query: string): Person | null {
+  const candidates = listPeople(db, { search: query })
+  const exact = candidates.find(
+    (p) =>
+      p.name.toLowerCase() === query.toLowerCase() ||
+      p.nickname?.toLowerCase() === query.toLowerCase()
+  )
+  return exact ?? candidates[0] ?? null
+}
+
 export function executeCapture(
   db: DbDriver,
   raw: string,
@@ -120,14 +131,7 @@ export function executeCapture(
     return { ok: true, kind: 'note', note }
   }
 
-  // interaction: fuzzy person match — exact name/nickname first, then substring
-  const candidates = listPeople(db, { search: intent.personQuery })
-  const exact = candidates.find(
-    (p) =>
-      p.name.toLowerCase() === intent.personQuery.toLowerCase() ||
-      p.nickname?.toLowerCase() === intent.personQuery.toLowerCase()
-  )
-  const person = exact ?? candidates[0]
+  const person = findPerson(db, intent.personQuery)
   if (!person) {
     return { ok: false, message: `No person matching "${intent.personQuery}"` }
   }

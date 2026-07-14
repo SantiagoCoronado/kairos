@@ -53,6 +53,17 @@ export async function listVoices(apiKey: string): Promise<ElevenVoice[]> {
   return (body.voices ?? []).map((v) => ({ voiceId: v.voice_id, name: v.name }))
 }
 
+/** Scribe speech-to-text: audio bytes in, transcript out */
+export async function transcribe(apiKey: string, audio: Buffer, mime: string): Promise<string> {
+  const form = new FormData()
+  form.append('model_id', 'scribe_v1')
+  const ext = mime.includes('mp4') ? 'mp4' : 'webm'
+  form.append('file', new Blob([new Uint8Array(audio)], { type: mime }), `memo.${ext}`)
+  const res = await elevenFetch(apiKey, '/speech-to-text', { method: 'POST', body: form })
+  const body = (await res.json()) as { text?: string }
+  return (body.text ?? '').trim()
+}
+
 export async function synthesize(apiKey: string, voiceId: string, text: string): Promise<Buffer> {
   const res = await elevenFetch(
     apiKey,

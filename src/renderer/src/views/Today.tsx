@@ -6,6 +6,7 @@ import { stoicForDate } from '../../../core/stoic'
 import { api, useInvoke } from '../lib/api'
 import { Chip, cn } from '../components/ui'
 import { PushBell } from '../components/PushBell'
+import { MicButton } from '../components/MicButton'
 import { ProgressBar } from './Objectives'
 
 export function TodayView({
@@ -67,6 +68,7 @@ export function TodayView({
           </p>
         </div>
         <div className="flex items-center gap-1.5">
+          {settings?.elevenLabsApiKey && <VoiceCaptureButton />}
           {settings?.elevenLabsApiKey && <BriefingButton />}
           {/* remote-only: enable web push on this device (renders null elsewhere) */}
           <PushBell />
@@ -245,6 +247,41 @@ function StoicMoment(): React.JSX.Element {
       <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-faint mt-3">
         — {teaching.author}
       </p>
+    </div>
+  )
+}
+
+/** mic in the header: speak a memo → Scribe transcript → the capture pipeline
+ *  (same syntax as quick capture, so "n gift ideas" spoken becomes a note) */
+function VoiceCaptureButton(): React.JSX.Element {
+  const [flash, setFlash] = useState<{ ok: boolean; message: string } | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const show = (f: { ok: boolean; message: string }): void => {
+    setFlash(f)
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => setFlash(null), 4000)
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 min-w-0">
+      {flash && (
+        <span
+          className={cn(
+            'font-mono text-[11px] truncate max-w-[280px]',
+            flash.ok ? 'text-ok' : 'text-danger'
+          )}
+          title={flash.message}
+        >
+          {flash.message}
+        </span>
+      )}
+      <MicButton
+        onTranscript={(text) => {
+          void api.invoke('capture:submit', text).then(show)
+        }}
+        onError={(message) => show({ ok: false, message })}
+      />
     </div>
   )
 }

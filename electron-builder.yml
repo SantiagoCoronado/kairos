@@ -25,3 +25,4 @@ mac:
     NSCalendarsUsageDescription: Command Center shows today's events on your dashboard.
     NSCalendarsFullAccessUsageDescription: Command Center shows today's events on your dashboard.
     NSContactsUsageDescription: Kairos names your WhatsApp chats using your address book.
+    NSMicrophoneUsageDescription: Kairos transcribes voice memos into tasks and notes.

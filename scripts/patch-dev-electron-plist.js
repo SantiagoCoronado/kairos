@@ -26,7 +26,8 @@ const KEYS = {
   NSCalendarsUsageDescription: 'Command Center (dev) shows today’s events on your dashboard.',
   NSCalendarsFullAccessUsageDescription:
     'Command Center (dev) shows today’s events on your dashboard.',
-  NSContactsUsageDescription: 'Kairos (dev) names your WhatsApp chats using your address book.'
+  NSContactsUsageDescription: 'Kairos (dev) names your WhatsApp chats using your address book.',
+  NSMicrophoneUsageDescription: 'Kairos (dev) transcribes voice memos into tasks and notes.'
 }
 
 for (const [key, value] of Object.entries(KEYS)) {

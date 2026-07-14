@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { Zap } from 'lucide-react'
+import { MicButton } from './components/MicButton'
 import './styles.css'
 
 // the capture window only exists inside Electron, so the bridge is always there
@@ -11,9 +12,11 @@ type Flash = { ok: boolean; message: string } | null
 function Capture(): React.JSX.Element {
   const [text, setText] = useState('')
   const [flash, setFlash] = useState<Flash>(null)
+  const [micEnabled, setMicEnabled] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
+    void api.invoke('settings:get').then((s) => setMicEnabled(!!s.elevenLabsApiKey))
     return api.on('capture:reset', () => {
       setText('')
       setFlash(null)
@@ -63,6 +66,16 @@ function Capture(): React.JSX.Element {
           >
             {flash.message}
           </span>
+        )}
+        {micEnabled && (
+          <MicButton
+            onTranscript={(t) => {
+              setText((prev) => (prev ? `${prev} ${t}` : t))
+              setFlash(null)
+              inputRef.current?.focus()
+            }}
+            onError={(message) => setFlash({ ok: false, message })}
+          />
         )}
       </div>
     </div>

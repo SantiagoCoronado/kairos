@@ -266,19 +266,26 @@ function BriefingButton(): React.JSX.Element {
   }
 
   return (
-    <button
-      onClick={speak}
-      title={error ?? (state === 'playing' ? 'Stop' : 'Read my day')}
-      className={cn('p-1', error ? 'text-danger' : 'text-faint hover:text-text')}
-    >
-      {state === 'loading' ? (
-        <Loader2 size={15} className="animate-spin" />
-      ) : state === 'playing' ? (
-        <Square size={13} />
-      ) : (
-        <Volume2 size={15} />
+    <div className="flex items-center gap-1.5 min-w-0">
+      {error && (
+        <span className="text-[11px] text-danger truncate max-w-[280px]" title={error}>
+          {error}
+        </span>
       )}
-    </button>
+      <button
+        onClick={speak}
+        title={error ?? (state === 'playing' ? 'Stop' : 'Read my day')}
+        className={cn('p-1 shrink-0', error ? 'text-danger' : 'text-faint hover:text-text')}
+      >
+        {state === 'loading' ? (
+          <Loader2 size={15} className="animate-spin" />
+        ) : state === 'playing' ? (
+          <Square size={13} />
+        ) : (
+          <Volume2 size={15} />
+        )}
+      </button>
+    </div>
   )
 }
 

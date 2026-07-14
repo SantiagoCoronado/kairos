@@ -231,6 +231,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
           </>
         )}
 
+        {settings && <VoiceSection settings={settings} save={save} />}
+
         {settings && <ConnectionsSection settings={settings} save={save} />}
 
         {settings && <RemoteSection settings={settings} save={save} />}
@@ -264,6 +266,72 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
           </Button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function VoiceSection({
+  settings,
+  save
+}: {
+  settings: AppSettings
+  save: (patch: Partial<AppSettings>) => void
+}): React.JSX.Element {
+  const [voices, setVoices] = useState<{ voiceId: string; name: string }[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!settings.elevenLabsApiKey) {
+      setVoices(null)
+      setError(null)
+      return
+    }
+    void api.invoke('tts:voices').then((res) => {
+      if (res.ok) {
+        setVoices(res.voices)
+        setError(null)
+      } else {
+        setVoices(null)
+        setError(res.message)
+      }
+    })
+  }, [settings.elevenLabsApiKey])
+
+  return (
+    <div className="space-y-1">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+        voice briefing (elevenlabs)
+      </span>
+      <div className="flex gap-1.5">
+        <Input
+          className="flex-1 font-mono text-[11px]"
+          placeholder="api key"
+          type="password"
+          defaultValue={settings.elevenLabsApiKey ?? ''}
+          key={`elkey-${settings.elevenLabsApiKey ?? ''}`}
+          onBlur={(e) => save({ elevenLabsApiKey: e.target.value.trim() || null })}
+        />
+        {voices && (
+          <Select
+            value={settings.elevenLabsVoiceId ?? ''}
+            onChange={(e) => save({ elevenLabsVoiceId: e.target.value || null })}
+            className="flex-1"
+            title="Voice"
+          >
+            <option value="">Default voice</option>
+            {voices.map((v) => (
+              <option key={v.voiceId} value={v.voiceId}>
+                {v.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </div>
+      {error && <p className="text-[11.5px] text-danger">{error}</p>}
+      <p className="text-[11px] text-faint">
+        Adds a speaker button on Today that reads your day aloud. Get a key at elevenlabs.io →
+        profile → API keys (free tier is plenty).
+      </p>
     </div>
   )
 }

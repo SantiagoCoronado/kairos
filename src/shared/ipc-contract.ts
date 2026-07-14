@@ -174,6 +174,11 @@ export interface IpcApi {
 
   'calendar:today': () => Promise<CalendarResult>
 
+  /** today's agenda spoken via ElevenLabs — mp3 as a data URL */
+  'tts:briefing': () => Promise<TtsResult>
+  /** voices available on the ElevenLabs account (settings picker) */
+  'tts:voices': () => Promise<TtsVoicesResult>
+
   /** macOS address-book autocomplete for the People view (TCC-gated) */
   'contacts:search': (query: string) => Promise<ContactsResult>
 
@@ -292,6 +297,12 @@ export interface IpcApi {
   'comms:disconnect': (accountId: string) => Promise<void>
 }
 
+export type TtsResult = { ok: true; dataUrl: string } | { ok: false; message: string }
+
+export type TtsVoicesResult =
+  | { ok: true; voices: { voiceId: string; name: string }[] }
+  | { ok: false; message: string }
+
 export type CommsDownloadResult = { ok: true; path: string } | { ok: false; message: string }
 export type CommsAttachmentDataResult =
   | { ok: true; dataUrl: string }
@@ -390,6 +401,10 @@ export interface AppSettings {
   /** OAuth client for the user's own Slack app */
   slackClientId: string | null
   slackClientSecret: string | null
+  /** ElevenLabs API key — powers the spoken daily briefing on Today */
+  elevenLabsApiKey: string | null
+  /** ElevenLabs voice for TTS; null = first voice on the account */
+  elevenLabsVoiceId: string | null
   /** UI cursor, not a user preference: newest automation run already seen
    *  in the Automations view (drives the sidebar unseen-runs badge) */
   automationsSeenAt: string | null

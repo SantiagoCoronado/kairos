@@ -20,6 +20,8 @@ const DEFAULTS: Settings = {
   googleClientSecret: null,
   slackClientId: null,
   slackClientSecret: null,
+  elevenLabsApiKey: null,
+  elevenLabsVoiceId: null,
   automationsSeenAt: null,
   remoteAccess: false,
   remoteToken: null,

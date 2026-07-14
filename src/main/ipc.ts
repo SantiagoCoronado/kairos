@@ -22,6 +22,8 @@ import * as interactions from '../core/repo/interactions'
 import * as followups from '../core/repo/followups'
 import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
+import { composeBriefing } from '../core/briefing'
+import { listVoices, synthesize } from './tts/elevenlabs'
 import { executeCapture } from '../core/capture'
 import { hideCaptureWindow } from './windows/capture-window'
 import * as comms from '../core/repo/comms'
@@ -367,6 +369,32 @@ export function registerIpc(): void {
   handle('today:get', () => todayAgenda(db))
 
   handle('calendar:today', () => calendarToday())
+
+  handle('tts:voices', async () => {
+    const key = getSettings().elevenLabsApiKey
+    if (!key) return { ok: false as const, message: 'No ElevenLabs API key configured.' }
+    try {
+      return { ok: true as const, voices: await listVoices(key) }
+    } catch (err) {
+      return { ok: false as const, message: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  handle('tts:briefing', async () => {
+    const { elevenLabsApiKey: key, elevenLabsVoiceId } = getSettings()
+    if (!key) return { ok: false as const, message: 'Add an ElevenLabs API key in Settings first.' }
+    try {
+      const cal = await calendarToday()
+      const text = composeBriefing(todayAgenda(db), 'events' in cal ? cal.events : [])
+      const voiceId = elevenLabsVoiceId ?? (await listVoices(key))[0]?.voiceId
+      if (!voiceId)
+        return { ok: false as const, message: 'No voices found on the ElevenLabs account.' }
+      const mp3 = await synthesize(key, voiceId, text)
+      return { ok: true as const, dataUrl: `data:audio/mpeg;base64,${mp3.toString('base64')}` }
+    } catch (err) {
+      return { ok: false as const, message: err instanceof Error ? err.message : String(err) }
+    }
+  })
 
   handle('contacts:search', (query) => searchMacContacts(query))
 

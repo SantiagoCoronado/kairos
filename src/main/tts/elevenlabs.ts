@@ -7,6 +7,10 @@ const MODEL_ID = 'eleven_flash_v2_5'
 // 128 kbps mp3 is available on every plan (192 needs Creator+)
 const OUTPUT_FORMAT = 'mp3_44100_128'
 
+// premade "Sarah" — usable for TTS on every plan, including restricted free
+// keys that lack voices_read (library voices 402 for free accounts, premades don't)
+export const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'
+
 export interface ElevenVoice {
   voiceId: string
   name: string
@@ -25,9 +29,9 @@ async function elevenFetch(apiKey: string, path: string, init: RequestInit = {})
     )
   }
   if (!res.ok) {
-    if (res.status === 401)
-      throw new Error('ElevenLabs rejected the API key — check it in Settings.')
-    throw new Error(`ElevenLabs error ${res.status}: ${await errorDetail(res)}`)
+    const detail = await errorDetail(res)
+    if (res.status === 401) throw new Error(`ElevenLabs rejected the API key — ${detail}`)
+    throw new Error(`ElevenLabs error ${res.status}: ${detail}`)
   }
   return res
 }

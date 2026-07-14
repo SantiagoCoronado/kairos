@@ -327,10 +327,15 @@ function VoiceSection({
           </Select>
         )}
       </div>
-      {error && <p className="text-[11.5px] text-danger">{error}</p>}
+      {error && (
+        <p className="text-[11.5px] text-danger">
+          Voice list unavailable: {error} The briefing still works with the default voice.
+        </p>
+      )}
       <p className="text-[11px] text-faint">
         Adds a speaker button on Today that reads your day aloud. Get a key at elevenlabs.io →
-        profile → API keys (free tier is plenty).
+        profile → API keys (free tier is plenty). Restricted keys need at least text-to-speech
+        permission; add voices-read to pick a voice here.
       </p>
     </div>
   )

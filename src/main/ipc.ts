@@ -23,7 +23,7 @@ import * as followups from '../core/repo/followups'
 import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
 import { composeBriefing } from '../core/briefing'
-import { listVoices, synthesize } from './tts/elevenlabs'
+import { DEFAULT_VOICE_ID, listVoices, synthesize } from './tts/elevenlabs'
 import { executeCapture } from '../core/capture'
 import { hideCaptureWindow } from './windows/capture-window'
 import * as comms from '../core/repo/comms'
@@ -386,10 +386,7 @@ export function registerIpc(): void {
     try {
       const cal = await calendarToday()
       const text = composeBriefing(todayAgenda(db), 'events' in cal ? cal.events : [])
-      const voiceId = elevenLabsVoiceId ?? (await listVoices(key))[0]?.voiceId
-      if (!voiceId)
-        return { ok: false as const, message: 'No voices found on the ElevenLabs account.' }
-      const mp3 = await synthesize(key, voiceId, text)
+      const mp3 = await synthesize(key, elevenLabsVoiceId ?? DEFAULT_VOICE_ID, text)
       return { ok: true as const, dataUrl: `data:audio/mpeg;base64,${mp3.toString('base64')}` }
     } catch (err) {
       return { ok: false as const, message: err instanceof Error ? err.message : String(err) }

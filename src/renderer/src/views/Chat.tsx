@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Sparkles, Square, Plus, Wrench, Paperclip, X } from 'lucide-react'
 import type { ChatAttachment, ChatStreamEvent } from '../../../shared/ipc-contract'
-import { api, getRemoteToken } from '../lib/api'
+import { api, getRemoteToken, useInvoke } from '../lib/api'
 import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Button, cn } from '../components/ui'
+import { MicButton } from '../components/MicButton'
 
 /** remote client: file bytes travel over HTTP into the Mac's staging dir —
  *  the native dialog and pathForFile only exist inside Electron */
@@ -48,6 +49,8 @@ export function ChatView({
   const [attachError, setAttachError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const mobile = useIsMobile()
+  const { data: settings } = useInvoke('settings:get', [], ['settings'])
+  const [micError, setMicError] = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -269,6 +272,11 @@ export function ChatView({
             {attachError}
           </p>
         )}
+        {micError && (
+          <p className="pb-1.5 text-[11px] text-danger truncate" title={micError}>
+            {micError}
+          </p>
+        )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1.5 pb-1.5">
             {attachments.map((a) => (
@@ -303,6 +311,24 @@ export function ChatView({
           >
             <Paperclip size={14} />
           </button>
+          {settings?.elevenLabsApiKey && (
+            <MicButton
+              size={14}
+              onTranscript={(t) => {
+                setMicError(null)
+                setInput((prev) => (prev ? `${prev} ${t}` : t))
+                // setInput bypasses onChange — re-run the auto-grow + refocus
+                requestAnimationFrame(() => {
+                  const el = inputRef.current
+                  if (!el) return
+                  el.style.height = 'auto'
+                  el.style.height = `${el.scrollHeight}px`
+                  el.focus()
+                })
+              }}
+              onError={setMicError}
+            />
+          )}
           <textarea
             ref={inputRef}
             value={input}

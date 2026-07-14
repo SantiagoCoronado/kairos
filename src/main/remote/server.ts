@@ -23,10 +23,11 @@ import { logLine } from '../logger'
  * is a viewer of this app, not a terminal on this machine.
  */
 
-// capture:* (window management) is never remotely useful. terminal:* is a
-// shell on this machine — refused unless the user explicitly opts in
+// capture:* window management is never remotely useful — except capture:submit,
+// which is a plain DB write that the phone's voice capture rides. terminal:* is
+// a shell on this machine — refused unless the user explicitly opts in
 // (Settings → remote access → allow terminal).
-const ALWAYS_DENIED = [/^capture:/]
+const ALWAYS_DENIED = [/^capture:(?!submit$)/]
 const TERMINAL = /^terminal:/
 
 function isDenied(channel: string): boolean {
@@ -34,9 +35,10 @@ function isDenied(channel: string): boolean {
   if (TERMINAL.test(channel) && !getSettings().remoteTerminal) return true
   return false
 }
-/** invoke payloads are JSON control traffic; attachments ride base64 data
- *  URLs in *responses*, so requests never need to be big */
-const MAX_FRAME_BYTES = 1024 * 1024
+/** invoke payloads are mostly JSON control traffic (attachments ride base64
+ *  data URLs in *responses*) — but stt:transcribe carries a base64 voice memo
+ *  in the request (~1MB per minute of Safari AAC), so leave headroom */
+const MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Handler = (...args: any[]) => unknown

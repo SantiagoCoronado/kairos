@@ -278,7 +278,9 @@ function VoiceCaptureButton(): React.JSX.Element {
       )}
       <MicButton
         onTranscript={(text) => {
-          void api.invoke('capture:submit', text).then(show)
+          // no timer on the interim flash — the result replaces it
+          setFlash({ ok: true, message: 'thinking…' })
+          void api.invoke('capture:smart', text).then(show)
         }}
         onError={(message) => show({ ok: false, message })}
       />

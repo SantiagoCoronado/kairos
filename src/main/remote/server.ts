@@ -27,7 +27,7 @@ import { logLine } from '../logger'
 // which is a plain DB write that the phone's voice capture rides. terminal:* is
 // a shell on this machine — refused unless the user explicitly opts in
 // (Settings → remote access → allow terminal).
-const ALWAYS_DENIED = [/^capture:(?!submit$)/]
+const ALWAYS_DENIED = [/^capture:(?!submit$|smart$)/]
 const TERMINAL = /^terminal:/
 
 function isDenied(channel: string): boolean {

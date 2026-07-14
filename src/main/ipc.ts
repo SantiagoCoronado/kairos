@@ -14,6 +14,7 @@ import * as tasks from '../core/repo/tasks'
 import * as notes from '../core/repo/notes'
 import * as agentTasksRepo from '../core/repo/agent-tasks'
 import { AgentTaskRunner, parseTaskDraft } from './chat/task-runner'
+import { smartCapture } from './chat/smart-capture'
 import { emitAppEvent, onAppEvent } from './events'
 import type { AppEventName } from '../core/types'
 import * as projects from '../core/repo/projects'
@@ -513,6 +514,15 @@ export function registerIpc(): void {
             : `Logged for ${result.person.name}`
     }
   })
+  handle('capture:smart', async (raw) => {
+    const result = await smartCapture(db, raw)
+    if (result.ok && result.entity) broadcast('db:changed', { entity: result.entity })
+    if (result.ok && result.entity === 'interactions')
+      broadcast('db:changed', { entity: 'people' })
+    if (result.ok && result.appEvent) emitAppEvent(result.appEvent)
+    return { ok: result.ok, message: result.message }
+  })
+
   handle('capture:hide', () => hideCaptureWindow())
 
   handle('export:markdown', () => {

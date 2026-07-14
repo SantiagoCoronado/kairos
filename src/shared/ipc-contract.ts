@@ -208,6 +208,9 @@ export interface IpcApi {
   'calendar:attendeeSuggest': (query: string) => AttendeeSuggestion[]
 
   'capture:submit': (raw: string) => CaptureSubmitResult
+  /** voice capture: NL → task/note/event/interaction via a one-shot haiku
+   *  call, with the terse-syntax parser as fallback */
+  'capture:smart': (raw: string) => Promise<CaptureSubmitResult>
   'capture:hide': () => void
 
   'export:markdown': () => { files: number; dir: string }

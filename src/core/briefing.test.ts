@@ -22,11 +22,12 @@ function event(title: string, start: string, allDay = false): BriefingEvent {
 }
 
 describe('composeBriefing', () => {
-  it('empty day: greets, dates, and calls the clear runway', () => {
+  it('empty day: greets, dates, calls the clear runway, and ends with a stoic teaching', () => {
     const text = composeBriefing(agenda(), [], MONDAY_9AM)
     expect(text).toContain('Good morning')
     expect(text).toContain("It's Monday, July 13th.")
     expect(text).toContain('Nothing is due today. Clear runway.')
+    expect(text).toMatch(/(Marcus Aurelius|Seneca|Epictetus) reminds you: /)
     expect(text).not.toContain("That's your day")
   })
 

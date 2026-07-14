@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { CalendarDays, Loader2, RefreshCw, Sparkles, Square, Volume2 } from 'lucide-react'
 import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
+import { stoicForDate } from '../../../core/stoic'
 import { api, useInvoke } from '../lib/api'
-import { Chip, EmptyState, cn } from '../components/ui'
+import { Chip, cn } from '../components/ui'
 import { PushBell } from '../components/PushBell'
 import { ProgressBar } from './Objectives'
 
@@ -93,7 +94,7 @@ export function TodayView({
         </Section>
       )}
 
-      {nothingDue && <EmptyState>Clear runway. Nothing due today.</EmptyState>}
+      {nothingDue && <StoicMoment />}
 
       {agenda && agenda.overdue_tasks.length > 0 && (
         <Section title="overdue" tone="danger">
@@ -228,6 +229,22 @@ export function TodayView({
           </div>
         </Section>
       )}
+    </div>
+  )
+}
+
+/** clear-runway state: today's stoic teaching instead of a bare empty line */
+function StoicMoment(): React.JSX.Element {
+  const teaching = stoicForDate(new Date())
+  return (
+    <div className="flex flex-col items-center py-14 px-6 text-center">
+      <p className="text-faint text-[13px]">Clear runway. Nothing due today.</p>
+      <blockquote className="text-[15px] leading-relaxed text-muted max-w-md mt-5">
+        “{teaching.text}”
+      </blockquote>
+      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-faint mt-3">
+        — {teaching.author}
+      </p>
     </div>
   )
 }

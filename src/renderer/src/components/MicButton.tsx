@@ -5,6 +5,16 @@ import { cn } from './ui'
 
 type VoiceState = 'idle' | 'recording' | 'transcribing'
 
+// Auto-stop tuning: stop SILENCE_MS after speech ends. Hysteresis between the
+// speech/silence thresholds keeps breath noise from re-arming the timer, and
+// nothing auto-stops before speech was actually heard (unlike Siri, take your
+// time to start). Byte-domain RMS is used for iOS Safari compatibility.
+const SPEECH_RMS = 0.02
+const SILENCE_RMS = 0.012
+const SILENCE_MS = 1800
+const HARD_CAP_MS = 120_000
+const POLL_MS = 100
+
 /** tap to record, tap again to stop → ElevenLabs Scribe → onTranscript(text).
  *  Used by the quick-capture overlay and the Today header. */
 export function MicButton({
@@ -56,7 +66,11 @@ export function MicButton({
     rec.ondataavailable = (e): void => {
       if (e.data.size > 0) chunksRef.current.push(e.data)
     }
+    const stopWatching = watchForSilence(stream, () => {
+      if (rec.state === 'recording') rec.stop()
+    })
     rec.onstop = async (): Promise<void> => {
+      stopWatching()
       stream.getTracks().forEach((t) => t.stop())
       setState('transcribing')
       const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' })
@@ -79,7 +93,7 @@ export function MicButton({
       onClick={() => void toggle()}
       title={
         state === 'recording'
-          ? 'Stop and transcribe'
+          ? 'Listening — stops when you pause (tap to stop now)'
           : state === 'transcribing'
             ? 'Transcribing…'
             : 'Voice capture'
@@ -97,6 +111,49 @@ export function MicButton({
       )}
     </button>
   )
+}
+
+/** poll mic level; fire onSilence once speech has been heard and then the
+ *  level stays under the silence threshold for SILENCE_MS (or at the hard cap).
+ *  Returns a cleanup that tears down the audio graph. */
+function watchForSilence(stream: MediaStream, onSilence: () => void): () => void {
+  let ctx: AudioContext
+  try {
+    ctx = new AudioContext()
+  } catch {
+    return () => {} // no WebAudio → tap-to-stop still works
+  }
+  void ctx.resume() // iOS creates contexts suspended outside some gestures
+  const analyser = ctx.createAnalyser()
+  analyser.fftSize = 2048
+  ctx.createMediaStreamSource(stream).connect(analyser)
+  const data = new Uint8Array(analyser.fftSize)
+  let heardSpeech = false
+  let silenceSince: number | null = null
+  const startedAt = Date.now()
+
+  const timer = setInterval(() => {
+    analyser.getByteTimeDomainData(data)
+    let sum = 0
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128
+      sum += v * v
+    }
+    const rms = Math.sqrt(sum / data.length)
+    if (rms > SPEECH_RMS) {
+      heardSpeech = true
+      silenceSince = null
+    } else if (heardSpeech && rms < SILENCE_RMS) {
+      silenceSince ??= Date.now()
+      if (Date.now() - silenceSince >= SILENCE_MS) onSilence()
+    }
+    if (Date.now() - startedAt >= HARD_CAP_MS) onSilence()
+  }, POLL_MS)
+
+  return () => {
+    clearInterval(timer)
+    void ctx.close()
+  }
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

@@ -178,6 +178,9 @@ export interface IpcApi {
   'tts:briefing': () => Promise<TtsResult>
   /** voices available on the ElevenLabs account (settings picker) */
   'tts:voices': () => Promise<TtsVoicesResult>
+  /** ElevenLabs Scribe speech-to-text for voice capture
+   *  (base64 audio so the payload survives the remote WebSocket JSON dispatch) */
+  'stt:transcribe': (audioBase64: string, mime: string) => Promise<SttResult>
 
   /** macOS address-book autocomplete for the People view (TCC-gated) */
   'contacts:search': (query: string) => Promise<ContactsResult>
@@ -298,6 +301,8 @@ export interface IpcApi {
 }
 
 export type TtsResult = { ok: true; dataUrl: string } | { ok: false; message: string }
+
+export type SttResult = { ok: true; text: string } | { ok: false; message: string }
 
 export type TtsVoicesResult =
   | { ok: true; voices: { voiceId: string; name: string }[] }

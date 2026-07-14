@@ -23,7 +23,7 @@ import * as followups from '../core/repo/followups'
 import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
 import { composeBriefing } from '../core/briefing'
-import { DEFAULT_VOICE_ID, listVoices, synthesize } from './tts/elevenlabs'
+import { DEFAULT_VOICE_ID, listVoices, synthesize, transcribe } from './tts/elevenlabs'
 import { executeCapture } from '../core/capture'
 import { hideCaptureWindow } from './windows/capture-window'
 import * as comms from '../core/repo/comms'
@@ -388,6 +388,18 @@ export function registerIpc(): void {
       const text = composeBriefing(todayAgenda(db), 'events' in cal ? cal.events : [])
       const mp3 = await synthesize(key, elevenLabsVoiceId ?? DEFAULT_VOICE_ID, text)
       return { ok: true as const, dataUrl: `data:audio/mpeg;base64,${mp3.toString('base64')}` }
+    } catch (err) {
+      return { ok: false as const, message: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  handle('stt:transcribe', async (audioBase64, mime) => {
+    const key = getSettings().elevenLabsApiKey
+    if (!key) return { ok: false as const, message: 'Add an ElevenLabs API key in Settings first.' }
+    try {
+      const text = await transcribe(key, Buffer.from(audioBase64, 'base64'), mime)
+      if (!text) return { ok: false as const, message: 'Heard nothing — try again closer to the mic.' }
+      return { ok: true as const, text }
     } catch (err) {
       return { ok: false as const, message: err instanceof Error ? err.message : String(err) }
     }

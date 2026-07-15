@@ -77,7 +77,9 @@ export function TerminalView({ active }: { active: boolean }): React.JSX.Element
   }, [active])
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    // touch-none: gestures anywhere in the view must not pan the app shell's
+    // overflow-y-auto column — scrollback is JS-driven (see TerminalPane)
+    <div className={`h-full flex flex-col overflow-hidden ${isMobile ? 'touch-none' : ''}`}>
       {/* pt-6 clears the invisible 24px titlebar drag strip that overlays the
           top of the main column (App.tsx) — clicks there never reach us */}
       <div className="flex items-center gap-1 px-3 pt-6 pb-0 border-b border-border shrink-0">
@@ -141,12 +143,16 @@ function TerminalPane({
   const termRef = useRef<Xterm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
 
-  // readline's quoted-insert (Ctrl-V) makes the next byte literal, so a
-  // following \r lands as a real newline in the line buffer instead of
-  // submitting it — the standard trick for a multi-line shell prompt
+  // ESC+CR is what terminals send for Option/Alt-Enter: zle binds it to
+  // self-insert-unmeta (a literal newline in the buffer) and TUIs like
+  // Claude Code treat it as insert-newline. The previous Ctrl-V trick was
+  // readline-only — inside a TUI the button looked dead.
   const insertNewline = (): void => {
-    void api.invoke('terminal:input', sessionId, '\x16\r')
+    void api.invoke('terminal:input', sessionId, '\x1b\r')
     termRef.current?.focus()
+  }
+  const sendBackspace = (): void => {
+    void api.invoke('terminal:input', sessionId, '\x7f')
   }
 
   useEffect(() => {
@@ -269,20 +275,62 @@ function TerminalPane({
     // makes the grid one row too tall and clips the bottom line
     <div className={`absolute inset-0 px-3 py-2 ${visible ? '' : 'invisible'}`}>
       <div ref={containerRef} className="h-full w-full" />
-      {/* touch keyboards have no Shift+Enter — give mobile an explicit way
-          to insert a line break without submitting the line */}
+      {/* touch keyboards have no Shift+Enter and don't auto-repeat into
+          xterm's hidden textarea — give mobile explicit keys for both */}
       {isMobile && (
-        <button
-          // preventDefault keeps the hidden xterm textarea focused so the
-          // on-screen keyboard doesn't flicker closed-then-open on tap
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={insertNewline}
-          title="Insert line break"
-          className="absolute bottom-4 right-4 px-2.5 py-1.5 rounded-md glass text-muted hover:text-text font-mono text-[11px]"
-        >
-          ↵ newline
-        </button>
+        <div className="absolute bottom-4 right-4 flex gap-2">
+          <HoldRepeatKey label="⌫" title="Backspace (hold to repeat)" onFire={sendBackspace} />
+          <HoldRepeatKey label="↵ newline" title="Insert line break" onFire={insertNewline} />
+        </div>
       )}
     </div>
+  )
+}
+
+/** On-screen terminal key with press-and-hold auto-repeat. */
+function HoldRepeatKey({
+  label,
+  title,
+  onFire
+}: {
+  label: string
+  title: string
+  onFire: () => void
+}): React.JSX.Element {
+  const timers = useRef<{
+    delay?: ReturnType<typeof setTimeout>
+    repeat?: ReturnType<typeof setInterval>
+  }>({})
+
+  const stop = (): void => {
+    if (timers.current.delay) clearTimeout(timers.current.delay)
+    if (timers.current.repeat) clearInterval(timers.current.repeat)
+    timers.current = {}
+  }
+  const start = (e: React.PointerEvent): void => {
+    // preventDefault suppresses the compatibility mousedown, which keeps the
+    // hidden xterm textarea focused — no keyboard flicker, no focus steal
+    e.preventDefault()
+    stop()
+    onFire()
+    timers.current.delay = setTimeout(() => {
+      timers.current.repeat = setInterval(onFire, 60)
+    }, 400)
+  }
+  useEffect(() => stop, [])
+
+  return (
+    <button
+      onPointerDown={start}
+      onPointerUp={stop}
+      onPointerLeave={stop}
+      onPointerCancel={stop}
+      // a held key must not summon the iOS long-press menu
+      onContextMenu={(e) => e.preventDefault()}
+      title={title}
+      className="px-2.5 py-1.5 rounded-md glass text-muted hover:text-text font-mono text-[11px] select-none [-webkit-touch-callout:none]"
+    >
+      {label}
+    </button>
   )
 }

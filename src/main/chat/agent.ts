@@ -151,10 +151,25 @@ export class ChatManager {
     this.allowedTools = allowedTools
   }
 
-  listSessions(): ChatSessionInfo[] {
+  listSessions(limit = 50): ChatSessionInfo[] {
     return this.db.all<SessionRow>(
-      'SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 20'
+      'SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT ?',
+      Math.max(1, Math.min(500, Math.trunc(limit)))
     )
+  }
+
+  /** rename keeps updated_at so the list order doesn't jump */
+  renameSession(sessionId: string, title: string): void {
+    const t = title.trim().slice(0, 120)
+    if (!t) return
+    this.db.run('UPDATE chat_sessions SET title = ? WHERE id = ?', t, sessionId)
+  }
+
+  /** messages go with the session (FK cascade); a streaming turn is interrupted */
+  deleteSession(sessionId: string): void {
+    void this.active.get(sessionId)?.interrupt()
+    this.active.delete(sessionId)
+    this.db.run('DELETE FROM chat_sessions WHERE id = ?', sessionId)
   }
 
   /**

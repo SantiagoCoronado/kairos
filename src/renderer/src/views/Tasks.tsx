@@ -3,6 +3,7 @@ import { Circle, CheckCircle2, Trash2, Plus, GripVertical } from 'lucide-react'
 import type { Task, Area, TaskFilter, TaskSort, TaskStatus, Project } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Select, Chip, Segmented, EmptyState, cn } from '../components/ui'
+import { CaptureMic } from '../components/CaptureMic'
 
 type AreaFilter = Area | 'all'
 type ViewMode = 'list' | 'board'
@@ -118,6 +119,7 @@ export function TasksView(): React.JSX.Element {
           onChange={(e) => setQuickTitle(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && void quickAdd()}
         />
+        <CaptureMic kind="task" />
         <Segmented
           value={area}
           onChange={setArea}

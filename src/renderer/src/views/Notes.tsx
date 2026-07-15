@@ -19,6 +19,7 @@ import {
 import type { Note, NoteItem, NoteRepeat, NotePatch, NoteFilter } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Select, Chip, Segmented, EmptyState, cn } from '../components/ui'
+import { CaptureMic } from '../components/CaptureMic'
 
 const DRAFT_KEY = 'kairos.notes.draft'
 
@@ -690,6 +691,7 @@ function Composer(): React.JSX.Element {
           onFocus={() => setOpen(true)}
           readOnly
         />
+        <CaptureMic kind="note" />
         <Button
           variant="ghost"
           title="New checklist"

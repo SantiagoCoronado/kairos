@@ -101,13 +101,21 @@ interface WaOpts {
   onInbound?: () => void
 }
 
+/** watchdog sweep cadence, and how long a connect attempt may stay pending */
+const WATCHDOG_MS = 60_000
+const CONNECT_GRACE_MS = 90_000
+
 export class WhatsAppConnection {
   private sock: WASocket | null = null
   private stopped = false
   /** set while the Mac is asleep — see pause()/resume() */
   private paused = false
+  /** true between connection.update open and close — the socket's own view */
+  private open = false
   private reconnectTimer: NodeJS.Timeout | null = null
   private reconnectDelay = 2_000
+  private watchdog: NodeJS.Timeout | null = null
+  private lastAttemptAt = 0
   /** jid → chat/contact display name, fed by history + contact events */
   private names = new Map<string, string>()
   /** jids whose name came from a message pushName — contact-store names win */
@@ -126,8 +134,61 @@ export class WhatsAppConnection {
     private opts: WaOpts
   ) {}
 
+  private tag(): string {
+    return `wa ${this.accountId.slice(0, 8)}`
+  }
+
+  /**
+   * Connect (or reconnect). Never leaves the connection silently dead: a
+   * failed attempt logs and schedules a retry, and the watchdog recycles
+   * sockets that die without ever emitting a close event.
+   */
   async start(): Promise<void> {
-    if (this.stopped) return
+    if (this.stopped || this.paused) return
+    this.lastAttemptAt = Date.now()
+    if (!this.watchdog) this.watchdog = setInterval(() => this.checkAlive(), WATCHDOG_MS)
+    try {
+      await this.connect()
+    } catch (err) {
+      logLine(
+        'warn',
+        'comms',
+        `${this.tag()} connect failed: ${err instanceof Error ? err.message : String(err)}`
+      )
+      this.scheduleReconnect('connect failed')
+    }
+  }
+
+  private scheduleReconnect(reason: string): void {
+    if (this.stopped || this.paused || this.reconnectTimer) return
+    const delay = this.reconnectDelay
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
+    logLine('info', 'comms', `${this.tag()} reconnecting in ${Math.round(delay / 1000)}s (${reason})`)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      void this.start()
+    }, delay)
+  }
+
+  /** Recycle a socket that died without a close event (or never came up). */
+  private checkAlive(): void {
+    if (this.stopped || this.paused || this.reconnectTimer) return
+    if (this.open && this.sock?.ws.isOpen) return
+    if (Date.now() - this.lastAttemptAt < CONNECT_GRACE_MS) return // still connecting
+    logLine(
+      'warn',
+      'comms',
+      `${this.tag()} watchdog: socket dead (open=${this.open}, ws=${
+        this.sock ? (this.sock.ws.isOpen ? 'open' : 'closed') : 'none'
+      }) — recycling`
+    )
+    this.sock?.end(undefined)
+    this.sock = null
+    this.open = false
+    void this.start()
+  }
+
+  private async connect(): Promise<void> {
     const dir = waAuthDir(this.accountId)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const { state, saveCreds } = await useMultiFileAuthState(dir)
@@ -152,13 +213,27 @@ export class WhatsAppConnection {
     sock.ev.on('connection.update', (update) => {
       void (async () => {
         if (update.qr) {
+          // a QR while the account believes it's connected means the stored
+          // session no longer authenticates — without this the QR goes to a
+          // closed Settings modal and the account looks fine while dead
+          const account = repo.getAccount(this.db, this.accountId)
+          if (account?.status === 'connected') {
+            logLine('warn', 'comms', `${this.tag()} session invalid — QR re-link required`)
+            repo.setAccountStatus(this.db, this.accountId, 'needs_auth', 're-link required — Settings → Connections → + WhatsApp')
+            this.opts.emit({ kind: 'sync', accountId: this.accountId, status: 'needs_auth', message: 're-link required' })
+            this.opts.onChanged()
+            this.stop() // no point looping QR sockets nobody is watching
+            return
+          }
           const qrDataUrl = await toDataURL(update.qr, { margin: 1, width: 320 })
           this.opts.emit({ kind: 'wa_qr', accountId: this.accountId, qrDataUrl })
         }
         if (update.connection === 'open') {
+          this.open = true
           this.reconnectDelay = 2_000
           const jid = sock.user?.id ?? ''
           const phone = jidUser(jid)
+          logLine('info', 'comms', `${this.tag()} connected as +${phone}`)
           repo.updateAccountIdentity(this.db, this.accountId, jid || this.accountId, `+${phone}`)
           this.opts.emit({ kind: 'sync', accountId: this.accountId, status: 'connected' })
           this.opts.onChanged()
@@ -174,17 +249,24 @@ export class WhatsAppConnection {
           }
         }
         if (update.connection === 'close') {
-          const statusCode = (update.lastDisconnect?.error as { output?: { statusCode?: number } })
-            ?.output?.statusCode
+          this.open = false
+          const err = update.lastDisconnect?.error as
+            | (Error & { output?: { statusCode?: number } })
+            | undefined
+          const statusCode = err?.output?.statusCode
+          logLine(
+            'info',
+            'comms',
+            `${this.tag()} closed (code ${statusCode ?? '?'}: ${err?.message ?? 'unknown'})`
+          )
           if (statusCode === DisconnectReason.loggedOut) {
+            logLine('warn', 'comms', `${this.tag()} logged out from phone — re-link required`)
             repo.setAccountStatus(this.db, this.accountId, 'needs_auth', 'logged out from phone')
             this.opts.emit({ kind: 'sync', accountId: this.accountId, status: 'needs_auth' })
             this.opts.onChanged()
             return
           }
-          if (this.stopped || this.paused) return
-          this.reconnectTimer = setTimeout(() => void this.start(), this.reconnectDelay)
-          this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
+          this.scheduleReconnect(`close ${statusCode ?? '?'}`)
         }
       })()
     })
@@ -489,9 +571,14 @@ export class WhatsAppConnection {
 
   stop(): void {
     this.stopped = true
+    this.open = false
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
+    }
+    if (this.watchdog) {
+      clearInterval(this.watchdog)
+      this.watchdog = null
     }
     this.sock?.end(undefined)
     this.sock = null
@@ -505,7 +592,9 @@ export class WhatsAppConnection {
    */
   pause(): void {
     if (this.paused || this.stopped) return
+    logLine('info', 'comms', `${this.tag()} paused (system sleep)`)
     this.paused = true
+    this.open = false
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -517,6 +606,7 @@ export class WhatsAppConnection {
   /** Called on system wake: reconnect if the socket was paused for sleep. */
   resume(): void {
     if (!this.paused) return
+    logLine('info', 'comms', `${this.tag()} resumed (system wake)`)
     this.paused = false
     if (!this.stopped) void this.start()
   }

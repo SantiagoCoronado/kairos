@@ -438,16 +438,17 @@ export class CommsSyncManager {
 
   private startWhatsApp(accountId: string): void {
     if (this.wa.has(accountId)) return
+    logLine('info', 'comms', `wa ${accountId.slice(0, 8)}: starting connection`)
     const conn = new WhatsAppConnection(this.db, accountId, {
       emit: (e) => this.emit(e),
       onChanged: () => this.notifyChanged(),
       onInbound: () => this.onInbound?.('whatsapp')
     })
     this.wa.set(accountId, conn)
+    // start() handles its own failures (retry + watchdog); a rejection here
+    // would be a bug, but it must not tombstone the connection like before
     void conn.start().catch((err) => {
-      repo.setAccountStatus(this.db, accountId, 'error', err instanceof Error ? err.message : String(err))
-      this.emit({ kind: 'sync', accountId, status: 'error', message: String(err) })
-      this.wa.delete(accountId)
+      logLine('warn', 'comms', `wa ${accountId.slice(0, 8)}: start crashed: ${err instanceof Error ? err.message : String(err)}`)
     })
   }
 

@@ -22,7 +22,8 @@ import {
   Play,
   Pause,
   Mic,
-  ChevronLeft
+  ChevronLeft,
+  Filter
 } from 'lucide-react'
 import type {
   CommsAccount,
@@ -784,25 +785,13 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
                 <PenLine size={11} /> Compose
               </button>
             )}
+            <LabelFilterButton
+              // full taxonomy plus any ad-hoc labels already on threads
+              labels={[...new Set([...COMMS_LABELS, ...(allLabels ?? [])])]}
+              value={labelFilter}
+              onChange={setLabelFilter}
+            />
           </div>
-          {allLabels && allLabels.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap">
-              {allLabels.map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLabelFilter(labelFilter === l ? null : l)}
-                  className={cn(
-                    'px-1.5 py-0.5 rounded text-[10.5px] border transition-colors',
-                    labelFilter === l
-                      ? 'bg-accent/15 border-accent/40 text-accent'
-                      : 'border-border/70 text-faint hover:text-text'
-                  )}
-                >
-                  {l}
-                </button>
-              ))}
-            </div>
-          )}
           {selectedAccount?.provider === 'slack' && mode === 'threads' && (
             <SlackChannelHint account={selectedAccount} onOpen={() => setMode('channels')} />
           )}
@@ -1763,6 +1752,62 @@ function ThreadPane({
 }
 
 /** Manual label override: taxonomy checkboxes, saved per toggle. */
+/** Filter-bar control: funnel icon → dropdown of every label (fixed taxonomy
+ *  + any ad-hoc ones in use). Single-select; "All labels" clears. */
+function LabelFilterButton({
+  labels,
+  value,
+  onChange
+}: {
+  labels: string[]
+  value: string | null
+  onChange: (label: string | null) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const pick = (label: string | null): void => {
+    onChange(label)
+    setOpen(false)
+  }
+  return (
+    <div className="relative shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Filter by label"
+        className={cn(
+          'px-2 py-1 rounded text-[11.5px] border transition-colors inline-flex items-center gap-1',
+          value
+            ? 'bg-accent/15 border-accent/40 text-accent'
+            : 'border-border text-muted hover:text-text'
+        )}
+      >
+        <Filter size={11} /> {value ?? 'Label'}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-7 z-20 w-44 rounded border border-border bg-overlay shadow-lg py-1">
+            {[null, ...labels].map((l) => (
+              <button
+                key={l ?? '(all)'}
+                onClick={() => pick(l)}
+                className={cn(
+                  'w-full flex items-center gap-2 px-2.5 py-1 text-[12px] text-left hover:bg-raised/60',
+                  l === value ? 'text-accent' : 'text-text'
+                )}
+              >
+                <span className="w-3.5 shrink-0">
+                  {l === value && <Check size={12} className="inline" />}
+                </span>
+                {l ?? 'All labels'}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 function LabelMenu({ thread }: { thread: CommsThreadListItem }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const current = new Set(thread.labels.split(',').filter(Boolean))

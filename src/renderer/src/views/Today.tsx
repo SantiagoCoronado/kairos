@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { CalendarDays, Loader2, RefreshCw, Sparkles, Square, Volume2 } from 'lucide-react'
 import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
@@ -450,8 +451,29 @@ function fmtReset(iso: string): string {
 
 /** GitHub-style activity grid: columns are weeks, rows Mon–Sun */
 function UsageHeatmap({ days }: { days: { date: string; tokens: number }[] }): React.JSX.Element {
-  const wrapRef = useRef<HTMLDivElement>(null)
+  const tipRef = useRef<HTMLDivElement>(null)
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
+
+  // keep the tooltip on-screen: its natural spot is centered above the cell,
+  // which overflows the viewport for the newest (rightmost) squares
+  useLayoutEffect(() => {
+    const el = tipRef.current
+    if (!el || !tip) return
+    el.style.marginLeft = ''
+    const r = el.getBoundingClientRect()
+    const pad = 6
+    if (r.left < pad) el.style.marginLeft = `${pad - r.left}px`
+    else if (r.right > window.innerWidth - pad)
+      el.style.marginLeft = `${window.innerWidth - pad - r.right}px`
+  }, [tip])
+
+  // fixed positioning goes stale if anything scrolls under the cursor
+  useEffect(() => {
+    if (!tip) return
+    const clear = (): void => setTip(null)
+    window.addEventListener('scroll', clear, { capture: true })
+    return () => window.removeEventListener('scroll', clear, { capture: true })
+  }, [tip])
 
   // intensity thresholds from the quartiles of non-zero days
   const nz = days
@@ -467,18 +489,17 @@ function UsageHeatmap({ days }: { days: { date: string; tokens: number }[] }): R
 
   const showTip = (e: React.MouseEvent<HTMLDivElement>, d: { date: string; tokens: number }): void => {
     const cell = e.currentTarget.getBoundingClientRect()
-    const wrap = wrapRef.current!.getBoundingClientRect()
     const day = new Date(`${d.date}T12:00:00`)
     const label = day.toLocaleDateString([], { month: 'short', day: 'numeric' })
     setTip({
-      x: cell.left - wrap.left + cell.width / 2,
-      y: cell.top - wrap.top,
+      x: cell.left + cell.width / 2,
+      y: cell.top,
       text: `${label} — ${d.tokens === 0 ? 'no usage' : `${fmtTokens(d.tokens)} tokens`}`
     })
   }
 
   return (
-    <div ref={wrapRef} className="relative shrink-0">
+    <div className="relative shrink-0">
       <div className="flex gap-[3px]" onMouseLeave={() => setTip(null)}>
         {weeks.map((w, i) => (
           <div key={i} className="flex flex-col gap-[3px]">
@@ -492,14 +513,19 @@ function UsageHeatmap({ days }: { days: { date: string; tokens: number }[] }): R
           </div>
         ))}
       </div>
-      {tip && (
-        <div
-          className="absolute z-10 -translate-x-1/2 -translate-y-full pointer-events-none whitespace-nowrap rounded-md bg-overlay border border-border-strong px-2 py-0.5 text-[11px] text-text shadow-lg"
-          style={{ left: tip.x, top: tip.y - 5 }}
-        >
-          {tip.text}
-        </div>
-      )}
+      {/* portaled to <body>: an absolute tooltip inside the heatmap's
+          overflow-x-auto wrapper gets clipped on the newest squares */}
+      {tip &&
+        createPortal(
+          <div
+            ref={tipRef}
+            className="fixed z-50 -translate-x-1/2 -translate-y-full pointer-events-none whitespace-nowrap rounded-md bg-overlay border border-border-strong px-2 py-0.5 text-[11px] text-text shadow-lg"
+            style={{ left: tip.x, top: tip.y - 5 }}
+          >
+            {tip.text}
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

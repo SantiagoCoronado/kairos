@@ -40,11 +40,14 @@ Rules:
 - When asked to plan (a week, a day), read open tasks, due follow-ups, and objectives first, then propose concrete, small actions.
 - You have a persistent memory file (memory_read / memory_save). When Santiago shares something durable — a preference, recurring context, how he likes things done — save it with memory_save (mode append). Keep entries short and factual; rewrite the whole file with mode replace only to prune stale entries. Its current content is included below; you do not need memory_read unless you suspect it changed mid-conversation.`
 
-// Memory is re-read every turn so edits (by the user, the MCP twin, or a
-// previous turn) are always reflected.
+// Memory and persona are re-read every turn so edits (by the user, the MCP
+// twin, or a previous turn) are always reflected.
 function buildSystemPrompt(): string {
+  const persona = getSettings().chatPersona?.trim()
   const memory = readMemory(DATA_DIR).trim()
-  return `${SYSTEM_PROMPT}\n\n## Persistent memory\n${memory || '(empty — nothing saved yet)'}`
+  return `${SYSTEM_PROMPT}${
+    persona ? `\n\n## Personality & standing instructions (set by Santiago in Settings)\n${persona}` : ''
+  }\n\n## Persistent memory\n${memory || '(empty — nothing saved yet)'}`
 }
 
 /** tools column is a JSON string[]; tolerate corruption/legacy shapes */

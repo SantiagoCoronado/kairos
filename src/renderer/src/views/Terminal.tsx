@@ -218,43 +218,67 @@ function TerminalPane({
     // via the DOM) and only reacts to wheel events, which touch drags never
     // fire. Translate vertical drag distance into scrollLines() calls so
     // dragging the terminal on a phone actually moves the scrollback.
-    let touchStartY: number | null = null
+    //
+    // Pointer events + setPointerCapture, NOT touch events: while output is
+    // streaming, xterm's DOM renderer destroys the row span under the finger,
+    // and iOS Safari then delivers the rest of the touch stream to the
+    // detached node — it never bubbles here and the drag goes dead (Chromium
+    // retargets and keeps working, which is why touch listeners passed CDP
+    // verification but failed on a real iPhone mid-stream). Capturing the
+    // pointer pins delivery to this container for the whole gesture.
+    let dragPointer: number | null = null
+    let dragLastY = 0
+    let dragTotal = 0
     let dragRemainder = 0
-    const onTouchStart = (ev: TouchEvent): void => {
-      if (ev.touches.length !== 1) return
-      touchStartY = ev.touches[0].clientY
+    const onPointerDown = (ev: PointerEvent): void => {
+      if (ev.pointerType !== 'touch' || !ev.isPrimary) return
+      dragPointer = ev.pointerId
+      dragLastY = ev.clientY
+      dragTotal = 0
       dragRemainder = 0
+      try {
+        el.setPointerCapture(ev.pointerId)
+      } catch {
+        /* pointer already gone — the move/up handlers just won't fire */
+      }
     }
-    const onTouchMove = (ev: TouchEvent): void => {
-      if (touchStartY === null || ev.touches.length !== 1) return
-      const y = ev.touches[0].clientY
+    const onPointerMove = (ev: PointerEvent): void => {
+      if (ev.pointerId !== dragPointer) return
       const lineHeight = el.clientHeight / Math.max(term.rows, 1)
       if (lineHeight <= 0) return
-      dragRemainder += touchStartY - y
-      touchStartY = y
+      dragTotal += Math.abs(dragLastY - ev.clientY)
+      dragRemainder += dragLastY - ev.clientY
+      dragLastY = ev.clientY
       const lines = Math.trunc(dragRemainder / lineHeight)
       if (lines !== 0) {
         term.scrollLines(lines)
         dragRemainder -= lines * lineHeight
       }
-      ev.preventDefault()
     }
-    const onTouchEnd = (): void => {
-      touchStartY = null
+    const onPointerEnd = (ev: PointerEvent): void => {
+      if (ev.pointerId !== dragPointer) return
+      dragPointer = null
+      // capture retargets the tap's click away from xterm, so its own
+      // focus-on-click never runs — restore tap-to-focus (opens the iOS
+      // keyboard) ourselves when the gesture never became a drag
+      if (ev.type === 'pointerup' && dragTotal < 10) term.focus()
     }
-    el.addEventListener('touchstart', onTouchStart, { passive: true })
-    el.addEventListener('touchmove', onTouchMove, { passive: false })
-    el.addEventListener('touchend', onTouchEnd, { passive: true })
-    el.addEventListener('touchcancel', onTouchEnd, { passive: true })
+    // native pan/selection must not race the JS drag on any touchscreen,
+    // not just the isMobile layout (the view-root touch-none only covers that)
+    el.style.touchAction = 'none'
+    el.addEventListener('pointerdown', onPointerDown)
+    el.addEventListener('pointermove', onPointerMove)
+    el.addEventListener('pointerup', onPointerEnd)
+    el.addEventListener('pointercancel', onPointerEnd)
 
     return () => {
       offEvents()
       observer.disconnect()
       if (resizeTimer) clearTimeout(resizeTimer)
-      el.removeEventListener('touchstart', onTouchStart)
-      el.removeEventListener('touchmove', onTouchMove)
-      el.removeEventListener('touchend', onTouchEnd)
-      el.removeEventListener('touchcancel', onTouchEnd)
+      el.removeEventListener('pointerdown', onPointerDown)
+      el.removeEventListener('pointermove', onPointerMove)
+      el.removeEventListener('pointerup', onPointerEnd)
+      el.removeEventListener('pointercancel', onPointerEnd)
       term.dispose() // the pty stays alive in main; unmount ≠ close
       termRef.current = null
       fitRef.current = null

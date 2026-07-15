@@ -514,8 +514,8 @@ export function registerIpc(): void {
             : `Logged for ${result.person.name}`
     }
   })
-  handle('capture:smart', async (raw) => {
-    const result = await smartCapture(db, raw)
+  handle('capture:smart', async (raw, kind) => {
+    const result = await smartCapture(db, raw, kind)
     if (result.ok && result.entity) broadcast('db:changed', { entity: result.entity })
     if (result.ok && result.entity === 'interactions')
       broadcast('db:changed', { entity: 'people' })

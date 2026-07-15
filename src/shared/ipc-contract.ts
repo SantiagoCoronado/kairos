@@ -209,8 +209,9 @@ export interface IpcApi {
 
   'capture:submit': (raw: string) => CaptureSubmitResult
   /** voice capture: NL → task/note/event/interaction via a one-shot haiku
-   *  call, with the terse-syntax parser as fallback */
-  'capture:smart': (raw: string) => Promise<CaptureSubmitResult>
+   *  call, with the terse-syntax parser as fallback. `kind` skips the
+   *  routing and forces the result (Tasks/Notes mic buttons). */
+  'capture:smart': (raw: string, kind?: 'task' | 'note') => Promise<CaptureSubmitResult>
   'capture:hide': () => void
 
   'export:markdown': () => { files: number; dir: string }

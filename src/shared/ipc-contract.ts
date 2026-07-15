@@ -222,9 +222,12 @@ export interface IpcApi {
   /** stage dropped files (renderer resolves File → absolute path first) */
   'chat:attachPaths': (paths: string[]) => ChatAttachment[]
   'chat:interrupt': (localSessionId: string) => void
-  'chat:sessions': () => ChatSessionInfo[]
+  'chat:sessions': (limit?: number) => ChatSessionInfo[]
   /** replay a session's persisted transcript; falls back to an automation run's stored result */
   'chat:history': (localSessionId: string) => ChatHistoryMessage[]
+  'chat:renameSession': (localSessionId: string, title: string) => void
+  /** drops the transcript too (FK cascade); interrupts a streaming turn */
+  'chat:deleteSession': (localSessionId: string) => void
   /** one-shot AI reply draft for a comms thread — only ever called on user command */
   'chat:draft': (input: ChatDraftInput) => Promise<ChatDraftResult>
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, Square, Plus, Wrench, Paperclip, X } from 'lucide-react'
-import type { ChatAttachment, ChatStreamEvent } from '../../../shared/ipc-contract'
+import { Sparkles, Square, Plus, Wrench, Paperclip, X, History, Pencil, Trash2, Check } from 'lucide-react'
+import type { ChatAttachment, ChatSessionInfo, ChatStreamEvent } from '../../../shared/ipc-contract'
 import { api, getRemoteToken, useInvoke } from '../lib/api'
 import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Button, cn } from '../components/ui'
@@ -33,6 +33,16 @@ interface Bubble {
   tools: string[]
   /** a sealed assistant bubble is complete; the next delta starts a new one */
   sealed?: boolean
+}
+
+/** "now" · "5m ago" · "3h ago" · "2d ago" · "Jun 24" */
+function relTime(iso: string): string {
+  const mins = (Date.now() - new Date(iso).getTime()) / 60_000
+  if (mins < 1) return 'now'
+  if (mins < 60) return `${Math.floor(mins)}m ago`
+  if (mins < 24 * 60) return `${Math.floor(mins / 60)}h ago`
+  if (mins < 7 * 24 * 60) return `${Math.floor(mins / (24 * 60))}d ago`
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
 export function ChatView({
@@ -181,6 +191,48 @@ export function ChatView({
     setBusy(false)
   }
 
+  // ---- history panel ----
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [sessions, setSessions] = useState<ChatSessionInfo[]>([])
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameText, setRenameText] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+
+  const refreshSessions = (): void => {
+    void api.invoke('chat:sessions').then(setSessions)
+  }
+  const toggleHistory = (): void => {
+    setHistoryOpen((open) => !open)
+    setRenamingId(null)
+    setConfirmDeleteId(null)
+    if (!historyOpen) refreshSessions()
+  }
+
+  /** switch sessions in place (no remount): replay the stored transcript */
+  const openSession = async (id: string): Promise<void> => {
+    setHistoryOpen(false)
+    if (id === sessionId) return
+    const msgs = await api.invoke('chat:history', id)
+    setSessionId(id)
+    setBusy(false)
+    setBubbles(msgs.map((m) => ({ role: m.role, text: m.text, tools: m.tools, sealed: true })))
+  }
+
+  const commitRename = (id: string): void => {
+    setRenamingId(null)
+    const t = renameText.trim()
+    if (!t) return
+    void api.invoke('chat:renameSession', id, t).then(refreshSessions)
+  }
+
+  const deleteSession = (id: string): void => {
+    setConfirmDeleteId(null)
+    void api.invoke('chat:deleteSession', id).then(() => {
+      refreshSessions()
+      if (id === sessionId) newChat()
+    })
+  }
+
   return (
     <div
       className="h-full flex flex-col max-w-3xl mx-auto w-full"
@@ -197,17 +249,108 @@ export function ChatView({
       }}
       onDrop={(e) => void onDrop(e)}
     >
-      <div className={cn('flex items-center px-6', mobile ? 'justify-end pt-1' : 'justify-between pt-4')}>
+      <div
+        className={cn(
+          'relative flex items-center px-6',
+          mobile ? 'justify-end pt-1' : 'justify-between pt-4'
+        )}
+      >
         {!mobile && (
           <span className="text-[12px] text-faint">
             Runs on your Claude Code subscription — the rest of the app works without it.
           </span>
         )}
-        <Button variant="ghost" onClick={newChat}>
-          <span className="inline-flex items-center gap-1">
-            <Plus size={13} /> new chat
-          </span>
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" onClick={toggleHistory} title="Past chats">
+            <span className="inline-flex items-center gap-1">
+              <History size={13} /> history
+            </span>
+          </Button>
+          <Button variant="ghost" onClick={newChat}>
+            <span className="inline-flex items-center gap-1">
+              <Plus size={13} /> new chat
+            </span>
+          </Button>
+        </div>
+
+        {historyOpen && (
+          <>
+            {/* click-away layer */}
+            <div className="fixed inset-0 z-20" onClick={() => setHistoryOpen(false)} />
+            <div className="absolute right-6 top-full mt-1 z-30 w-80 max-h-96 overflow-y-auto rounded-lg border border-border-strong bg-panel shadow-lg">
+              {sessions.length === 0 && (
+                <p className="px-3 py-4 text-[12px] text-faint text-center">No past chats yet.</p>
+              )}
+              {sessions.map((s) => (
+                <div
+                  key={s.id}
+                  className={cn(
+                    'group flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-raised',
+                    s.id === sessionId && 'bg-raised/60'
+                  )}
+                  onClick={() => void openSession(s.id)}
+                >
+                  {renamingId === s.id ? (
+                    <input
+                      autoFocus
+                      value={renameText}
+                      onChange={(e) => setRenameText(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitRename(s.id)
+                        if (e.key === 'Escape') setRenamingId(null)
+                      }}
+                      onBlur={() => commitRename(s.id)}
+                      className="flex-1 min-w-0 bg-transparent border-b border-border-strong text-[12.5px] text-text focus:outline-none"
+                    />
+                  ) : (
+                    <span className="flex-1 min-w-0 truncate text-[12.5px] text-text" title={s.title}>
+                      {s.title}
+                    </span>
+                  )}
+                  <span className="shrink-0 font-mono text-[10.5px] text-faint">
+                    {relTime(s.updated_at)}
+                  </span>
+                  <button
+                    title="Rename"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setConfirmDeleteId(null)
+                      setRenamingId(s.id)
+                      setRenameText(s.title)
+                    }}
+                    className={cn(
+                      'shrink-0 p-0.5 text-faint hover:text-text',
+                      // touch has no :hover — keep the actions visible on mobile
+                      mobile ? 'opacity-70' : 'opacity-0 group-hover:opacity-100'
+                    )}
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    title={confirmDeleteId === s.id ? 'Really delete?' : 'Delete chat'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (confirmDeleteId === s.id) deleteSession(s.id)
+                      else setConfirmDeleteId(s.id)
+                    }}
+                    className={cn(
+                      'shrink-0 p-0.5',
+                      confirmDeleteId === s.id
+                        ? 'text-danger'
+                        : cn(
+                            'text-faint hover:text-danger',
+                            mobile ? 'opacity-70' : 'opacity-0 group-hover:opacity-100'
+                          )
+                    )}
+                  >
+                    {confirmDeleteId === s.id ? <Check size={12} /> : <Trash2 size={12} />}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-3">

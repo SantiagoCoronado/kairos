@@ -548,8 +548,10 @@ export function registerIpc(): void {
     return { sessionId: localSessionId }
   })
   handle('chat:interrupt', (localSessionId) => chat.interrupt(localSessionId))
-  handle('chat:sessions', () => chat.listSessions())
+  handle('chat:sessions', (limit) => chat.listSessions(limit))
   handle('chat:history', (localSessionId) => chat.getHistory(localSessionId))
+  handle('chat:renameSession', (localSessionId, title) => chat.renameSession(localSessionId, title))
+  handle('chat:deleteSession', (localSessionId) => chat.deleteSession(localSessionId))
   handle('chat:draft', (input) => chat.draftReply(input))
 
   const terminals = new TerminalManager(

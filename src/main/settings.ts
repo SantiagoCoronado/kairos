@@ -16,6 +16,7 @@ const DEFAULTS: Settings = {
   chatProvider: 'claude',
   chatModel: null,
   chatEffort: null,
+  chatPersona: null,
   googleClientId: null,
   googleClientSecret: null,
   slackClientId: null,

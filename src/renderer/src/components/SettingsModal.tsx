@@ -196,6 +196,27 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
 
             <div className="space-y-1">
               <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+                personality
+              </span>
+              <textarea
+                rows={4}
+                placeholder="e.g. Answer in Spanish. Be blunt. Push back on vague plans…"
+                className="w-full resize-y bg-raised border border-border rounded-md px-2.5 py-1.5 text-[12px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong"
+                defaultValue={settings.chatPersona ?? ''}
+                key={settings.chatPersona ?? ''}
+                onBlur={(e) => {
+                  const v = e.target.value.trim()
+                  if (v !== (settings.chatPersona ?? '')) save({ chatPersona: v || null })
+                }}
+              />
+              <p className="text-[11px] text-faint">
+                Extra standing instructions added to the assistant&apos;s system prompt — tone,
+                language, how to behave. Applies from the next message.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
                 quick-capture hotkey
               </span>
               <Input

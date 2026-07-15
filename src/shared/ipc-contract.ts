@@ -403,6 +403,9 @@ export interface AppSettings {
   chatModel: string | null
   /** reasoning effort; null = model default */
   chatEffort: ChatEffort | null
+  /** extra system-prompt text for the chat assistant — tone, language,
+   *  standing instructions; null = stock personality */
+  chatPersona: string | null
   /** OAuth client for the user's own Google Cloud project (installed-app
    *  client secrets are not confidential per Google's docs) */
   googleClientId: string | null

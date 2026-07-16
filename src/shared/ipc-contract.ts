@@ -222,7 +222,7 @@ export interface IpcApi {
   /** stage dropped files (renderer resolves File → absolute path first) */
   'chat:attachPaths': (paths: string[]) => ChatAttachment[]
   'chat:interrupt': (localSessionId: string) => void
-  'chat:sessions': (limit?: number) => ChatSessionInfo[]
+  'chat:sessions': (limit?: number, includeAutomations?: boolean) => ChatSessionInfo[]
   /** replay a session's persisted transcript; falls back to an automation run's stored result */
   'chat:history': (localSessionId: string) => ChatHistoryMessage[]
   'chat:renameSession': (localSessionId: string, title: string) => void
@@ -508,6 +508,8 @@ export interface ChatSessionInfo {
   id: string
   title: string
   updated_at: string
+  /** 'automation' = an agent-task run's transcript, hidden from history by default */
+  origin: 'chat' | 'automation'
 }
 
 /** a replayable transcript turn returned by chat:history */

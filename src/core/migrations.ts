@@ -458,6 +458,15 @@ ALTER TABLE comms_threads ADD COLUMN labels TEXT NOT NULL DEFAULT '';
   // predicate like email — the queue is last_message_at > notify_eval_at.
   `
 ALTER TABLE comms_threads ADD COLUMN notify_eval_at TEXT;
+`,
+  // 016 — session provenance: automation runs create chat_sessions rows for
+  // their transcripts, which flooded the chat history list. Existing rows are
+  // backfilled via the run linkage (agent_task_runs.session_id).
+  `
+ALTER TABLE chat_sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'chat'
+  CHECK (origin IN ('chat','automation'));
+UPDATE chat_sessions SET origin = 'automation'
+  WHERE id IN (SELECT session_id FROM agent_task_runs WHERE session_id IS NOT NULL);
 `
 ]
 

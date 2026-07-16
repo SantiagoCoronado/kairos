@@ -107,7 +107,7 @@ export class AgentTaskRunner {
     const sessionId = newId()
     const ts = nowIso()
     this.db.run(
-      'INSERT INTO chat_sessions (id, sdk_session_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      "INSERT INTO chat_sessions (id, sdk_session_id, title, origin, created_at, updated_at) VALUES (?, ?, ?, 'automation', ?, ?)",
       sessionId,
       null,
       `⚙ ${task.name} — ${new Date().toLocaleDateString([], { month: 'short', day: 'numeric' })}`,

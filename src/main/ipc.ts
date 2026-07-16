@@ -38,6 +38,7 @@ import { TerminalManager } from './terminal'
 import { spawn as ptySpawn } from 'node-pty'
 import { logLine } from './logger'
 import { syncRemoteServer, getRemoteStatus, remoteBroadcast } from './remote/server'
+import { SemanticIndexer } from './search/indexer'
 
 const SLOW_IPC_MS = 300
 
@@ -73,7 +74,13 @@ export function broadcast<K extends keyof IpcEvents>(channel: K, payload: IpcEve
     win.webContents.send(channel, payload)
   }
   remoteBroadcast(channel, payload)
+  // every data change funnels through a db:changed broadcast (including the
+  // MCP-twin poll), which makes this the one choke point where the semantic
+  // indexer learns something moved. Its own writes don't broadcast — no loop.
+  if (channel === 'db:changed') semanticIndexer?.nudge()
 }
+
+let semanticIndexer: SemanticIndexer | null = null
 
 let commsManager: CommsSyncManager | null = null
 
@@ -122,6 +129,11 @@ export function registerIpc(): void {
 
   handle('app:ping', () => 'pong')
   handle('log:renderer', (level, message) => logLine(level, 'renderer', message.slice(0, 4000)))
+
+  const indexer = new SemanticIndexer(db)
+  semanticIndexer = indexer
+  indexer.start()
+  handle('search:semantic', (query, opts) => indexer.search(query, opts))
 
   handle('tasks:list', (f) => tasks.listTasks(db, f))
   handle('tasks:create', (input) => {

@@ -467,6 +467,23 @@ ALTER TABLE chat_sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'chat'
   CHECK (origin IN ('chat','automation'));
 UPDATE chat_sessions SET origin = 'automation'
   WHERE id IN (SELECT session_id FROM agent_task_runs WHERE session_id IS NOT NULL);
+`,
+  // 017 — semantic index: one embedding per source row, float32 vector as a
+  // BLOB. content_hash skips re-embedding unchanged text; the queue is "no
+  // row here, or hash differs". Search scans these in memory (a few MB at
+  // this corpus size) — no vector extension needed yet, and this schema
+  // doesn't preclude one later.
+  `
+CREATE TABLE embeddings (
+  entity       TEXT NOT NULL CHECK (entity IN
+                 ('comms_message','note','task','person','chat_message','calendar_event')),
+  entity_id    TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  dims         INTEGER NOT NULL,
+  vec          BLOB NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (entity, entity_id)
+);
 `
 ]
 

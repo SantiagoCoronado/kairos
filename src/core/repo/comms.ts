@@ -306,6 +306,49 @@ export function listUnlabeledEmailThreads(
   )
 }
 
+/** WhatsApp DM threads with fresh unread messages the notification triage
+ *  hasn't evaluated yet (last_message_at past the notify_eval_at watermark). */
+export function listWhatsappTriageCandidates(
+  db: DbDriver,
+  sinceIso: string,
+  limit: number
+): (CommsThread & { sender: string })[] {
+  return db.all<CommsThread & { sender: string }>(
+    `SELECT t.*, COALESCE((
+       SELECT COALESCE(NULLIF(m.sender_name, ''), m.sender_handle)
+       FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
+       ORDER BY m.sent_at DESC LIMIT 1
+     ), t.title) AS sender
+     FROM comms_threads t
+     WHERE t.provider = 'whatsapp' AND t.kind = 'dm' AND t.unread_count > 0
+       AND t.is_archived = 0 AND t.sync_enabled = 1
+       AND t.last_message_at >= ?
+       AND (t.notify_eval_at IS NULL OR t.last_message_at > t.notify_eval_at)
+     ORDER BY t.last_message_at DESC LIMIT ?`,
+    sinceIso,
+    limit
+  )
+}
+
+/** Stamp the triage watermark. No updated_at bump — bookkeeping, not content. */
+export function setThreadNotifyEval(db: DbDriver, threadId: string, evalAt: string): void {
+  db.run('UPDATE comms_threads SET notify_eval_at = ? WHERE id = ?', evalAt, threadId)
+}
+
+/** Recent inbound plain-text bodies for triage context, oldest first. */
+export function recentInboundBodies(db: DbDriver, threadId: string, limit: number): string[] {
+  return db
+    .all<{ body_text: string }>(
+      `SELECT body_text FROM comms_messages
+       WHERE thread_id = ? AND is_me = 0
+       ORDER BY sent_at DESC LIMIT ?`,
+      threadId,
+      limit
+    )
+    .map((r) => r.body_text)
+    .reverse()
+}
+
 /** Pin/unpin: pinned threads float to the top of the list. Local-only. */
 export function setThreadPinned(db: DbDriver, threadId: string, pinned: boolean, now: Date = new Date()): void {
   db.run(

@@ -43,6 +43,8 @@ export interface CommsThread {
   pinned: number
   /** comma-joined labels from core/labels.ts taxonomy; '' = not classified yet */
   labels: string
+  /** last_message_at already evaluated by notification triage (whatsapp) */
+  notify_eval_at: string | null
   created_at: string
   updated_at: string
 }

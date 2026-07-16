@@ -3,8 +3,9 @@
 //   noteLabeled(threadIds) — the labeler just classified email threads
 // Mode (Settings → notifyInbox):
 //   'off'       — never
-//   'important' — DMs on arrival + emails when labeled action-needed (the
-//                 labeler runs async, so email pings arrive ~seconds later)
+//   'important' — slack DMs on arrival; email when labeled action-needed;
+//                 whatsapp when the message triage flags it (both classifier
+//                 paths run async, so those pings arrive ~seconds later)
 //   'all'       — every thread with new inbound mail/messages
 // Guardrails: suppressed while an app window is focused; only messages newer
 // than RECENT_WINDOW_MS (a first sync/backfill can't storm); at most
@@ -39,8 +40,9 @@ export class CommsNotifier {
   noteInbound(provider: CommsProvider): void {
     const mode = getSettings().notifyInbox
     if (mode === 'off') return
-    // important-mode email waits for the labeler's verdict instead
-    if (mode === 'important' && provider === 'gmail') return
+    // important mode: email waits for the labeler's action-needed verdict,
+    // whatsapp for the message triage — both ping via their own callbacks
+    if (mode === 'important' && (provider === 'gmail' || provider === 'whatsapp')) return
     // provider filter in SQL — an unfiltered top-N recency scan could get
     // starved by 30 busier threads from other providers
     const threads = repo.listThreads(this.db, { unreadOnly: true, provider, limit: 30 })
@@ -60,6 +62,18 @@ export class CommsNotifier {
           t.is_archived === 0 &&
           t.sync_enabled === 1 &&
           t.labels.split(',').includes('action-needed')
+      )
+    this.deliver(threads)
+  }
+
+  /** The whatsapp triage flagged these threads as notification-worthy. */
+  noteImportant(threadIds: string[]): void {
+    if (getSettings().notifyInbox !== 'important') return
+    const threads = threadIds
+      .map((id) => repo.getThreadListItem(this.db, id))
+      .filter(
+        (t): t is CommsThreadListItem =>
+          t !== null && t.unread_count > 0 && t.is_archived === 0 && t.sync_enabled === 1
       )
     this.deliver(threads)
   }

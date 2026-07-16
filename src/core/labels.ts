@@ -76,6 +76,79 @@ export function buildLabelPrompt(candidates: LabelCandidate[]): string {
   ].join('\n\n')
 }
 
+// ---------- WhatsApp notification triage ----------
+// notifyInbox 'important' must not ping for every WhatsApp message. The
+// labeler runs these over fresh unread DM threads: a zero-token pass drops
+// pure chatter, the rest goes to Haiku for an important/routine verdict.
+
+export interface MessageTriageCandidate {
+  /** thread id, echoed back keyed by list position */
+  id: string
+  sender: string
+  /** recent inbound message bodies, oldest first */
+  messages: string[]
+}
+
+export type TriageVerdict = 'important' | 'routine'
+
+// short acknowledgments in the languages Santiago actually chats in;
+// trailing punctuation/emoji don't change the verdict ("ok 👍")
+const ROUTINE_MSG_RE =
+  /^(ok(ay)?|vale|dale|s[ií]+|no+|ya|bueno|listo|va|ah+|oh+|jaja\S*|jeje\S*|lol|xd+|gracias|thanks?|thank you|ty|nice|cool|genial|claro|perfecto|de nada|np|yw|bye|adios|hola|hey|hi|hello|buenos dias|buenas noches|good night|hasta luego)[\s!.,\p{Extended_Pictographic}\p{Emoji_Component}‍]*$/iu
+const EMOJI_ONLY_RE = /^[\p{Extended_Pictographic}\p{Emoji_Component}‍\s]+$/u
+
+/** 'routine' when every recent inbound message is a throwaway ack/emoji —
+ *  no model call needed; null = ambiguous, ask the classifier. */
+export function heuristicMessageTriage(messages: string[]): TriageVerdict | null {
+  if (messages.length === 0) return 'routine'
+  const allRoutine = messages.every((m) => {
+    const t = m.trim()
+    return t.length === 0 || ROUTINE_MSG_RE.test(t) || EMOJI_ONLY_RE.test(t)
+  })
+  return allRoutine ? 'routine' : null
+}
+
+export function buildMessageTriagePrompt(candidates: MessageTriageCandidate[]): string {
+  const list = candidates
+    .map(
+      (c, i) =>
+        `${i + 1}. from: ${c.sender || '(unknown)'}\n` +
+        c.messages.map((m) => `   > ${m.slice(0, 200)}`).join('\n')
+    )
+    .join('\n')
+  return [
+    'These are unread WhatsApp conversations. Decide for each whether it deserves an immediate notification.',
+    'important = the sender needs the user to act, answer, or know something soon: direct questions, requests, plans or meetings being arranged, time-sensitive or urgent news, anything emotionally significant.',
+    'routine = everything else: casual chatter, greetings, memes or links with no ask, acknowledgments, automated messages, spam.',
+    list,
+    'Return ONLY a JSON object mapping each number to "important" or "routine", e.g. {"1":"important","2":"routine"}. No prose, no code fences.'
+  ].join('\n\n')
+}
+
+/** Parse the triage response; candidates the model skipped or garbled are
+ *  simply absent (the sweep leaves them unstamped and retries while fresh). */
+export function parseTriageResponse(
+  text: string,
+  candidates: MessageTriageCandidate[]
+): Map<string, TriageVerdict> {
+  const out = new Map<string, TriageVerdict>()
+  const match = text.match(/\{[\s\S]*\}/)
+  if (!match) return out
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(match[0]) as Record<string, unknown>
+  } catch {
+    return out
+  }
+  candidates.forEach((c, i) => {
+    const raw = parsed[String(i + 1)]
+    if (typeof raw !== 'string') return
+    const v = raw.trim().toLowerCase()
+    if (v === 'important' || v === 'routine') out.set(c.id, v)
+  })
+  return out
+}
+
 /**
  * Parse the model's response back into thread-id → labels. Tolerates code
  * fences and stray prose around the JSON; unknown labels are dropped; an

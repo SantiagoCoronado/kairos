@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react'
-import { X } from 'lucide-react'
+import {
+  X,
+  SlidersHorizontal,
+  Inbox,
+  Sparkles,
+  Mic,
+  Cable,
+  Smartphone
+} from 'lucide-react'
 import type { AppSettings, AuthStatus, ChatEffort } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
+import { useIsMobile } from '../lib/mobile'
 import { applyTranslucency } from '../lib/translucency'
-import { Input, Button, Chip, Select, Segmented } from '../components/ui'
+import { Input, Button, Chip, Select, Segmented, cn } from '../components/ui'
 
 const MODELS: { value: string; label: string }[] = [
   { value: '', label: 'Default (Claude Code)' },
@@ -21,27 +30,45 @@ const EFFORTS: { value: string; label: string }[] = [
   { value: 'max', label: 'Max' }
 ]
 
+type SectionId = 'general' | 'inbox' | 'assistant' | 'voice' | 'connections' | 'remote'
+
+const SECTIONS: { id: SectionId; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
+  { id: 'general', label: 'General', icon: SlidersHorizontal },
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'assistant', label: 'Assistant', icon: Sparkles },
+  { id: 'voice', label: 'Voice', icon: Mic },
+  { id: 'connections', label: 'Connections', icon: Cable },
+  { id: 'remote', label: 'Remote access', icon: Smartphone }
+]
+
+const SECTION_BLURB: Record<SectionId, string> = {
+  general: 'Appearance and app-wide behavior.',
+  inbox: 'Email classification and message notifications.',
+  assistant: 'The Chat tab: model, personality, and your Claude login.',
+  voice: 'ElevenLabs voice briefing and dictation.',
+  connections: 'Gmail, Slack, WhatsApp and Google Calendar accounts.',
+  remote: 'Use the app from a phone or browser on your private network.'
+}
+
 export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [auth, setAuth] = useState<AuthStatus | null>(null)
-  const [trans, setTrans] = useState(0)
+  const [section, setSection] = useState<SectionId>('general')
+  const mobile = useIsMobile()
 
   useEffect(() => {
-    void api.invoke('settings:get').then((s) => {
-      setSettings(s)
-      setTrans(s.translucency)
-    })
-    void api.invoke('settings:authStatus').then(setAuth)
+    void api.invoke('settings:get').then(setSettings)
   }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const save = (patch: Partial<AppSettings>): void => {
     void api.invoke('settings:set', patch).then(setSettings)
-  }
-
-  // slider: live-preview on drag, persist when the drag ends
-  const previewTranslucency = (pct: number): void => {
-    setTrans(pct)
-    applyTranslucency(pct)
   }
 
   return (
@@ -50,255 +77,332 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
       onMouseDown={onClose}
     >
       <div
-        className="w-[480px] max-h-[85vh] overflow-y-auto bg-overlay border border-border-strong rounded-xl shadow-2xl p-5 space-y-5"
+        className={cn(
+          'bg-overlay border border-border-strong rounded-xl shadow-2xl overflow-hidden',
+          mobile
+            ? 'w-[95vw] h-[85vh] flex flex-col'
+            : 'w-[780px] max-w-[95vw] h-[600px] max-h-[85vh] flex'
+        )}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted">
-            settings
-          </span>
-          <button onClick={onClose} className="text-faint hover:text-text">
-            <X size={15} />
-          </button>
+        {/* section nav: left rail on desktop, scrollable chip row on mobile */}
+        <div
+          className={cn(
+            'shrink-0 bg-panel/60',
+            mobile
+              ? 'flex gap-1 overflow-x-auto px-2 py-2 border-b border-border'
+              : 'w-48 border-r border-border p-3 space-y-0.5'
+          )}
+        >
+          {!mobile && (
+            <div className="px-2 pb-2 font-mono text-[11px] uppercase tracking-[0.2em] text-muted">
+              settings
+            </div>
+          )}
+          {SECTIONS.map((s) => {
+            const Icon = s.icon
+            return (
+              <button
+                key={s.id}
+                onClick={() => setSection(s.id)}
+                className={cn(
+                  'flex items-center gap-2 rounded-md text-[12.5px] transition-colors',
+                  mobile ? 'shrink-0 px-2.5 py-1.5' : 'w-full px-2 py-1.5 text-left',
+                  section === s.id
+                    ? 'bg-raised text-text'
+                    : 'text-muted hover:text-text hover:bg-raised/50'
+                )}
+              >
+                <Icon size={14} />
+                <span className="whitespace-nowrap">{s.label}</span>
+              </button>
+            )
+          })}
         </div>
 
-        {settings && (
-          <>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                    window translucency
-                  </span>
-                  <p className="text-[11px] text-faint">
-                    See your desktop through the whole window.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2.5 shrink-0">
-                  <input
-                    type="range"
-                    min={0}
-                    max={60}
-                    step={1}
-                    value={trans}
-                    onChange={(e) => previewTranslucency(Number(e.target.value))}
-                    onPointerUp={() => save({ translucency: trans })}
-                    onKeyUp={() => save({ translucency: trans })}
-                    className="w-36 accent-accent"
-                  />
-                  <span className="font-mono text-[11px] text-muted w-8 text-right">
-                    {trans}%
-                  </span>
-                </div>
-              </div>
+        {/* content pane */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="flex items-start justify-between px-5 pt-4 pb-3 border-b border-border shrink-0">
+            <div>
+              <h2 className="text-[14px] text-text font-medium">
+                {SECTIONS.find((s) => s.id === section)!.label}
+              </h2>
+              <p className="text-[11px] text-faint">{SECTION_BLURB[section]}</p>
             </div>
+            <button onClick={onClose} className="text-faint hover:text-text mt-0.5">
+              <X size={15} />
+            </button>
+          </div>
 
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                  claude usage on today
-                </span>
-                <p className="text-[11px] text-faint">
-                  Show today&apos;s Claude Code token usage on the Today view.
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.showClaudeUsage}
-                onChange={(e) => save({ showClaudeUsage: e.target.checked })}
-                className="accent-accent w-4 h-4 shrink-0"
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                  auto-label email
-                </span>
-                <p className="text-[11px] text-faint">
-                  Classify inbox email in the background (action-needed, newsletter, finance, …).
-                  Uses Haiku via your Claude Code login.
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.autoLabel}
-                onChange={(e) => save({ autoLabel: e.target.checked })}
-                className="accent-accent w-4 h-4 shrink-0"
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                  message notifications
-                </span>
-                <p className="text-[11px] text-faint">
-                  Native notifications for new messages while the app is in the background.
-                  Important = Slack DMs, WhatsApp messages the triage flags as urgent, and
-                  email classified action-needed (fresh items are classified even while
-                  auto-label is off).
-                </p>
-              </div>
-              <Segmented
-                value={settings.notifyInbox}
-                onChange={(v) => save({ notifyInbox: v })}
-                options={[
-                  { value: 'off', label: 'Off' },
-                  { value: 'important', label: 'Important' },
-                  { value: 'all', label: 'All' }
-                ]}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                assistant
-              </span>
-              <div className="flex items-center gap-2">
-                <Select
-                  value={settings.chatProvider}
-                  onChange={() => save({ chatProvider: 'claude' })}
-                  className="flex-1"
-                  title="Provider"
-                >
-                  <option value="claude">Claude</option>
-                </Select>
-                <Select
-                  value={settings.chatModel ?? ''}
-                  onChange={(e) => save({ chatModel: e.target.value || null })}
-                  className="flex-1"
-                  title="Model"
-                >
-                  {MODELS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </Select>
-                <Select
-                  value={settings.chatEffort ?? ''}
-                  onChange={(e) => save({ chatEffort: (e.target.value || null) as ChatEffort | null })}
-                  className="flex-1"
-                  title="Reasoning effort"
-                >
-                  {EFFORTS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <p className="text-[11px] text-faint">
-                Provider · model · reasoning effort for the Chat tab. Applies from the next
-                message.
-              </p>
-            </div>
-
-            <div className="space-y-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                personality
-              </span>
-              <textarea
-                rows={4}
-                placeholder="e.g. Answer in Spanish. Be blunt. Push back on vague plans…"
-                className="w-full resize-y bg-raised border border-border rounded-md px-2.5 py-1.5 text-[12px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong"
-                defaultValue={settings.chatPersona ?? ''}
-                key={settings.chatPersona ?? ''}
-                onBlur={(e) => {
-                  const v = e.target.value.trim()
-                  if (v !== (settings.chatPersona ?? '')) save({ chatPersona: v || null })
-                }}
-              />
-              <p className="text-[11px] text-faint">
-                Extra standing instructions added to the assistant&apos;s system prompt — tone,
-                language, how to behave. Applies from the next message.
-              </p>
-            </div>
-
-            <div className="space-y-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                quick-capture hotkey
-              </span>
-              <Input
-                className="w-full font-mono text-[12px]"
-                defaultValue={settings.captureHotkey}
-                key={settings.captureHotkey}
-                onBlur={(e) => {
-                  const v = e.target.value.trim()
-                  if (v && v !== settings.captureHotkey) save({ captureHotkey: v })
-                }}
-              />
-              <p className="text-[11px] text-faint">
-                Electron accelerator, e.g. Alt+Space, CommandOrControl+Shift+C. Falls back to
-                Ctrl/Cmd+Shift+Space if taken.
-              </p>
-            </div>
-
-            <div className="space-y-1">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-                claude binary path (optional)
-              </span>
-              <Input
-                className="w-full font-mono text-[12px]"
-                placeholder="auto-detect"
-                defaultValue={settings.claudePath ?? ''}
-                key={settings.claudePath ?? 'auto'}
-                onBlur={(e) => {
-                  const v = e.target.value.trim()
-                  save({ claudePath: v || null })
-                }}
-              />
-            </div>
-          </>
-        )}
-
-        {settings && <VoiceSection settings={settings} save={save} />}
-
-        {settings && <ConnectionsSection settings={settings} save={save} />}
-
-        {settings && <RemoteSection settings={settings} save={save} />}
-
-        <div className="space-y-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-            claude subscription
-          </span>
-          <div>
-            {!auth && <span className="text-[12px] text-faint">checking…</span>}
-            {auth?.ok && (
-              <span className="inline-flex items-center gap-2 text-[12.5px]">
-                <Chip tone="ok">connected</Chip> {auth.email} · {auth.subscriptionType}
-              </span>
-            )}
-            {auth && !auth.ok && (
-              <span className="inline-flex items-center gap-2 text-[12.5px]">
-                <Chip tone="danger">unavailable</Chip> {auth.message}
-              </span>
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-5">
+            {settings && (
+              <>
+                {section === 'general' && <GeneralSection settings={settings} save={save} />}
+                {section === 'inbox' && <InboxSection settings={settings} save={save} />}
+                {section === 'assistant' && <AssistantSection settings={settings} save={save} />}
+                {section === 'voice' && <VoiceSection settings={settings} save={save} />}
+                {section === 'connections' && <ConnectionsSection settings={settings} save={save} />}
+                {section === 'remote' && <RemoteSection settings={settings} save={save} />}
+              </>
             )}
           </div>
-          <p className="text-[11px] text-faint">
-            The chat panel and MCP server use your Claude Code login. The app itself never needs
-            it.
-          </p>
-        </div>
-
-        <div className="pt-1 flex justify-end">
-          <Button variant="ghost" onClick={() => void api.invoke('settings:authStatus').then(setAuth)}>
-            re-check auth
-          </Button>
         </div>
       </div>
     </div>
   )
 }
 
-function VoiceSection({
-  settings,
-  save
-}: {
+interface SectionProps {
   settings: AppSettings
   save: (patch: Partial<AppSettings>) => void
+}
+
+/** label + description on the left, control on the right */
+function Row({
+  label,
+  hint,
+  children
+}: {
+  label: string
+  hint?: React.ReactNode
+  children: React.ReactNode
 }): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-faint">{label}</span>
+        {hint && <p className="text-[11px] text-faint">{hint}</p>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function GeneralSection({ settings, save }: SectionProps): React.JSX.Element {
+  const [trans, setTrans] = useState(settings.translucency)
+
+  // slider: live-preview on drag, persist when the drag ends
+  const previewTranslucency = (pct: number): void => {
+    setTrans(pct)
+    applyTranslucency(pct)
+  }
+
+  return (
+    <>
+      <Row label="window translucency" hint="See your desktop through the whole window.">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <input
+            type="range"
+            min={0}
+            max={60}
+            step={1}
+            value={trans}
+            onChange={(e) => previewTranslucency(Number(e.target.value))}
+            onPointerUp={() => save({ translucency: trans })}
+            onKeyUp={() => save({ translucency: trans })}
+            className="w-36 accent-accent"
+          />
+          <span className="font-mono text-[11px] text-muted w-8 text-right">{trans}%</span>
+        </div>
+      </Row>
+
+      <Row
+        label="claude usage on today"
+        hint="Show today's Claude Code token usage on the Today view."
+      >
+        <input
+          type="checkbox"
+          checked={settings.showClaudeUsage}
+          onChange={(e) => save({ showClaudeUsage: e.target.checked })}
+          className="accent-accent w-4 h-4 shrink-0"
+        />
+      </Row>
+
+      <div className="space-y-1">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+          quick-capture hotkey
+        </span>
+        <Input
+          className="w-full font-mono text-[12px]"
+          defaultValue={settings.captureHotkey}
+          key={settings.captureHotkey}
+          onBlur={(e) => {
+            const v = e.target.value.trim()
+            if (v && v !== settings.captureHotkey) save({ captureHotkey: v })
+          }}
+        />
+        <p className="text-[11px] text-faint">
+          Electron accelerator, e.g. Alt+Space, CommandOrControl+Shift+C. Falls back to
+          Ctrl/Cmd+Shift+Space if taken.
+        </p>
+      </div>
+    </>
+  )
+}
+
+function InboxSection({ settings, save }: SectionProps): React.JSX.Element {
+  return (
+    <>
+      <Row
+        label="auto-label email"
+        hint={
+          <>
+            Classify inbox email in the background (action-needed, newsletter, finance, …). Uses
+            Haiku via your Claude Code login.
+          </>
+        }
+      >
+        <input
+          type="checkbox"
+          checked={settings.autoLabel}
+          onChange={(e) => save({ autoLabel: e.target.checked })}
+          className="accent-accent w-4 h-4 shrink-0"
+        />
+      </Row>
+
+      <Row
+        label="message notifications"
+        hint={
+          <>
+            Native notifications for new messages while the app is in the background. Important =
+            Slack DMs, WhatsApp messages the triage flags as urgent, and email classified
+            action-needed (fresh items are classified even while auto-label is off).
+          </>
+        }
+      >
+        <Segmented
+          value={settings.notifyInbox}
+          onChange={(v) => save({ notifyInbox: v })}
+          options={[
+            { value: 'off', label: 'Off' },
+            { value: 'important', label: 'Important' },
+            { value: 'all', label: 'All' }
+          ]}
+        />
+      </Row>
+    </>
+  )
+}
+
+function AssistantSection({ settings, save }: SectionProps): React.JSX.Element {
+  const [auth, setAuth] = useState<AuthStatus | null>(null)
+
+  useEffect(() => {
+    void api.invoke('settings:authStatus').then(setAuth)
+  }, [])
+
+  return (
+    <>
+      <div className="space-y-1">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-faint">model</span>
+        <div className="flex items-center gap-2">
+          <Select
+            value={settings.chatProvider}
+            onChange={() => save({ chatProvider: 'claude' })}
+            className="flex-1"
+            title="Provider"
+          >
+            <option value="claude">Claude</option>
+          </Select>
+          <Select
+            value={settings.chatModel ?? ''}
+            onChange={(e) => save({ chatModel: e.target.value || null })}
+            className="flex-1"
+            title="Model"
+          >
+            {MODELS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </Select>
+          <Select
+            value={settings.chatEffort ?? ''}
+            onChange={(e) => save({ chatEffort: (e.target.value || null) as ChatEffort | null })}
+            className="flex-1"
+            title="Reasoning effort"
+          >
+            {EFFORTS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <p className="text-[11px] text-faint">
+          Provider · model · reasoning effort for the Chat tab. Applies from the next message.
+        </p>
+      </div>
+
+      <div className="space-y-1">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+          personality
+        </span>
+        <textarea
+          rows={4}
+          placeholder="e.g. Answer in Spanish. Be blunt. Push back on vague plans…"
+          className="w-full resize-y bg-raised border border-border rounded-md px-2.5 py-1.5 text-[12px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong"
+          defaultValue={settings.chatPersona ?? ''}
+          key={settings.chatPersona ?? ''}
+          onBlur={(e) => {
+            const v = e.target.value.trim()
+            if (v !== (settings.chatPersona ?? '')) save({ chatPersona: v || null })
+          }}
+        />
+        <p className="text-[11px] text-faint">
+          Extra standing instructions added to the assistant&apos;s system prompt — tone, language,
+          how to behave. Applies from the next message.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+          claude subscription
+        </span>
+        <div>
+          {!auth && <span className="text-[12px] text-faint">checking…</span>}
+          {auth?.ok && (
+            <span className="inline-flex items-center gap-2 text-[12.5px]">
+              <Chip tone="ok">connected</Chip> {auth.email} · {auth.subscriptionType}
+            </span>
+          )}
+          {auth && !auth.ok && (
+            <span className="inline-flex items-center gap-2 text-[12.5px]">
+              <Chip tone="danger">unavailable</Chip> {auth.message}
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-faint">
+          The chat panel and MCP server use your Claude Code login. The app itself never needs it.
+        </p>
+        <Button
+          variant="ghost"
+          onClick={() => void api.invoke('settings:authStatus').then(setAuth)}
+        >
+          re-check auth
+        </Button>
+      </div>
+
+      <div className="space-y-1">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
+          claude binary path (optional)
+        </span>
+        <Input
+          className="w-full font-mono text-[12px]"
+          placeholder="auto-detect"
+          defaultValue={settings.claudePath ?? ''}
+          key={settings.claudePath ?? 'auto'}
+          onBlur={(e) => {
+            const v = e.target.value.trim()
+            save({ claudePath: v || null })
+          }}
+        />
+      </div>
+    </>
+  )
+}
+
+function VoiceSection({ settings, save }: SectionProps): React.JSX.Element {
   const [voices, setVoices] = useState<{ voiceId: string; name: string }[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -355,9 +459,10 @@ function VoiceSection({
         </p>
       )}
       <p className="text-[11px] text-faint">
-        Adds a speaker button on Today that reads your day aloud. Get a key at elevenlabs.io →
-        profile → API keys (free tier is plenty). Restricted keys need at least text-to-speech
-        permission; add voices-read to pick a voice here.
+        Adds a speaker button on Today that reads your day aloud, and powers the mic buttons for
+        voice capture. Get a key at elevenlabs.io → profile → API keys (free tier is plenty).
+        Restricted keys need at least text-to-speech permission; add voices-read to pick a voice
+        here.
       </p>
     </div>
   )
@@ -370,13 +475,7 @@ const STATUS_TONE = {
   disabled: 'muted'
 } as const
 
-function ConnectionsSection({
-  settings,
-  save
-}: {
-  settings: AppSettings
-  save: (patch: Partial<AppSettings>) => void
-}): React.JSX.Element {
+function ConnectionsSection({ settings, save }: SectionProps): React.JSX.Element {
   const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
   const { data: calAccounts } = useInvoke('calendar:accounts', [], ['calendar_accounts'])
   const [busy, setBusy] = useState<'gmail' | 'slack' | 'whatsapp' | 'gcal' | null>(null)
@@ -424,11 +523,7 @@ function ConnectionsSection({
   }
 
   return (
-    <div className="space-y-2.5 border-t border-border pt-4">
-      <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-        connections
-      </span>
-
+    <div className="space-y-2.5">
       {(calAccounts?.length ?? 0) > 0 && (
         <div className="space-y-1">
           {calAccounts!.map((a) => (
@@ -473,7 +568,11 @@ function ConnectionsSection({
               {/* always offered: reconnecting refreshes tokens/permissions in place
                   (the OAuth flow upserts into the same account) */}
               {a.provider !== 'whatsapp' && (
-                <Button variant="ghost" className="!py-0.5 text-[11px]" onClick={() => connect(a.provider as 'gmail' | 'slack')}>
+                <Button
+                  variant="ghost"
+                  className="!py-0.5 text-[11px]"
+                  onClick={() => connect(a.provider as 'gmail' | 'slack')}
+                >
                   reconnect
                 </Button>
               )}
@@ -489,7 +588,7 @@ function ConnectionsSection({
         </div>
       )}
 
-      <div className="flex gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         <Button disabled={busy !== null} onClick={() => connect('gmail')}>
           {busy === 'gmail' ? 'waiting for browser…' : '+ Gmail'}
         </Button>
@@ -544,8 +643,8 @@ function ConnectionsSection({
             </div>
             <div className="text-[11px] text-faint space-y-0.5">
               <p>
-                One project serves <b>all</b> your Google accounts — set this up once
-                (full guide: docs/google-setup.md in the repo):
+                One project serves <b>all</b> your Google accounts — set this up once (full
+                guide: docs/google-setup.md in the repo):
               </p>
               <ol className="list-decimal ml-4 space-y-0.5">
                 <li>console.cloud.google.com → New project → “Kairos”</li>
@@ -558,13 +657,13 @@ function ConnectionsSection({
                   (“In production” — Testing mode kills tokens after 7 days)
                 </li>
                 <li>
-                  Credentials → Create credentials → OAuth client ID → <b>Desktop app</b> →
-                  copy id + secret here
+                  Credentials → Create credentials → OAuth client ID → <b>Desktop app</b> → copy
+                  id + secret here
                 </li>
               </ol>
               <p>
-                Then click “+ Gmail” once per account. Google will warn the app is
-                unverified — it’s yours: Advanced → “Go to Kairos”.
+                Then click “+ Gmail” once per account. Google will warn the app is unverified —
+                it’s yours: Advanced → “Go to Kairos”.
               </p>
             </div>
           </div>
@@ -590,7 +689,7 @@ function ConnectionsSection({
               />
             </div>
             <p className="text-[11px] text-faint">
-              api.slack.com/apps → create app → OAuth & Permissions → add redirect URL{' '}
+              api.slack.com/apps → create app → OAuth &amp; Permissions → add redirect URL{' '}
               <code className="font-mono">http://localhost:43117/callback</code>, then connect.
               Works per workspace.
             </p>
@@ -601,13 +700,7 @@ function ConnectionsSection({
   )
 }
 
-function RemoteSection({
-  settings,
-  save
-}: {
-  settings: AppSettings
-  save: (patch: Partial<AppSettings>) => void
-}): React.JSX.Element {
+function RemoteSection({ settings, save }: SectionProps): React.JSX.Element {
   // settings:set broadcasts db:changed settings, so toggling refreshes this
   const { data: status } = useInvoke('remote:status', [], ['settings'])
   const [copied, setCopied] = useState(false)
@@ -623,23 +716,22 @@ function RemoteSection({
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
-            remote access
-          </span>
-          <p className="text-[11px] text-faint">
+      <Row
+        label="remote access"
+        hint={
+          <>
             Serve the app over your private network (Tailscale / same Wi-Fi) so a phone or
             browser can use it. Data requires the link&apos;s token; keep it private.
-          </p>
-        </div>
+          </>
+        }
+      >
         <input
           type="checkbox"
           checked={settings.remoteAccess}
           onChange={(e) => save({ remoteAccess: e.target.checked })}
           className="accent-accent w-4 h-4 shrink-0"
         />
-      </div>
+      </Row>
       {settings.remoteAccess && status && (
         <div className="space-y-1">
           {status.error && (
@@ -674,18 +766,14 @@ function RemoteSection({
           {status.running && !status.httpsUrl && (
             <p className="text-[11px] text-faint">
               For the iPhone: install Tailscale on Mac + phone (same account), then run{' '}
-              <code className="font-mono">
-                tailscale serve --bg localhost:{status.port}
-              </code>{' '}
+              <code className="font-mono">tailscale serve --bg localhost:{status.port}</code>{' '}
               once — an HTTPS link will appear here.
             </p>
           )}
           {status.running && status.httpsUrl && !status.serveActive && (
             <p className="text-[11px] text-faint">
               Tailscale found — run{' '}
-              <code className="font-mono">
-                tailscale serve --bg localhost:{status.port}
-              </code>{' '}
+              <code className="font-mono">tailscale serve --bg localhost:{status.port}</code>{' '}
               once to activate the HTTPS link for the iPhone.
             </p>
           )}

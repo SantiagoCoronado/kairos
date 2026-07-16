@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Sparkles, Square, Plus, Wrench, Paperclip, X, History, Pencil, Trash2, Check, Bot } from 'lucide-react'
 import type { ChatAttachment, ChatSessionInfo, ChatStreamEvent } from '../../../shared/ipc-contract'
 import { api, getRemoteToken, useInvoke } from '../lib/api'
+import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Button, cn } from '../components/ui'
 import { MicButton } from '../components/MicButton'
@@ -124,6 +125,20 @@ export function ChatView({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [bubbles])
+
+  // publish the latest finished reply for ⌘K voice commands ("make this a task")
+  useEffect(() => {
+    const last = [...bubbles].reverse().find((b) => b.role === 'assistant' && b.sealed && b.text)
+    if (!last) return undefined
+    const ctxId = `chat-${sessionId ?? 'new'}`
+    setCaptureContext({
+      kind: 'chat_message',
+      id: ctxId,
+      label: 'the last chat reply',
+      text: last.text.slice(0, 1500)
+    })
+    return () => clearCaptureContext(ctxId)
+  }, [bubbles, sessionId])
 
   const send = async (): Promise<void> => {
     const text = input.trim()

@@ -212,6 +212,9 @@ export interface IpcApi {
    *  call, with the terse-syntax parser as fallback. `kind` skips the
    *  routing and forces the result (Tasks/Notes mic buttons). */
   'capture:smart': (raw: string, kind?: 'task' | 'note') => Promise<CaptureSubmitResult>
+  /** ⌘K voice command: execute a spoken instruction, optionally against what
+   *  the user is looking at ("make this email a task for tomorrow") */
+  'capture:instruct': (instruction: string, context?: CaptureContext) => Promise<CaptureSubmitResult>
   'capture:hide': () => void
 
   'export:markdown': () => { files: number; dir: string }
@@ -541,6 +544,16 @@ export type TerminalEvent = { sessionId: string } & (
 export type CaptureSubmitResult =
   | { ok: true; message: string }
   | { ok: false; message: string }
+
+/** the focused entity a view publishes for context-aware voice commands */
+export interface CaptureContext {
+  kind: 'comms_thread' | 'note' | 'chat_message' | 'calendar_event'
+  id: string
+  /** short human label shown in the ⌘K voice pane ("email — Quarterly sync") */
+  label: string
+  /** source text handed to the model (already truncated by the publisher) */
+  text: string
+}
 
 export type AgentTaskParseResult =
   | { ok: true; draft: AgentTaskDraft }

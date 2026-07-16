@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import type { Note, NoteItem, NoteRepeat, NotePatch, NoteFilter } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
+import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { Input, Button, Select, Chip, Segmented, EmptyState, cn } from '../components/ui'
 import { CaptureMic } from '../components/CaptureMic'
 
@@ -817,6 +818,18 @@ function NoteEditor({ note, onClose }: { note: Note; onClose: () => void }): Rea
   const [repeat, setRepeat] = useState<NoteRepeat>(note.repeat)
   const [newItem, setNewItem] = useState('')
   const [showReminder, setShowReminder] = useState(false)
+
+  // publish the open note for ⌘K voice commands ("turn this note into a task")
+  useEffect(() => {
+    const body = checklist ? items.map((i) => `${i.done ? '[x]' : '[ ]'} ${i.text}`).join('\n') : content
+    setCaptureContext({
+      kind: 'note',
+      id: note.id,
+      label: `note — ${title.trim() || 'untitled'}`,
+      text: `${title}\n${body.slice(0, 1200)}`
+    })
+    return () => clearCaptureContext(note.id)
+  }, [note.id, title, content, items, checklist])
 
   const saveAndClose = (): void => {
     const finalItems = [

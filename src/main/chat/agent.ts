@@ -78,6 +78,7 @@ type SessionRow = {
   title: string
   created_at: string
   updated_at: string
+  origin: 'chat' | 'automation'
 }
 
 /** The kairos tool server + allowlist, shared by the chat panel and the
@@ -151,9 +152,10 @@ export class ChatManager {
     this.allowedTools = allowedTools
   }
 
-  listSessions(limit = 50): ChatSessionInfo[] {
+  /** automation-run transcripts are noise in the history list — opt-in only */
+  listSessions(limit = 50, includeAutomations = false): ChatSessionInfo[] {
     return this.db.all<SessionRow>(
-      'SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT ?',
+      `SELECT * FROM chat_sessions ${includeAutomations ? '' : "WHERE origin = 'chat' "}ORDER BY updated_at DESC LIMIT ?`,
       Math.max(1, Math.min(500, Math.trunc(limit)))
     )
   }
@@ -221,6 +223,7 @@ export class ChatManager {
       id: newId(),
       sdk_session_id: null,
       title: firstText.slice(0, 60),
+      origin: 'chat',
       created_at: ts,
       updated_at: ts
     }

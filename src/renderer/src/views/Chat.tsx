@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, Square, Plus, Wrench, Paperclip, X, History, Pencil, Trash2, Check } from 'lucide-react'
+import { Sparkles, Square, Plus, Wrench, Paperclip, X, History, Pencil, Trash2, Check, Bot } from 'lucide-react'
 import type { ChatAttachment, ChatSessionInfo, ChatStreamEvent } from '../../../shared/ipc-contract'
 import { api, getRemoteToken, useInvoke } from '../lib/api'
 import { IS_REMOTE, useIsMobile } from '../lib/mobile'
@@ -194,18 +194,25 @@ export function ChatView({
   // ---- history panel ----
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessions, setSessions] = useState<ChatSessionInfo[]>([])
+  const [showAutomations, setShowAutomations] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
-  const refreshSessions = (): void => {
-    void api.invoke('chat:sessions').then(setSessions)
+  const refreshSessions = (includeAutomations = showAutomations): void => {
+    void api.invoke('chat:sessions', undefined, includeAutomations).then(setSessions)
   }
   const toggleHistory = (): void => {
     setHistoryOpen((open) => !open)
     setRenamingId(null)
     setConfirmDeleteId(null)
     if (!historyOpen) refreshSessions()
+  }
+  const toggleAutomations = (): void => {
+    setShowAutomations((cur) => {
+      refreshSessions(!cur)
+      return !cur
+    })
   }
 
   /** switch sessions in place (no remount): replay the stored transcript */
@@ -222,7 +229,7 @@ export function ChatView({
     setRenamingId(null)
     const t = renameText.trim()
     if (!t) return
-    void api.invoke('chat:renameSession', id, t).then(refreshSessions)
+    void api.invoke('chat:renameSession', id, t).then(() => refreshSessions())
   }
 
   const deleteSession = (id: string): void => {
@@ -278,6 +285,17 @@ export function ChatView({
             {/* click-away layer */}
             <div className="fixed inset-0 z-20" onClick={() => setHistoryOpen(false)} />
             <div className="absolute right-6 top-full mt-1 z-30 w-80 max-h-96 overflow-y-auto rounded-lg border border-border-strong bg-panel shadow-lg">
+              {/* automation-run transcripts are hidden by default — opt in here */}
+              <button
+                onClick={toggleAutomations}
+                className="w-full flex items-center gap-2 px-3 py-2 border-b border-border text-[11px] text-faint hover:text-text hover:bg-raised"
+              >
+                <Bot size={12} />
+                <span className="flex-1 text-left">
+                  {showAutomations ? 'Hide automation runs' : 'Show automation runs'}
+                </span>
+                {showAutomations && <Check size={12} />}
+              </button>
               {sessions.length === 0 && (
                 <p className="px-3 py-4 text-[12px] text-faint text-center">No past chats yet.</p>
               )}
@@ -290,6 +308,9 @@ export function ChatView({
                   )}
                   onClick={() => void openSession(s.id)}
                 >
+                  {s.origin === 'automation' && (
+                    <Bot size={12} className="shrink-0 text-faint" aria-label="Automation run" />
+                  )}
                   {renamingId === s.id ? (
                     <input
                       autoFocus

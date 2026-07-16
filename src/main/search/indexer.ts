@@ -11,6 +11,7 @@ import {
   hydrateHits,
   listStale,
   loadAllEmbeddings,
+  mapCoordsFor,
   purgeOrphans,
   topK,
   upsertEmbedding,
@@ -149,6 +150,10 @@ export class SemanticIndexer {
     const qv = await embedQuery(q)
     const limit = Math.max(1, Math.min(50, opts?.limit ?? 10))
     const ranked = topK(qv, this.cachedRows(), limit, opts?.entities)
-    return { status: 'ok', hits: hydrateHits(this.db, ranked), indexed }
+    const hits = hydrateHits(this.db, ranked).map((h) => ({
+      ...h,
+      map: mapCoordsFor(this.db, h.entity, h.entity_id)
+    }))
+    return { status: 'ok', hits, indexed }
   }
 }

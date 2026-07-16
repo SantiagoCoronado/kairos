@@ -223,6 +223,10 @@ export interface IpcApi {
     query: string,
     opts?: { limit?: number; entities?: SemanticEntity[] }
   ) => Promise<SemanticSearchResult>
+  /** the Atlas: every projected point + named clusters + build progress */
+  'map:data': () => MapData
+  /** lazy hover/click hydration for one map point */
+  'map:item': (entity: SemanticEntity, id: string) => SemanticHit | null
 
   'export:markdown': () => { files: number; dir: string }
 
@@ -572,6 +576,16 @@ export interface SemanticHit {
   snippet: string
   /** where opening the hit should land */
   nav: { view: string; id: string }
+  /** atlas position, when the item has been projected */
+  map?: { x: number; y: number } | null
+}
+
+export interface MapData {
+  /** e = entity, id = entity id, x/y = atlas coordinates in [-1, 1] */
+  points: { e: SemanticEntity; id: string; x: number; y: number }[]
+  clusters: { id: number; name: string; x: number; y: number; count: number }[]
+  indexed: number
+  projected: number
 }
 
 export interface SemanticSearchResult {

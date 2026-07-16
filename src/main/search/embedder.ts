@@ -18,7 +18,7 @@ let workerDiedAt = 0
 let nextId = 1
 const pending = new Map<
   number,
-  { resolve: (v: Float32Array[]) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+  { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
 >()
 
 let state: EmbedderState = 'idle'
@@ -46,7 +46,7 @@ function getWorker(): UtilityProcess {
   const w = utilityProcess.fork(join(__dirname, 'embed-worker.js'), [], {
     serviceName: 'kairos-embedder'
   })
-  w.on('message', (msg: { id: number; ok: boolean; vecs?: Float32Array[]; error?: string }) => {
+  w.on('message', (msg: { id: number; ok: boolean; vecs?: Float32Array[]; coords?: Float32Array; error?: string }) => {
     const p = pending.get(msg.id)
     if (!p) return
     pending.delete(msg.id)
@@ -56,6 +56,8 @@ function getWorker(): UtilityProcess {
       lastError = null
       // structured clone hands back plain typed arrays — normalize just in case
       p.resolve(msg.vecs.map((v) => (v instanceof Float32Array ? v : new Float32Array(v))))
+    } else if (msg.ok && msg.coords) {
+      p.resolve(msg.coords instanceof Float32Array ? msg.coords : new Float32Array(msg.coords))
     } else {
       lastError = msg.error ?? 'embed failed'
       if (state !== 'ready') state = 'error'
@@ -82,7 +84,7 @@ function request(kind: 'passages' | 'query', texts: string[]): Promise<Float32Ar
       pending.delete(id)
       reject(new Error('embed request timed out'))
     }, REQUEST_TIMEOUT_MS)
-    pending.set(id, { resolve, reject, timer })
+    pending.set(id, { resolve: (v) => resolve(v as Float32Array[]), reject, timer })
     w.postMessage({ id, kind, texts, cacheDir: join(DATA_DIR, 'models') })
   })
 }
@@ -95,6 +97,22 @@ export async function embedPassages(texts: string[]): Promise<Float32Array[]> {
 export async function embedQuery(text: string): Promise<Float32Array> {
   const [v] = await request('query', [text])
   return v
+}
+
+const UMAP_TIMEOUT_MS = 10 * 60_000
+
+/** project count×dims vectors to 2D in the worker (umap-js, minutes at 12k) */
+export function projectUmap(vectors: Float32Array, count: number, dims: number): Promise<Float32Array> {
+  const w = getWorker()
+  const id = nextId++
+  return new Promise<Float32Array>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id)
+      reject(new Error('umap timed out'))
+    }, UMAP_TIMEOUT_MS)
+    pending.set(id, { resolve: (v) => resolve(v as Float32Array), reject, timer })
+    w.postMessage({ id, kind: 'umap', vectors, count, dims })
+  })
 }
 
 export function stopEmbedder(): void {

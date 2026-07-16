@@ -1,26 +1,26 @@
-// Local embedding model: multilingual-e5-small (int8 ONNX) via Transformers.js.
-// Chosen after benchmarking on this Mac: ~530 docs/s batch, ~4ms single,
-// strongest ES+EN cross-lingual retrieval at this size. The 113MB model is
-// downloaded once into ~/Kairos/models and everything runs on-device — no
-// text ever leaves the machine.
-//
-// e5 models are trained with role prefixes: documents embed as "passage: …",
-// queries as "query: …". Both sides are handled here so callers never see it.
+// Client for the embedding worker (embed-worker.ts). The model runs in an
+// Electron utilityProcess: the main thread never hosts inference (it used to
+// stall ~3s per sweep) and a native crash there can't take the app down —
+// the worker is restarted with backoff and the caller just gets a rejection,
+// which the indexer's sweep loop already tolerates and retries.
+import { utilityProcess, type UtilityProcess } from 'electron'
 import { join } from 'node:path'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
 
-const MODEL_ID = 'Xenova/multilingual-e5-small'
-
 export type EmbedderState = 'idle' | 'loading' | 'ready' | 'error'
 
-type FeaturePipeline = (
-  texts: string | string[],
-  opts: { pooling: 'mean'; normalize: boolean }
-) => Promise<{ data: Float32Array; dims: number[] }>
+const REQUEST_TIMEOUT_MS = 120_000 // first call includes the 113MB download
+const RESTART_BACKOFF_MS = 15_000
 
-let pipe: FeaturePipeline | null = null
-let loading: Promise<FeaturePipeline> | null = null
+let worker: UtilityProcess | null = null
+let workerDiedAt = 0
+let nextId = 1
+const pending = new Map<
+  number,
+  { resolve: (v: Float32Array[]) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+>()
+
 let state: EmbedderState = 'idle'
 let lastError: string | null = null
 
@@ -28,53 +28,77 @@ export function embedderState(): { state: EmbedderState; error: string | null } 
   return { state, error: lastError }
 }
 
-/** lazy-load; concurrent callers share one download/compile */
-async function getPipeline(): Promise<FeaturePipeline> {
-  if (pipe) return pipe
-  if (loading) return loading
-  state = 'loading'
-  loading = (async () => {
-    // dynamic import keeps the 40MB dependency out of app boot entirely
-    const { pipeline, env } = await import('@huggingface/transformers')
-    env.cacheDir = join(DATA_DIR, 'models')
-    const started = Date.now()
-    const p = (await pipeline('feature-extraction', MODEL_ID, {
-      dtype: 'q8'
-    })) as unknown as FeaturePipeline
-    logLine('info', 'semantic', `embedder ready in ${Date.now() - started}ms (${MODEL_ID})`)
-    pipe = p
-    state = 'ready'
-    lastError = null
-    return p
-  })()
-  try {
-    return await loading
-  } catch (err) {
-    state = 'error'
-    lastError = err instanceof Error ? err.message : String(err)
-    logLine('warn', 'semantic', `embedder failed to load: ${lastError}`)
-    throw err
-  } finally {
-    loading = null
+function failAllPending(reason: string): void {
+  for (const [, p] of pending) {
+    clearTimeout(p.timer)
+    p.reject(new Error(reason))
   }
+  pending.clear()
 }
 
-/** split one flat output tensor back into per-text vectors */
-function splitRows(data: Float32Array, rows: number, dims: number): Float32Array[] {
-  const out: Float32Array[] = []
-  for (let i = 0; i < rows; i++) out.push(data.slice(i * dims, (i + 1) * dims))
-  return out
+function getWorker(): UtilityProcess {
+  if (worker) return worker
+  const sinceDeath = Date.now() - workerDiedAt
+  if (sinceDeath < RESTART_BACKOFF_MS) {
+    throw new Error(`embed worker restarting (retry in ${Math.ceil((RESTART_BACKOFF_MS - sinceDeath) / 1000)}s)`)
+  }
+  state = 'loading'
+  const w = utilityProcess.fork(join(__dirname, 'embed-worker.js'), [], {
+    serviceName: 'kairos-embedder'
+  })
+  w.on('message', (msg: { id: number; ok: boolean; vecs?: Float32Array[]; error?: string }) => {
+    const p = pending.get(msg.id)
+    if (!p) return
+    pending.delete(msg.id)
+    clearTimeout(p.timer)
+    if (msg.ok && msg.vecs) {
+      state = 'ready'
+      lastError = null
+      // structured clone hands back plain typed arrays — normalize just in case
+      p.resolve(msg.vecs.map((v) => (v instanceof Float32Array ? v : new Float32Array(v))))
+    } else {
+      lastError = msg.error ?? 'embed failed'
+      if (state !== 'ready') state = 'error'
+      p.reject(new Error(lastError))
+    }
+  })
+  w.on('exit', (code) => {
+    logLine('warn', 'semantic', `embed worker exited (code ${code}) — ${pending.size} in-flight rejected`)
+    worker = null
+    workerDiedAt = Date.now()
+    state = 'error'
+    lastError = `worker exited (${code})`
+    failAllPending('embed worker died')
+  })
+  worker = w
+  return w
+}
+
+function request(kind: 'passages' | 'query', texts: string[]): Promise<Float32Array[]> {
+  const w = getWorker()
+  const id = nextId++
+  return new Promise<Float32Array[]>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id)
+      reject(new Error('embed request timed out'))
+    }, REQUEST_TIMEOUT_MS)
+    pending.set(id, { resolve, reject, timer })
+    w.postMessage({ id, kind, texts, cacheDir: join(DATA_DIR, 'models') })
+  })
 }
 
 export async function embedPassages(texts: string[]): Promise<Float32Array[]> {
   if (texts.length === 0) return []
-  const p = await getPipeline()
-  const res = await p(texts.map((t) => `passage: ${t}`), { pooling: 'mean', normalize: true })
-  return splitRows(res.data, texts.length, res.dims[1])
+  return request('passages', texts)
 }
 
 export async function embedQuery(text: string): Promise<Float32Array> {
-  const p = await getPipeline()
-  const res = await p(`query: ${text}`, { pooling: 'mean', normalize: true })
-  return res.data.slice(0, res.dims[1])
+  const [v] = await request('query', [text])
+  return v
+}
+
+export function stopEmbedder(): void {
+  failAllPending('shutting down')
+  worker?.kill()
+  worker = null
 }

@@ -24,7 +24,7 @@ import { embedPassages, embedQuery, embedderState } from './embedder'
 
 const SWEEP_INTERVAL_MS = 2 * 60_000
 const NUDGE_DELAY_MS = 3_000
-const BATCH = 32
+const BATCH = 16 // bounds the worker's peak memory per request
 /** per-sweep cap: even a huge backlog embeds in bounded slices */
 const MAX_PER_SWEEP = 4000
 

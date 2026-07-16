@@ -9,6 +9,11 @@ import {
   purgeOrphans,
   loadAllEmbeddings,
   countEmbeddings,
+  countProjected,
+  listUnprojected,
+  setMapCoords,
+  listMapPoints,
+  mapCoordsFor,
   topK,
   hydrateHits,
   type EmbeddingRow
@@ -162,5 +167,95 @@ describe('hydrateHits', () => {
       snippet: 'Vero: la cita quedó el martes',
       nav: { view: 'inbox', id: 'th1' }
     })
+  })
+})
+
+describe('atlas: map coordinates', () => {
+  it('tracks unprojected rows and roundtrips coordinates', () => {
+    seedTask('t1', 'Pay rent')
+    seedTask('t2', 'Call dentist')
+    for (const s of listStale(db, 'task', 10)) upsertEmbedding(db, 'task', s.id, s.text, fakeVec(s.text))
+    expect(countProjected(db)).toEqual({ projected: 0, total: 2 })
+    expect(listUnprojected(db, 10)).toHaveLength(2)
+
+    setMapCoords(db, [
+      { entity: 'task', entity_id: 't1', x: 0.25, y: -0.5 },
+      { entity: 'task', entity_id: 't2', x: -0.1, y: 0.9 }
+    ])
+    expect(countProjected(db)).toEqual({ projected: 2, total: 2 })
+    expect(listUnprojected(db, 10)).toHaveLength(0)
+    expect(listMapPoints(db)).toHaveLength(2)
+    expect(mapCoordsFor(db, 'task', 't1')).toEqual({ x: 0.25, y: -0.5 })
+    expect(mapCoordsFor(db, 'task', 'missing')).toBeNull()
+  })
+})
+
+describe('atlas: normalizeCoords', () => {
+  it('centers and scales into the [-1,1] world square preserving aspect', async () => {
+    const { normalizeCoords } = await import('./semantic')
+    const out = normalizeCoords(new Float32Array([0, 0, 10, 0, 10, 5, 0, 5]))
+    // widest axis spans 1.9 world units, centered on 0
+    expect(Math.min(...out)).toBeCloseTo(-0.95)
+    expect(Math.max(...out)).toBeCloseTo(0.95)
+    // y-span (5) keeps its aspect relative to x-span (10)
+    expect(out[1]).toBeCloseTo(-0.475)
+  })
+})
+
+describe('atlas: findMapClusters', () => {
+  it('finds dense regions and ignores scatter', async () => {
+    const { findMapClusters } = await import('./semantic')
+    const pts: { x: number; y: number }[] = []
+    let s = 7
+    const r = (): number => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
+    for (let i = 0; i < 500; i++) pts.push({ x: -0.5 + (r() - 0.5) * 0.2, y: -0.5 + (r() - 0.5) * 0.2 })
+    for (let i = 0; i < 400; i++) pts.push({ x: 0.6 + (r() - 0.5) * 0.2, y: 0.4 + (r() - 0.5) * 0.2 })
+    for (let i = 0; i < 100; i++) pts.push({ x: (r() - 0.5) * 2, y: (r() - 0.5) * 2 })
+    const clusters = findMapClusters(pts)
+    expect(clusters.length).toBeGreaterThanOrEqual(2)
+    expect(clusters[0].count).toBeGreaterThan(300)
+    // centroids land near the seeded centers
+    const near = (c: { x: number; y: number }, x: number, y: number): boolean =>
+      Math.hypot(c.x - x, c.y - y) < 0.15
+    expect(clusters.some((c) => near(c, -0.5, -0.5))).toBe(true)
+    expect(clusters.some((c) => near(c, 0.6, 0.4))).toBe(true)
+  })
+})
+
+describe('atlas: cluster naming prompt/parse', () => {
+  it('builds a numbered prompt and parses names back by position', async () => {
+    const { buildClusterNamePrompt, parseClusterNames } = await import('./semantic')
+    const p = buildClusterNamePrompt([
+      ['la cita con el doctor', 'dentista jueves'],
+      ['quarterly report', 'reply to Anna']
+    ])
+    expect(p).toContain('1.')
+    expect(p).toContain('- la cita con el doctor')
+    expect(p).toContain('Return ONLY a JSON object')
+
+    const names = parseClusterNames('```json\n{"1":"Salud y citas","2":"Work reports"}\n```', 2)
+    expect(names.get(0)).toBe('Salud y citas')
+    expect(names.get(1)).toBe('Work reports')
+    expect(parseClusterNames('garbage', 2).size).toBe(0)
+  })
+})
+
+describe('atlas: meta + clusters storage', () => {
+  it('persists meta and replaces clusters atomically', async () => {
+    const { getMeta, setMeta, replaceClusters, listClusters } = await import('./semantic')
+    expect(getMeta(db, 'umap_fit_count')).toBeNull()
+    setMeta(db, 'umap_fit_count', '123')
+    setMeta(db, 'umap_fit_count', '456')
+    expect(getMeta(db, 'umap_fit_count')).toBe('456')
+
+    replaceClusters(db, [
+      { name: 'Familia', x: -0.5, y: -0.4, count: 900, contentKey: 'k1' },
+      { name: '', x: 0.3, y: 0.5, count: 200, contentKey: 'k1' }
+    ])
+    const list = listClusters(db)
+    expect(list).toHaveLength(2)
+    expect(list[0]).toMatchObject({ name: 'Familia', count: 900 })
+    replaceClusters(db, [])
+    expect(listClusters(db)).toHaveLength(0)
   })
 })

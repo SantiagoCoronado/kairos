@@ -484,6 +484,27 @@ CREATE TABLE embeddings (
   updated_at   TEXT NOT NULL,
   PRIMARY KEY (entity, entity_id)
 );
+`,
+  // 018 — the Atlas: every embedding gets a 2D map position (UMAP, computed
+  // in the embed worker; NULL until projected). Clusters are named regions
+  // of the projected map; semantic_meta holds projector bookkeeping (e.g.
+  // the row count of the last full UMAP fit).
+  `
+ALTER TABLE embeddings ADD COLUMN map_x REAL;
+ALTER TABLE embeddings ADD COLUMN map_y REAL;
+CREATE TABLE semantic_clusters (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL DEFAULT '',
+  x          REAL NOT NULL,
+  y          REAL NOT NULL,
+  count      INTEGER NOT NULL,
+  content_key TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE semantic_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `
 ]
 

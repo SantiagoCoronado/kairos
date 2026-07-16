@@ -116,7 +116,7 @@ export function MicButton({
 /** poll mic level; fire onSilence once speech has been heard and then the
  *  level stays under the silence threshold for SILENCE_MS (or at the hard cap).
  *  Returns a cleanup that tears down the audio graph. */
-function watchForSilence(stream: MediaStream, onSilence: () => void): () => void {
+export function watchForSilence(stream: MediaStream, onSilence: () => void): () => void {
   let ctx: AudioContext
   try {
     ctx = new AudioContext()
@@ -156,7 +156,7 @@ function watchForSilence(stream: MediaStream, onSilence: () => void): () => void
   }
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
+export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve((reader.result as string).split(',')[1])

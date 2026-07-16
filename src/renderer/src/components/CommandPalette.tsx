@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, Check, CircleAlert } from 'lucide-react'
 import type { Person } from '../../../core/types'
+import type { CaptureContext } from '../../../shared/ipc-contract'
 import type { ViewId } from './Sidebar'
-import { api } from '../lib/api'
+import { api, useInvoke } from '../lib/api'
+import { getCaptureContext } from '../lib/capture-context'
+import { watchForSilence, blobToBase64 } from './MicButton'
+import { cn } from './ui'
 
 export function CommandPalette({
   onNavigate,
@@ -17,6 +21,8 @@ export function CommandPalette({
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [persons, setPersons] = useState<Person[]>([])
+  const [voice, setVoice] = useState(false)
+  const { data: settings } = useInvoke('settings:get', [], ['settings'])
 
   useEffect(() => {
     const down = (e: KeyboardEvent): void => {
@@ -33,6 +39,7 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) {
       setQuery('')
+      setVoice(false)
       return
     }
     void api.invoke('people:list', { search: query || undefined }).then((p) => setPersons(p.slice(0, 6)))
@@ -44,6 +51,19 @@ export function CommandPalette({
   const go = (v: ViewId): void => {
     onNavigate(v)
     close()
+  }
+
+  if (voice) {
+    return (
+      <div
+        className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-[18vh]"
+        onMouseDown={close}
+      >
+        <div className="w-[560px]" onMouseDown={(e) => e.stopPropagation()}>
+          <VoicePane context={getCaptureContext()} onClose={close} />
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -67,6 +87,23 @@ export function CommandPalette({
             <Command.Empty className="px-3 py-6 text-center text-[13px] text-faint">
               Nothing found.
             </Command.Empty>
+
+            {settings?.elevenLabsApiKey && (
+              <Command.Group>
+                <Item
+                  keywords={['voice', 'speak', 'dictate', 'record', 'command', 'capture']}
+                  onSelect={() => setVoice(true)}
+                >
+                  <Mic size={14} className="text-accent" />
+                  <span>
+                    Voice command
+                    {getCaptureContext() && (
+                      <span className="text-faint text-[11px]"> — about: {getCaptureContext()!.label}</span>
+                    )}
+                  </span>
+                </Item>
+              </Command.Group>
+            )}
 
             {query.trim() && (
               <Command.Group>
@@ -188,6 +225,145 @@ export function CommandPalette({
             )}
           </Command.List>
         </Command>
+      </div>
+    </div>
+  )
+}
+
+type VoiceStatus = 'recording' | 'transcribing' | 'working' | 'done' | 'error'
+
+/** ⌘K voice command: starts listening immediately, auto-stops on silence
+ *  (same VAD as the mic buttons), then executes the instruction against the
+ *  published capture context ("make this email a task for tomorrow"). */
+function VoicePane({
+  context,
+  onClose
+}: {
+  context: CaptureContext | null
+  onClose: () => void
+}): React.JSX.Element {
+  const [status, setStatus] = useState<VoiceStatus>('recording')
+  const [message, setMessage] = useState('')
+  const recRef = useRef<MediaRecorder | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let cleanup: (() => void) | null = null
+
+    const run = async (): Promise<void> => {
+      if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        setStatus('error')
+        setMessage('Voice capture needs a secure context (or a newer browser).')
+        return
+      }
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      } catch {
+        setStatus('error')
+        setMessage('Microphone unavailable — check the mic permission for Kairos.')
+        return
+      }
+      if (cancelled) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : undefined
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      const chunks: Blob[] = []
+      rec.ondataavailable = (e): void => {
+        if (e.data.size > 0) chunks.push(e.data)
+      }
+      const stopWatching = watchForSilence(stream, () => {
+        if (rec.state === 'recording') rec.stop()
+      })
+      cleanup = (): void => {
+        stopWatching()
+        if (rec.state === 'recording') rec.stop()
+        stream.getTracks().forEach((t) => t.stop())
+      }
+      rec.onstop = async (): Promise<void> => {
+        stopWatching()
+        stream.getTracks().forEach((t) => t.stop())
+        if (cancelled) return
+        setStatus('transcribing')
+        const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' })
+        const stt = await api.invoke('stt:transcribe', await blobToBase64(blob), blob.type.split(';')[0])
+        if (cancelled) return
+        if (!stt.ok) {
+          setStatus('error')
+          setMessage(stt.message)
+          return
+        }
+        if (!stt.text.trim()) {
+          setStatus('error')
+          setMessage('Heard nothing — try again.')
+          return
+        }
+        setStatus('working')
+        setMessage(stt.text)
+        const res = await api.invoke('capture:instruct', stt.text, context ?? undefined)
+        if (cancelled) return
+        setStatus(res.ok ? 'done' : 'error')
+        setMessage(res.message)
+        if (res.ok) setTimeout(onClose, 1600)
+      }
+      recRef.current = rec
+      rec.start()
+    }
+    void run()
+
+    return () => {
+      cancelled = true
+      cleanup?.()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <div className="bg-overlay border border-border-strong rounded-xl shadow-2xl overflow-hidden p-6 space-y-3">
+      <div className="flex items-center gap-3">
+        {status === 'recording' && <Mic size={18} className="text-danger animate-pulse shrink-0" />}
+        {(status === 'transcribing' || status === 'working') && (
+          <Loader2 size={18} className="text-accent animate-spin shrink-0" />
+        )}
+        {status === 'done' && <Check size={18} className="text-ok shrink-0" />}
+        {status === 'error' && <CircleAlert size={18} className="text-danger shrink-0" />}
+        <div className="min-w-0">
+          <p className="text-[13.5px] text-text">
+            {status === 'recording' && 'Listening — speak your command, stops when you pause'}
+            {status === 'transcribing' && 'Transcribing…'}
+            {status === 'working' && 'Working on it…'}
+            {(status === 'done' || status === 'error') && message}
+          </p>
+          {status === 'working' && message && (
+            <p className="text-[11.5px] text-faint truncate">“{message}”</p>
+          )}
+        </div>
+      </div>
+      {context && status === 'recording' && (
+        <p className="text-[11.5px] text-faint">
+          Looking at: <span className="text-muted">{context.label}</span> — “make this a task for
+          tomorrow” works.
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        {status === 'recording' && (
+          <button
+            onClick={() => recRef.current?.stop()}
+            className={cn('px-2.5 py-1 rounded-md text-[12px] bg-raised text-muted hover:text-text')}
+          >
+            stop now
+          </button>
+        )}
+        <button
+          onClick={onClose}
+          className="px-2.5 py-1 rounded-md text-[12px] text-faint hover:text-text"
+        >
+          cancel
+        </button>
       </div>
     </div>
   )

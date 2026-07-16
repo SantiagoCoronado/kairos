@@ -36,6 +36,7 @@ import type {
 } from '../../../core/comms-types'
 import { COMMS_LABELS } from '../../../core/labels'
 import { api, useInvoke } from '../lib/api'
+import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
 import { SettingsModal } from '../components/SettingsModal'
@@ -1626,6 +1627,22 @@ function ThreadPane({
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
   const { data: threadAttachments } = useInvoke('comms:threadAttachments', [thread.id], ['comms'])
+
+  // publish the open thread for ⌘K voice commands ("make this email a task")
+  useEffect(() => {
+    const latest = (messages ?? []).slice(-4)
+    setCaptureContext({
+      kind: 'comms_thread',
+      id: thread.id,
+      label: `${thread.provider === 'gmail' ? 'email' : thread.provider} — ${thread.person_name || thread.title}`,
+      text:
+        `${thread.title}\n` +
+        latest
+          .map((m) => `${m.is_me ? 'me' : m.sender_name || m.sender_handle}: ${m.body_text.slice(0, 400)}`)
+          .join('\n')
+    })
+    return () => clearCaptureContext(thread.id)
+  }, [thread.id, thread.title, thread.person_name, thread.provider, messages])
   // one fetch per pane, grouped here — a hook per bubble would be N IPC calls
   const attachmentsByMessage = useMemo(() => {
     const map = new Map<string, CommsAttachment[]>()

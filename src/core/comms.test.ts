@@ -945,3 +945,77 @@ describe('outbox', () => {
     expect(done.external_id).toBe('srv-9')
   })
 })
+
+describe('whatsapp notification triage queue', () => {
+  function waSetup() {
+    const a = comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: '52155@s.whatsapp.net', display_name: '+52…'
+    }, T0)
+    const t = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: '5215599@s.whatsapp.net', kind: 'dm', title: 'Vero'
+    }, T0)
+    return { a, t }
+  }
+  const msg = (a: CommsAccount, t: CommsThread, ext: string, body: string, at: Date, isMe = false) =>
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'whatsapp', external_id: ext,
+      sender_handle: '5215599', sender_name: isMe ? '' : 'Vero',
+      is_me: isMe, sent_at: at.toISOString(), body_text: body
+    }, at)
+
+  it('queues fresh unread DMs and drains via the watermark', () => {
+    const { a, t } = waSetup()
+    msg(a, t, 'm1', 'puedes venir mañana?', later(1))
+    const since = T0.toISOString()
+
+    let q = comms.listWhatsappTriageCandidates(db, since, 10)
+    expect(q.map((x) => x.id)).toEqual([t.id])
+    expect(q[0].sender).toBe('Vero')
+
+    // stamped at the evaluated last_message_at → out of the queue
+    comms.setThreadNotifyEval(db, t.id, q[0].last_message_at!)
+    expect(comms.listWhatsappTriageCandidates(db, since, 10)).toHaveLength(0)
+
+    // a newer message re-qualifies the thread
+    msg(a, t, 'm2', 'ya llegué', later(2))
+    q = comms.listWhatsappTriageCandidates(db, since, 10)
+    expect(q).toHaveLength(1)
+  })
+
+  it('excludes read, archived, group, non-whatsapp and stale threads', () => {
+    const { a, t } = waSetup()
+    msg(a, t, 'm1', 'hola', later(1))
+    const since = later(0).toISOString()
+
+    // group thread never queues
+    const g = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: 'g@g.us', kind: 'group', title: 'Fam'
+    }, T0)
+    msg(a, g, 'gm1', 'alguien viene?', later(1))
+
+    expect(comms.listWhatsappTriageCandidates(db, since, 10).map((x) => x.id)).toEqual([t.id])
+
+    // archived drops out
+    comms.setThreadArchived(db, t.id, true, later(2))
+    expect(comms.listWhatsappTriageCandidates(db, since, 10)).toHaveLength(0)
+    comms.setThreadArchived(db, t.id, false, later(2))
+
+    // read (unread_count 0) drops out
+    comms.markThreadRead(db, t.id, later(3))
+    expect(comms.listWhatsappTriageCandidates(db, since, 10)).toHaveLength(0)
+
+    // stale (older than the window) drops out
+    msg(a, t, 'm2', 'y esto?', later(4))
+    expect(comms.listWhatsappTriageCandidates(db, later(60).toISOString(), 10)).toHaveLength(0)
+  })
+
+  it('recentInboundBodies returns oldest-first inbound only', () => {
+    const { a, t } = waSetup()
+    msg(a, t, 'm1', 'primero', later(1))
+    msg(a, t, 'm2', 'mi respuesta', later(2), true)
+    msg(a, t, 'm3', 'segundo', later(3))
+    msg(a, t, 'm4', 'tercero', later(4))
+    expect(comms.recentInboundBodies(db, t.id, 2)).toEqual(['segundo', 'tercero'])
+    expect(comms.recentInboundBodies(db, t.id, 10)).toEqual(['primero', 'segundo', 'tercero'])
+  })
+})

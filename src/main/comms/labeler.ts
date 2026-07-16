@@ -17,6 +17,11 @@
 // are ever picked, and every classified thread ends with ≥1 label so nothing
 // loops. Auth rides the user's Claude Code login (same as the chat panel and
 // reply drafts).
+//
+// The sweep also runs the WhatsApp notification triage (sweepWhatsapp):
+// notifyInbox 'important' pings for a WhatsApp DM only when Haiku deems the
+// fresh messages notification-worthy. Separate queue (notify_eval_at
+// watermark, not labels), separate daily budget, fail-open on model outage.
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { DbDriver } from '../../core/driver'
 import * as repo from '../../core/repo/comms'
@@ -25,7 +30,11 @@ import {
   parseLabelResponse,
   heuristicLabels,
   labelIdsFromRawJson,
-  type LabelCandidate
+  buildMessageTriagePrompt,
+  parseTriageResponse,
+  heuristicMessageTriage,
+  type LabelCandidate,
+  type MessageTriageCandidate
 } from '../../core/labels'
 import { resolveClaudeBinary } from '../chat/agent'
 import { buildChildEnv } from '../child-env'
@@ -44,6 +53,11 @@ const BATCH_SIZE = 25
 const WINDOW_DAYS = 60
 /** worst-case model spend: 20 batches ≈ 500 threads ≈ ~40k haiku tokens/day */
 const MAX_MODEL_BATCHES_PER_DAY = 20
+/** whatsapp triage has its own budget — a chatty day must not starve email
+ *  labeling (or vice versa), and each batch is a tiny haiku call anyway */
+const MAX_TRIAGE_BATCHES_PER_DAY = 20
+/** triage context: the last few inbound messages of a thread */
+const TRIAGE_CONTEXT_MESSAGES = 3
 
 export class CommsLabeler {
   private timer: NodeJS.Timeout | null = null
@@ -52,12 +66,15 @@ export class CommsLabeler {
   private stopped = false
   private budgetDay = ''
   private batchesToday = 0
+  private triageBatchesToday = 0
 
   constructor(
     private db: DbDriver,
     private onChanged: () => void,
     /** fired with the thread ids classified in a sweep (notification hook) */
-    private onLabeled?: (threadIds: string[]) => void
+    private onLabeled?: (threadIds: string[]) => void,
+    /** fired with whatsapp thread ids the triage deemed notification-worthy */
+    private onImportant?: (threadIds: string[]) => void
   ) {}
 
   start(): void {
@@ -71,23 +88,50 @@ export class CommsLabeler {
     if (this.timer) clearInterval(this.timer)
   }
 
-  /** new inbound mail landed — classify soon instead of waiting out the interval */
+  /** new inbound mail/messages landed — classify soon instead of waiting out the interval */
   nudge(): void {
     if (Date.now() - this.lastRunAt < NUDGE_MIN_GAP_MS) return
     void this.sweep()
   }
 
-  private modelBudgetLeft(): boolean {
+  private rollBudgetDay(): void {
     const today = new Date().toISOString().slice(0, 10)
     if (today !== this.budgetDay) {
       this.budgetDay = today
       this.batchesToday = 0
+      this.triageBatchesToday = 0
     }
+  }
+
+  private modelBudgetLeft(): boolean {
+    this.rollBudgetDay()
     return this.batchesToday < MAX_MODEL_BATCHES_PER_DAY
+  }
+
+  private triageBudgetLeft(): boolean {
+    this.rollBudgetDay()
+    return this.triageBatchesToday < MAX_TRIAGE_BATCHES_PER_DAY
   }
 
   private async sweep(): Promise<void> {
     if (this.running || this.stopped) return
+    this.running = true
+    this.lastRunAt = Date.now()
+    try {
+      await this.sweepEmail()
+    } catch (err) {
+      // never surface as an account error — labels are a nice-to-have layer
+      logLine('warn', 'comms', `auto-label sweep failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      await this.sweepWhatsapp()
+    } catch (err) {
+      logLine('warn', 'comms', `whatsapp triage sweep failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    this.running = false
+  }
+
+  private async sweepEmail(): Promise<void> {
     const settings = getSettings()
     // notification-only mode: important-email pings hinge on the
     // action-needed label, so classify fresh mail even with auto-label off —
@@ -99,67 +143,129 @@ export class CommsLabeler {
     const threads = repo.listUnlabeledEmailThreads(this.db, sinceIso, BATCH_SIZE)
     if (threads.length === 0) return
 
-    this.running = true
-    this.lastRunAt = Date.now()
-    try {
-      // pass 1: free — gmail categories + keyword rules
-      const needModel: typeof threads = []
-      const labeledIds: string[] = []
-      let heuristic = 0
-      for (const t of threads) {
-        const quick = heuristicLabels(labelIdsFromRawJson(t.newest_raw), t.title, t.snippet)
-        if (quick) {
-          repo.setThreadLabels(this.db, t.id, quick)
-          labeledIds.push(t.id)
-          heuristic++
-        } else {
-          needModel.push(t)
-        }
+    // pass 1: free — gmail categories + keyword rules
+    const needModel: typeof threads = []
+    const labeledIds: string[] = []
+    let heuristic = 0
+    for (const t of threads) {
+      const quick = heuristicLabels(labelIdsFromRawJson(t.newest_raw), t.title, t.snippet)
+      if (quick) {
+        repo.setThreadLabels(this.db, t.id, quick)
+        labeledIds.push(t.id)
+        heuristic++
+      } else {
+        needModel.push(t)
       }
+    }
 
-      // pass 2: the residue, one haiku batch, budget permitting
-      let modeled = 0
-      const bin = resolveClaudeBinary()
-      if (needModel.length > 0 && bin && this.modelBudgetLeft()) {
-        this.batchesToday++
-        const candidates: LabelCandidate[] = needModel.map((t) => ({
-          id: t.id,
-          sender: t.sender,
-          subject: t.title,
-          snippet: t.snippet
-        }))
-        const text = await this.classify(buildLabelPrompt(candidates), bin)
-        const result = parseLabelResponse(text, candidates)
-        for (const [threadId, labels] of result) {
-          repo.setThreadLabels(this.db, threadId, labels)
-          labeledIds.push(threadId)
-        }
-        modeled = result.size
+    // pass 2: the residue, one haiku batch, budget permitting
+    let modeled = 0
+    const bin = resolveClaudeBinary()
+    if (needModel.length > 0 && bin && this.modelBudgetLeft()) {
+      this.batchesToday++
+      const candidates: LabelCandidate[] = needModel.map((t) => ({
+        id: t.id,
+        sender: t.sender,
+        subject: t.title,
+        snippet: t.snippet
+      }))
+      const text = await this.classify(buildLabelPrompt(candidates), bin, 'email')
+      const result = parseLabelResponse(text, candidates)
+      for (const [threadId, labels] of result) {
+        repo.setThreadLabels(this.db, threadId, labels)
+        labeledIds.push(threadId)
       }
+      modeled = result.size
+    }
 
-      if (heuristic + modeled > 0) {
-        this.onChanged()
-        this.onLabeled?.(labeledIds)
-        logLine('info', 'comms', `auto-labeled ${heuristic + modeled} threads (${heuristic} heuristic, ${modeled} model)`)
-      }
-    } catch (err) {
-      // never surface as an account error — labels are a nice-to-have layer
-      logLine('warn', 'comms', `auto-label sweep failed: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      this.running = false
+    if (heuristic + modeled > 0) {
+      this.onChanged()
+      this.onLabeled?.(labeledIds)
+      logLine('info', 'comms', `auto-labeled ${heuristic + modeled} threads (${heuristic} heuristic, ${modeled} model)`)
     }
   }
 
+  /** Importance triage for fresh unread WhatsApp DMs — purely a notification
+   *  feature (notifyInbox 'important'), so the window is the notifier's and
+   *  no labels are written; the notify_eval_at watermark is the queue. */
+  private async sweepWhatsapp(): Promise<void> {
+    if (getSettings().notifyInbox !== 'important') return
+    const sinceIso = new Date(Date.now() - RECENT_WINDOW_MS).toISOString()
+    const threads = repo.listWhatsappTriageCandidates(this.db, sinceIso, BATCH_SIZE)
+    if (threads.length === 0) return
+
+    // pass 1: free — threads whose recent messages are all throwaway chatter
+    const important: string[] = []
+    const needModel: { thread: (typeof threads)[number]; messages: string[] }[] = []
+    let heuristic = 0
+    for (const t of threads) {
+      const messages = repo.recentInboundBodies(this.db, t.id, TRIAGE_CONTEXT_MESSAGES)
+      if (heuristicMessageTriage(messages) === 'routine') {
+        repo.setThreadNotifyEval(this.db, t.id, t.last_message_at!)
+        heuristic++
+      } else {
+        needModel.push({ thread: t, messages })
+      }
+    }
+
+    // pass 2: haiku verdict. Fail-OPEN when the model is unavailable (no
+    // binary / budget gone / call fails, e.g. expired Claude login): the
+    // complaint behind this feature is noise, but silently dropping a
+    // genuinely urgent message would be worse — degrade to the old
+    // notify-everything behavior instead.
+    let modeled = 0
+    const bin = resolveClaudeBinary()
+    if (needModel.length > 0) {
+      let failOpen: string | null = bin ? (this.triageBudgetLeft() ? null : 'budget') : 'no claude binary'
+      if (!failOpen) {
+        this.triageBatchesToday++
+        const candidates: MessageTriageCandidate[] = needModel.map(({ thread, messages }) => ({
+          id: thread.id,
+          sender: thread.sender,
+          messages
+        }))
+        try {
+          const text = await this.classify(buildMessageTriagePrompt(candidates), bin!, 'message')
+          const verdicts = parseTriageResponse(text, candidates)
+          for (const { thread } of needModel) {
+            const v = verdicts.get(thread.id)
+            if (!v) continue // skipped by the model: retry next sweep while fresh
+            repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
+            if (v === 'important') important.push(thread.id)
+            modeled++
+          }
+        } catch (err) {
+          failOpen = err instanceof Error ? err.message : String(err)
+        }
+      }
+      if (failOpen) {
+        for (const { thread } of needModel) {
+          repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
+          if (!important.includes(thread.id)) important.push(thread.id)
+        }
+        logLine('warn', 'comms', `whatsapp triage unavailable (${failOpen}) — notifying ${needModel.length} unfiltered`)
+      }
+    }
+
+    if (heuristic + modeled > 0) {
+      logLine(
+        'info',
+        'comms',
+        `whatsapp triage: ${heuristic + modeled} threads (${heuristic} heuristic, ${modeled} model), ${important.length} important`
+      )
+    }
+    if (important.length > 0) this.onImportant?.(important)
+  }
+
   /** One-shot, tool-less model call; the reply is the raw classification text. */
-  private async classify(prompt: string, bin: string): Promise<string> {
+  private async classify(prompt: string, bin: string, kind: 'email' | 'message'): Promise<string> {
     const q = query({
       prompt,
       options: {
         permissionMode: 'default',
         settingSources: [],
         strictMcpConfig: true,
-        systemPrompt:
-          'You are an email triage classifier. You output only the requested JSON object, nothing else.',
+        systemPrompt: `You are ${kind === 'email' ? 'an email' : 'a chat-message'} triage classifier. You output only the requested JSON object, nothing else.`,
         model: LABEL_MODEL,
         maxTurns: 1,
         cwd: DATA_DIR,

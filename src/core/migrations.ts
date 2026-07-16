@@ -451,6 +451,13 @@ CREATE TABLE comms_attachments (
   // '' = not yet classified (the labeler's work queue predicate).
   `
 ALTER TABLE comms_threads ADD COLUMN labels TEXT NOT NULL DEFAULT '';
+`,
+  // 015 — notification triage watermark: the last_message_at value the
+  // importance triage (labeler's whatsapp pass) has already evaluated.
+  // Chat threads are long-lived, so labels='' can't be the work-queue
+  // predicate like email — the queue is last_message_at > notify_eval_at.
+  `
+ALTER TABLE comms_threads ADD COLUMN notify_eval_at TEXT;
 `
 ]
 

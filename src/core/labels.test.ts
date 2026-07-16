@@ -4,7 +4,11 @@ import {
   parseLabelResponse,
   heuristicLabels,
   labelIdsFromRawJson,
-  type LabelCandidate
+  buildMessageTriagePrompt,
+  parseTriageResponse,
+  heuristicMessageTriage,
+  type LabelCandidate,
+  type MessageTriageCandidate
 } from './labels'
 
 const candidates: LabelCandidate[] = [
@@ -78,5 +82,58 @@ describe('buildLabelPrompt', () => {
     expect(p).toContain('1. from: Anna <anna@x.com> | subject: Lunch?')
     expect(p).toContain('2. from: Bank <no-reply@bank.com>')
     expect(p).toContain('Return ONLY a JSON object')
+  })
+})
+
+const triageCandidates: MessageTriageCandidate[] = [
+  { id: 'w1', sender: 'Mamá', messages: ['¿Puedes llamarme? Es sobre el doctor'] },
+  { id: 'w2', sender: 'Leo', messages: ['jajaja', 'mira este meme'] }
+]
+
+describe('heuristicMessageTriage', () => {
+  it('drops pure acknowledgment/emoji chatter without a model call', () => {
+    expect(heuristicMessageTriage(['ok'])).toBe('routine')
+    expect(heuristicMessageTriage(['jajaja', '👍', 'gracias!'])).toBe('routine')
+    expect(heuristicMessageTriage(['ok 👍'])).toBe('routine')
+    expect(heuristicMessageTriage(['gracias!! 🙏🙏'])).toBe('routine')
+    expect(heuristicMessageTriage(['🎉🎉', '  '])).toBe('routine')
+    expect(heuristicMessageTriage([])).toBe('routine')
+  })
+
+  it('defers anything substantive to the classifier', () => {
+    expect(heuristicMessageTriage(['¿puedes mandarme el reporte hoy?'])).toBeNull()
+    expect(heuristicMessageTriage(['ok', 'nos vemos a las 7 entonces?'])).toBeNull()
+    expect(heuristicMessageTriage(['check out https://x.com/thing'])).toBeNull()
+  })
+})
+
+describe('buildMessageTriagePrompt', () => {
+  it('numbers conversations, quotes messages, truncates long bodies', () => {
+    const long = 'x'.repeat(300)
+    const p = buildMessageTriagePrompt([{ id: 'a', sender: 'Bo', messages: [long] }, ...triageCandidates])
+    expect(p).toContain('1. from: Bo')
+    expect(p).toContain(`> ${'x'.repeat(200)}`)
+    expect(p).not.toContain('x'.repeat(201))
+    expect(p).toContain('2. from: Mamá')
+    expect(p).toContain('> ¿Puedes llamarme?')
+    expect(p).toContain('Return ONLY a JSON object')
+  })
+})
+
+describe('parseTriageResponse', () => {
+  it('maps verdicts back by position, tolerating fences and prose', () => {
+    const out = parseTriageResponse(
+      'Sure!\n```json\n{"1":"important","2":"routine"}\n```',
+      triageCandidates
+    )
+    expect(out.get('w1')).toBe('important')
+    expect(out.get('w2')).toBe('routine')
+  })
+
+  it('leaves skipped or invalid entries absent (retry, not misfire)', () => {
+    const out = parseTriageResponse('{"1":"IMPORTANT","2":"maybe"}', triageCandidates)
+    expect(out.get('w1')).toBe('important')
+    expect(out.has('w2')).toBe(false)
+    expect(parseTriageResponse('no json here', triageCandidates).size).toBe(0)
   })
 })

@@ -61,9 +61,11 @@ export class CommsSyncManager {
     /** fired once per sync batch that stored ≥1 new inbound unread message */
     private onInbound?: (provider: CommsAccount['provider']) => void,
     /** fired with the thread ids the labeler classified (notification hook) */
-    onLabeled?: (threadIds: string[]) => void
+    onLabeled?: (threadIds: string[]) => void,
+    /** fired with whatsapp thread ids the triage deemed notification-worthy */
+    onImportant?: (threadIds: string[]) => void
   ) {
-    this.labeler = new CommsLabeler(db, () => this.notifyChanged(), onLabeled)
+    this.labeler = new CommsLabeler(db, () => this.notifyChanged(), onLabeled, onImportant)
   }
 
   start(): void {
@@ -442,7 +444,11 @@ export class CommsSyncManager {
     const conn = new WhatsAppConnection(this.db, accountId, {
       emit: (e) => this.emit(e),
       onChanged: () => this.notifyChanged(),
-      onInbound: () => this.onInbound?.('whatsapp')
+      onInbound: () => {
+        this.onInbound?.('whatsapp')
+        // important-mode notifications ride the triage verdict — classify soon
+        this.labeler.nudge()
+      }
     })
     this.wa.set(accountId, conn)
     // start() handles its own failures (retry + watchdog); a rejection here

@@ -579,7 +579,8 @@ export function registerIpc(): void {
       if (provider === 'gmail') emitAppEvent('email_received')
       notifier.noteInbound(provider)
     },
-    (threadIds) => notifier.noteLabeled(threadIds)
+    (threadIds) => notifier.noteLabeled(threadIds),
+    (threadIds) => notifier.noteImportant(threadIds)
   )
   commsManager = manager
 

@@ -42,8 +42,20 @@ interface EmbedRequest {
   cacheDir: string
 }
 
+/** project count×dims vectors to 2D. Heavy (tens of seconds at 12k points,
+ *  umap-js is pure JS) — exactly why it lives in this process, not main. */
+interface UmapRequest {
+  id: number
+  kind: 'umap'
+  vectors: Float32Array
+  count: number
+  dims: number
+}
+
 process.parentPort.on('message', (e: Electron.MessageEvent) => {
-  void handle(e.data as EmbedRequest)
+  const req = e.data as EmbedRequest | UmapRequest
+  if (req.kind === 'umap') void handleUmap(req)
+  else void handle(req)
 })
 
 async function handle(req: EmbedRequest): Promise<void> {
@@ -62,5 +74,53 @@ async function handle(req: EmbedRequest): Promise<void> {
       ok: false,
       error: err instanceof Error ? err.message : String(err)
     })
+  }
+}
+
+async function handleUmap(req: UmapRequest): Promise<void> {
+  try {
+    const { UMAP } = await import('umap-js')
+    const rows: number[][] = []
+    for (let i = 0; i < req.count; i++)
+      rows.push(Array.from(req.vectors.subarray(i * req.dims, (i + 1) * req.dims)))
+    const umap = new UMAP({
+      nComponents: 2,
+      nNeighbors: 15,
+      minDist: 0.1,
+      // vectors are L2-normalized, so cosine ranking ≈ euclidean here — the
+      // default metric keeps umap-js on its fast path
+      random: mulberry32(42) // deterministic layout across refits
+    })
+    const nEpochs = umap.initializeFit(rows)
+    // step() so the process stays responsive to a kill during long fits
+    for (let e = 0; e < nEpochs; e++) {
+      umap.step()
+      if (e % 50 === 0) await new Promise((r) => setImmediate(r))
+    }
+    const out = umap.getEmbedding()
+    const coords = new Float32Array(req.count * 2)
+    for (let i = 0; i < req.count; i++) {
+      coords[i * 2] = out[i][0]
+      coords[i * 2 + 1] = out[i][1]
+    }
+    process.parentPort.postMessage({ id: req.id, ok: true, coords })
+  } catch (err) {
+    process.parentPort.postMessage({
+      id: req.id,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+/** small deterministic PRNG for reproducible layouts */
+function mulberry32(seed: number): () => number {
+  let a = seed
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }

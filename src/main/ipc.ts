@@ -39,6 +39,8 @@ import { spawn as ptySpawn } from 'node-pty'
 import { logLine } from './logger'
 import { syncRemoteServer, getRemoteStatus, remoteBroadcast } from './remote/server'
 import { SemanticIndexer } from './search/indexer'
+import { AtlasProjector } from './search/projector'
+import * as semantic from '../core/semantic'
 
 const SLOW_IPC_MS = 300
 
@@ -134,6 +136,22 @@ export function registerIpc(): void {
   semanticIndexer = indexer
   indexer.start()
   handle('search:semantic', (query, opts) => indexer.search(query, opts))
+
+  const projector = new AtlasProjector(db, () => broadcast('db:changed', { entity: 'semantic' }))
+  projector.start()
+  handle('map:data', () => {
+    const { projected, total } = semantic.countProjected(db)
+    return {
+      points: semantic.listMapPoints(db).map((p) => ({ e: p.entity, id: p.entity_id, x: p.x, y: p.y })),
+      clusters: semantic.listClusters(db),
+      indexed: total,
+      projected
+    }
+  })
+  handle('map:item', (entity, id) => {
+    const [hit] = semantic.hydrateHits(db, [{ entity, entity_id: id, score: 0 }])
+    return hit ?? null
+  })
 
   handle('tasks:list', (f) => tasks.listTasks(db, f))
   handle('tasks:create', (input) => {

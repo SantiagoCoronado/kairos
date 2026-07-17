@@ -218,24 +218,6 @@ function GeneralSection({ settings, save }: SectionProps): React.JSX.Element {
         />
       </Row>
 
-      <Row
-        label="semantic index"
-        hint={
-          <>
-            Meaning-based search across messages, notes, tasks, people and events. Fully
-            on-device — the first run downloads a 113 MB multilingual model; nothing you wrote
-            ever leaves this Mac.
-          </>
-        }
-      >
-        <input
-          type="checkbox"
-          checked={settings.semanticIndex}
-          onChange={(e) => save({ semanticIndex: e.target.checked })}
-          className="accent-accent w-4 h-4 shrink-0"
-        />
-      </Row>
-
       <div className="space-y-1">
         <span className="font-mono text-[10px] uppercase tracking-wider text-faint">
           quick-capture hotkey

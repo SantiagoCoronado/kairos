@@ -3,7 +3,6 @@ import { Sidebar, SidebarToggle, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
 import { useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
-import { AtlasView } from './views/Atlas'
 import { TodayView } from './views/Today'
 import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
@@ -169,7 +168,6 @@ export default function App(): React.JSX.Element {
         <div className="flex-1 min-h-0 overflow-y-auto">
           {commonViews}
           {view === 'tasks' && <TasksView />}
-          {view === 'map' && <AtlasView onNavigate={setView} />}
           {view === 'objectives' && <ObjectivesView />}
           {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}
           {terminalOpened && (

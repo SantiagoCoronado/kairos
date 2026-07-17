@@ -9,12 +9,6 @@ files:
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
   - '**/node_modules/node-pty/**'
-  # onnxruntime ships prebuilt .node binaries + .dylibs the loader dlopens —
-  # they can't run from inside the asar (semantic index embedder)
-  - '**/node_modules/onnxruntime-node/**'
-  - '**/node_modules/@huggingface/transformers/**'
-  - '**/node_modules/sharp/**'
-  - '**/node_modules/@img/**'
 extraResources:
   - from: resources/calendar-helper
     to: calendar-helper

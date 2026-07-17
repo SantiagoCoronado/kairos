@@ -8,7 +8,6 @@ import { registerIpc, getCommsManager, getTaskRunner, getTerminalManager, getCal
 import { Scheduler } from './scheduler'
 import { closeDb, getDb } from './db'
 import { logLine } from './logger'
-import { stopEmbedder } from './search/embedder'
 import { pruneChatUploads } from './chat/uploads'
 
 // crash forensics — everything lands in ~/Kairos/logs/app.log
@@ -131,7 +130,6 @@ if (!gotLock) {
     getCommsManager()?.stop()
     getCalendarManager()?.stop()
     getTerminalManager()?.disposeAll()
-    stopEmbedder()
     closeDb()
   })
 }

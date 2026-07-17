@@ -18,7 +18,6 @@ export type DbEntity =
   | 'calendar_accounts'
   | 'settings'
   | 'terminal'
-  | 'semantic'
   | 'all'
 
 export type InteractionKind = 'call' | 'message' | 'email' | 'meeting' | 'coffee' | 'other'

@@ -505,6 +505,15 @@ CREATE TABLE semantic_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+`,
+  // 019 — semantic index removed: meaning-based search over short CRM rows
+  // never beat keyword search on this corpus, so the feature (and its 18MB+
+  // of derived vectors) is gone. Everything here is regenerable, nothing
+  // user-authored. Migrations stay append-only, so 017/018 remain above.
+  `
+DROP TABLE IF EXISTS embeddings;
+DROP TABLE IF EXISTS semantic_clusters;
+DROP TABLE IF EXISTS semantic_meta;
 `
 ]
 

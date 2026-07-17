@@ -11,7 +11,6 @@ const DEFAULTS: Settings = {
   automationsEnabled: true,
   translucency: 0,
   showClaudeUsage: true,
-  semanticIndex: true,
   autoLabel: false,
   notifyInbox: 'important',
   chatProvider: 'claude',

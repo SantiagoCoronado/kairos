@@ -3,8 +3,8 @@
 // node:sqlite (standalone MCP server, plain Node — no native rebuild).
 // Keeping this surface tiny is what lets one repo layer serve both processes.
 
-// Uint8Array covers BLOB columns (semantic-index vectors); both adapters
-// bind and return them natively (better-sqlite3 as Buffer, a Uint8Array)
+// Uint8Array covers BLOB columns; both adapters bind and return them
+// natively (better-sqlite3 as Buffer, a Uint8Array)
 export type SqlValue = string | number | null | Uint8Array
 
 export interface RunResult {

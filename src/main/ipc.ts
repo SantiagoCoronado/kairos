@@ -38,9 +38,6 @@ import { TerminalManager } from './terminal'
 import { spawn as ptySpawn } from 'node-pty'
 import { logLine } from './logger'
 import { syncRemoteServer, getRemoteStatus, remoteBroadcast } from './remote/server'
-import { SemanticIndexer } from './search/indexer'
-import { AtlasProjector } from './search/projector'
-import * as semantic from '../core/semantic'
 
 const SLOW_IPC_MS = 300
 
@@ -76,13 +73,7 @@ export function broadcast<K extends keyof IpcEvents>(channel: K, payload: IpcEve
     win.webContents.send(channel, payload)
   }
   remoteBroadcast(channel, payload)
-  // every data change funnels through a db:changed broadcast (including the
-  // MCP-twin poll), which makes this the one choke point where the semantic
-  // indexer learns something moved. Its own writes don't broadcast — no loop.
-  if (channel === 'db:changed') semanticIndexer?.nudge()
 }
-
-let semanticIndexer: SemanticIndexer | null = null
 
 let commsManager: CommsSyncManager | null = null
 
@@ -131,27 +122,6 @@ export function registerIpc(): void {
 
   handle('app:ping', () => 'pong')
   handle('log:renderer', (level, message) => logLine(level, 'renderer', message.slice(0, 4000)))
-
-  const indexer = new SemanticIndexer(db)
-  semanticIndexer = indexer
-  indexer.start()
-  handle('search:semantic', (query, opts) => indexer.search(query, opts))
-
-  const projector = new AtlasProjector(db, () => broadcast('db:changed', { entity: 'semantic' }))
-  projector.start()
-  handle('map:data', () => {
-    const { projected, total } = semantic.countProjected(db)
-    return {
-      points: semantic.listMapPoints(db).map((p) => ({ e: p.entity, id: p.entity_id, x: p.x, y: p.y })),
-      clusters: semantic.listClusters(db),
-      indexed: total,
-      projected
-    }
-  })
-  handle('map:item', (entity, id) => {
-    const [hit] = semantic.hydrateHits(db, [{ entity, entity_id: id, score: 0 }])
-    return hit ?? null
-  })
 
   handle('tasks:list', (f) => tasks.listTasks(db, f))
   handle('tasks:create', (input) => {

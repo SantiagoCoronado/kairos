@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, Check, CircleAlert, Compass } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, Check, CircleAlert } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { CaptureContext } from '../../../shared/ipc-contract'
 import type { ViewId } from './Sidebar'
@@ -179,9 +179,6 @@ export function CommandPalette({
               </Item>
               <Item onSelect={() => go('chat')} keywords={['claude', 'ai']}>
                 <Sparkles size={14} /> Chat
-              </Item>
-              <Item onSelect={() => go('map')} keywords={['atlas', 'vector', 'semantic', 'embeddings', 'explore']}>
-                <Compass size={14} /> Atlas
               </Item>
               <Item onSelect={() => go('terminal')} keywords={['shell', 'console', 'zsh', 'cli']}>
                 <Terminal size={14} /> Terminal

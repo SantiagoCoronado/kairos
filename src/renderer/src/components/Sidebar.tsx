@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Compass } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useInvoke } from '../lib/api'
 import { useTerminalAvailable } from '../lib/mobile'
@@ -14,7 +14,6 @@ export type ViewId =
   | 'objectives'
   | 'automations'
   | 'chat'
-  | 'map'
   | 'terminal'
 
 /** Sidebar toggle pinned next to the traffic lights (12px bubbles from x=18,
@@ -49,7 +48,6 @@ const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'objectives', label: 'Objectives', icon: Target },
   { id: 'automations', label: 'Automations', icon: Bot },
   { id: 'chat', label: 'Chat', icon: Sparkles },
-  { id: 'map', label: 'Atlas', icon: Compass },
   { id: 'terminal', label: 'Terminal', icon: Terminal }
 ]
 

@@ -217,17 +217,6 @@ export interface IpcApi {
   'capture:instruct': (instruction: string, context?: CaptureContext) => Promise<CaptureSubmitResult>
   'capture:hide': () => void
 
-  /** meaning-based search over the local embedding index (phase 6 surfaces
-   *  this in ⌘K and the chat agent) */
-  'search:semantic': (
-    query: string,
-    opts?: { limit?: number; entities?: SemanticEntity[] }
-  ) => Promise<SemanticSearchResult>
-  /** the Atlas: every projected point + named clusters + build progress */
-  'map:data': () => MapData
-  /** lazy hover/click hydration for one map point */
-  'map:item': (entity: SemanticEntity, id: string) => SemanticHit | null
-
   'export:markdown': () => { files: number; dir: string }
 
   'chat:send': (localSessionId: string | null, text: string) => { localSessionId: string }
@@ -412,9 +401,6 @@ export interface AppSettings {
   showClaudeUsage: boolean
   /** background email auto-labeling (haiku batches via the Claude Code login) */
   autoLabel: boolean
-  /** local semantic index over messages/notes/tasks/people/events (first run
-   *  downloads a ~113MB multilingual embedding model; all on-device) */
-  semanticIndex: boolean
   /** native notifications for new messages: DMs + action-needed email
    *  ('important'), everything ('all'), or never ('off') */
   notifyInbox: 'off' | 'important' | 'all'
@@ -558,43 +544,6 @@ export type TerminalEvent = { sessionId: string } & (
 export type CaptureSubmitResult =
   | { ok: true; message: string }
   | { ok: false; message: string }
-
-export type SemanticEntity =
-  | 'comms_message'
-  | 'note'
-  | 'task'
-  | 'person'
-  | 'chat_message'
-  | 'calendar_event'
-
-export interface SemanticHit {
-  entity: SemanticEntity
-  entity_id: string
-  /** cosine similarity, higher = closer (e5 scores cluster ~0.7–0.9) */
-  score: number
-  title: string
-  snippet: string
-  /** where opening the hit should land */
-  nav: { view: string; id: string }
-  /** atlas position, when the item has been projected */
-  map?: { x: number; y: number } | null
-}
-
-export interface MapData {
-  /** e = entity, id = entity id, x/y = atlas coordinates in [-1, 1] */
-  points: { e: SemanticEntity; id: string; x: number; y: number }[]
-  clusters: { id: number; name: string; x: number; y: number; count: number }[]
-  indexed: number
-  projected: number
-}
-
-export interface SemanticSearchResult {
-  status: 'ok' | 'indexing' | 'disabled' | 'unavailable'
-  message?: string
-  hits: SemanticHit[]
-  /** rows currently in the index */
-  indexed: number
-}
 
 /** the focused entity a view publishes for context-aware voice commands */
 export interface CaptureContext {

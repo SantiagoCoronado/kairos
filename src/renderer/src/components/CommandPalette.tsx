@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, Check, CircleAlert } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, CircleAlert } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { CaptureContext } from '../../../shared/ipc-contract'
 import type { ViewId } from './Sidebar'
 import { api, useInvoke } from '../lib/api'
 import { getCaptureContext } from '../lib/capture-context'
+import { runVoiceInstruction } from '../lib/run-instruction'
 import { watchForSilence, blobToBase64 } from './MicButton'
 import { cn } from './ui'
 
@@ -230,11 +231,13 @@ export function CommandPalette({
   )
 }
 
-type VoiceStatus = 'recording' | 'transcribing' | 'working' | 'done' | 'error'
+type VoiceStatus = 'recording' | 'transcribing' | 'error'
 
 /** ⌘K voice command: starts listening immediately, auto-stops on silence
- *  (same VAD as the mic buttons), then executes the instruction against the
- *  published capture context ("make this email a task for tomorrow"). */
+ *  (same VAD as the mic buttons), then hands the instruction to
+ *  runVoiceInstruction and closes — execution continues in the background
+ *  and the outcome arrives as a toast wherever the user is. Only
+ *  pre-dispatch errors (mic, STT, empty transcript) render in-pane. */
 function VoicePane({
   context,
   onClose
@@ -302,13 +305,8 @@ function VoicePane({
           setMessage('Heard nothing — try again.')
           return
         }
-        setStatus('working')
-        setMessage(stt.text)
-        const res = await api.invoke('capture:instruct', stt.text, context ?? undefined)
-        if (cancelled) return
-        setStatus(res.ok ? 'done' : 'error')
-        setMessage(res.message)
-        if (res.ok) setTimeout(onClose, 1600)
+        runVoiceInstruction(stt.text, context ?? undefined)
+        onClose()
       }
       recRef.current = rec
       rec.start()
@@ -326,21 +324,16 @@ function VoicePane({
     <div className="bg-overlay border border-border-strong rounded-xl shadow-2xl overflow-hidden p-6 space-y-3">
       <div className="flex items-center gap-3">
         {status === 'recording' && <Mic size={18} className="text-danger animate-pulse shrink-0" />}
-        {(status === 'transcribing' || status === 'working') && (
+        {status === 'transcribing' && (
           <Loader2 size={18} className="text-accent animate-spin shrink-0" />
         )}
-        {status === 'done' && <Check size={18} className="text-ok shrink-0" />}
         {status === 'error' && <CircleAlert size={18} className="text-danger shrink-0" />}
         <div className="min-w-0">
           <p className="text-[13.5px] text-text">
             {status === 'recording' && 'Listening — speak your command, stops when you pause'}
             {status === 'transcribing' && 'Transcribing…'}
-            {status === 'working' && 'Working on it…'}
-            {(status === 'done' || status === 'error') && message}
+            {status === 'error' && message}
           </p>
-          {status === 'working' && message && (
-            <p className="text-[11.5px] text-faint truncate">“{message}”</p>
-          )}
         </div>
       </div>
       {context && status === 'recording' && (

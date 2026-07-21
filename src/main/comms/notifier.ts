@@ -66,6 +66,19 @@ export class CommsNotifier {
     this.deliver(threads)
   }
 
+  /** The triage's daily model budget ran out with fresh threads unchecked —
+   *  one quiet digest instead of notifying every thread unfiltered. */
+  noteTriageDeferred(count: number): void {
+    if (getSettings().notifyInbox !== 'important') return
+    if (!Notification.isSupported()) return
+    if (BrowserWindow.getFocusedWindow()) return
+    this.notify(
+      'WhatsApp triage paused',
+      `Daily triage budget used — ${count} recent thread${count > 1 ? 's' : ''} not checked for urgency.`
+    )
+    logLine('info', 'comms', `triage-deferred digest sent (${count} threads)`)
+  }
+
   /** The whatsapp triage flagged these threads as notification-worthy. */
   noteImportant(threadIds: string[]): void {
     if (getSettings().notifyInbox !== 'important') return

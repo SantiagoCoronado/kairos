@@ -21,7 +21,9 @@
 // The sweep also runs the WhatsApp notification triage (sweepWhatsapp):
 // notifyInbox 'important' pings for a WhatsApp DM only when Haiku deems the
 // fresh messages notification-worthy. Separate queue (notify_eval_at
-// watermark, not labels), separate daily budget, fail-open on model outage.
+// watermark, not labels), separate daily budget counted in threads.
+// Fail-open (notify unfiltered) only on model OUTAGE; budget exhaustion
+// defers quietly with at most one digest banner per day.
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import type { DbDriver } from '../../core/driver'
 import * as repo from '../../core/repo/comms'
@@ -33,6 +35,7 @@ import {
   buildMessageTriagePrompt,
   parseTriageResponse,
   heuristicMessageTriage,
+  splitTriageBudget,
   type LabelCandidate,
   type MessageTriageCandidate
 } from '../../core/labels'
@@ -54,8 +57,12 @@ const WINDOW_DAYS = 60
 /** worst-case model spend: 20 batches ≈ 500 threads ≈ ~40k haiku tokens/day */
 const MAX_MODEL_BATCHES_PER_DAY = 20
 /** whatsapp triage has its own budget — a chatty day must not starve email
- *  labeling (or vice versa), and each batch is a tiny haiku call anyway */
-const MAX_TRIAGE_BATCHES_PER_DAY = 20
+ *  labeling (or vice versa). Counted in THREADS sent to the model, not
+ *  sweeps: event-driven sweeps usually carry a single fresh thread, so a
+ *  per-sweep cap burned out by mid-afternoon on chatty days. Worst case
+ *  ~150 tiny haiku calls (sender + 3 short messages each) ≈ ~40k tokens/day,
+ *  the same ballpark the email cap was approved at. */
+const MAX_TRIAGE_THREADS_PER_DAY = 150
 /** triage context: the last few inbound messages of a thread */
 const TRIAGE_CONTEXT_MESSAGES = 3
 
@@ -66,7 +73,9 @@ export class CommsLabeler {
   private stopped = false
   private budgetDay = ''
   private batchesToday = 0
-  private triageBatchesToday = 0
+  private triageThreadsToday = 0
+  /** day a triage-deferred digest already went out — at most one per day */
+  private digestDay = ''
 
   constructor(
     private db: DbDriver,
@@ -74,7 +83,9 @@ export class CommsLabeler {
     /** fired with the thread ids classified in a sweep (notification hook) */
     private onLabeled?: (threadIds: string[]) => void,
     /** fired with whatsapp thread ids the triage deemed notification-worthy */
-    private onImportant?: (threadIds: string[]) => void
+    private onImportant?: (threadIds: string[]) => void,
+    /** fired once per day when the triage budget ran out with threads unchecked */
+    private onDeferred?: (count: number) => void
   ) {}
 
   start(): void {
@@ -99,18 +110,13 @@ export class CommsLabeler {
     if (today !== this.budgetDay) {
       this.budgetDay = today
       this.batchesToday = 0
-      this.triageBatchesToday = 0
+      this.triageThreadsToday = 0
     }
   }
 
   private modelBudgetLeft(): boolean {
     this.rollBudgetDay()
     return this.batchesToday < MAX_MODEL_BATCHES_PER_DAY
-  }
-
-  private triageBudgetLeft(): boolean {
-    this.rollBudgetDay()
-    return this.triageBatchesToday < MAX_TRIAGE_BATCHES_PER_DAY
   }
 
   private async sweep(): Promise<void> {
@@ -208,42 +214,53 @@ export class CommsLabeler {
       }
     }
 
-    // pass 2: haiku verdict. Fail-OPEN when the model is unavailable (no
-    // binary / budget gone / call fails, e.g. expired Claude login): the
-    // complaint behind this feature is noise, but silently dropping a
-    // genuinely urgent message would be worse — degrade to the old
-    // notify-everything behavior instead.
+    // pass 2: haiku verdict. Two distinct failure modes, handled differently:
+    //   OUTAGE (no binary / call fails, e.g. expired Claude login) — fail
+    //   OPEN: silently dropping a genuinely urgent message would be worse
+    //   than noise, so degrade to the old notify-everything behavior.
+    //   BUDGET exhausted — fail QUIET: budget runs out precisely on the
+    //   chattiest days, so notifying unfiltered would recreate the exact
+    //   noise this feature exists to kill. Deferred threads stay unstamped
+    //   (they retry while fresh and age out of the recency window) and a
+    //   single digest banner per day says triage is paused.
     let modeled = 0
+    let deferred = 0
     const bin = resolveClaudeBinary()
     if (needModel.length > 0) {
-      let failOpen: string | null = bin ? (this.triageBudgetLeft() ? null : 'budget') : 'no claude binary'
-      if (!failOpen) {
-        this.triageBatchesToday++
-        const candidates: MessageTriageCandidate[] = needModel.map(({ thread, messages }) => ({
-          id: thread.id,
-          sender: thread.sender,
-          messages
-        }))
-        try {
-          const text = await this.classify(buildMessageTriagePrompt(candidates), bin!, 'message')
-          const verdicts = parseTriageResponse(text, candidates)
-          for (const { thread } of needModel) {
-            const v = verdicts.get(thread.id)
-            if (!v) continue // skipped by the model: retry next sweep while fresh
-            repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
-            if (v === 'important') important.push(thread.id)
-            modeled++
+      if (!bin) {
+        this.failOpen(needModel, important, 'no claude binary')
+      } else {
+        this.rollBudgetDay()
+        const split = splitTriageBudget(needModel, MAX_TRIAGE_THREADS_PER_DAY - this.triageThreadsToday)
+        deferred = split.deferred.length
+        if (split.toModel.length > 0) {
+          this.triageThreadsToday += split.toModel.length
+          const candidates: MessageTriageCandidate[] = split.toModel.map(({ thread, messages }) => ({
+            id: thread.id,
+            sender: thread.sender,
+            messages
+          }))
+          try {
+            const text = await this.classify(buildMessageTriagePrompt(candidates), bin, 'message')
+            const verdicts = parseTriageResponse(text, candidates)
+            for (const { thread } of split.toModel) {
+              const v = verdicts.get(thread.id)
+              if (!v) continue // skipped by the model: retry next sweep while fresh
+              repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
+              if (v === 'important') important.push(thread.id)
+              modeled++
+            }
+          } catch (err) {
+            this.failOpen(split.toModel, important, err instanceof Error ? err.message : String(err))
           }
-        } catch (err) {
-          failOpen = err instanceof Error ? err.message : String(err)
         }
-      }
-      if (failOpen) {
-        for (const { thread } of needModel) {
-          repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
-          if (!important.includes(thread.id)) important.push(thread.id)
+        if (deferred > 0) {
+          logLine('warn', 'comms', `whatsapp triage budget exhausted — ${deferred} thread(s) deferred`)
+          if (this.digestDay !== this.budgetDay) {
+            this.digestDay = this.budgetDay
+            this.onDeferred?.(deferred)
+          }
         }
-        logLine('warn', 'comms', `whatsapp triage unavailable (${failOpen}) — notifying ${needModel.length} unfiltered`)
       }
     }
 
@@ -255,6 +272,19 @@ export class CommsLabeler {
       )
     }
     if (important.length > 0) this.onImportant?.(important)
+  }
+
+  /** model OUTAGE path: stamp + notify unfiltered rather than risk silence */
+  private failOpen(
+    items: { thread: { id: string; last_message_at: string | null } }[],
+    important: string[],
+    reason: string
+  ): void {
+    for (const { thread } of items) {
+      repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
+      if (!important.includes(thread.id)) important.push(thread.id)
+    }
+    logLine('warn', 'comms', `whatsapp triage unavailable (${reason}) — notifying ${items.length} unfiltered`)
   }
 
   /** One-shot, tool-less model call; the reply is the raw classification text. */

@@ -91,11 +91,24 @@ export interface MessageTriageCandidate {
 
 export type TriageVerdict = 'important' | 'routine'
 
-// short acknowledgments in the languages Santiago actually chats in;
-// trailing punctuation/emoji don't change the verdict ("ok 👍")
+// short acknowledgments and reactions in the languages Santiago actually
+// chats in; trailing punctuation/emoji don't change the verdict ("ok 👍").
+// Only ever rules a message ROUTINE — anything with actual content must
+// fall through to the model, so additions here stay strictly throwaway.
 const ROUTINE_MSG_RE =
-  /^(ok(ay)?|vale|dale|s[ií]+|no+|ya|bueno|listo|va|ah+|oh+|jaja\S*|jeje\S*|lol|xd+|gracias|thanks?|thank you|ty|nice|cool|genial|claro|perfecto|de nada|np|yw|bye|adios|hola|hey|hi|hello|buenos dias|buenas noches|good night|hasta luego)[\s!.,\p{Extended_Pictographic}\p{Emoji_Component}‍]*$/iu
+  /^(ok(ay)?|vale|dale|s[ií]+|no+|ya|bueno|listo|va|ah+|oh+|jaja\S*|jeje\S*|jiji\S*|haha\S*|hehe\S*|lo+l\S*|lmao\S*|rofl|xd+|wow|omg|aw+|hm+|mm+|gracias|thanks?|thank you|ty|nice|cool|genial|claro|perfecto|de nada|np|yw|bye|adios|adiós|hola|hey|hi|hello|buenas|saludos|buenos d[ií]as|buenas noches|good night|good morning|hasta luego)[\s!.,\p{Extended_Pictographic}\p{Emoji_Component}‍]*$/iu
 const EMOJI_ONLY_RE = /^[\p{Extended_Pictographic}\p{Emoji_Component}‍\s]+$/u
+
+/** Portion of a triage queue the remaining daily budget can afford: the
+ *  head goes to the model, the overflow is deferred (left unstamped so it
+ *  retries while fresh, never notified unfiltered). */
+export function splitTriageBudget<T>(
+  candidates: T[],
+  remaining: number
+): { toModel: T[]; deferred: T[] } {
+  const n = Math.max(0, Math.min(candidates.length, remaining))
+  return { toModel: candidates.slice(0, n), deferred: candidates.slice(n) }
+}
 
 /** 'routine' when every recent inbound message is a throwaway ack/emoji —
  *  no model call needed; null = ambiguous, ask the classifier. */

@@ -299,7 +299,7 @@ export function ChatView({
           <>
             {/* click-away layer */}
             <div className="fixed inset-0 z-20" onClick={() => setHistoryOpen(false)} />
-            <div className="absolute right-6 top-full mt-1 z-30 w-80 max-h-96 overflow-y-auto rounded-lg border border-border-strong bg-panel shadow-lg">
+            <div className="absolute right-6 top-full mt-1 z-30 w-80 max-h-96 overflow-y-auto rounded-lg border border-border-strong bg-overlay shadow-lg">
               {/* automation-run transcripts are hidden by default — opt in here */}
               <button
                 onClick={toggleAutomations}

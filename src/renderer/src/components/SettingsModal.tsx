@@ -169,11 +169,12 @@ function Row({
 }): React.JSX.Element {
   return (
     <div className="flex items-center justify-between gap-4">
-      <div>
+      <div className="min-w-0">
         <span className="font-mono text-[10px] uppercase tracking-wider text-faint">{label}</span>
         {hint && <p className="text-[11px] text-faint">{hint}</p>}
       </div>
-      {children}
+      {/* controls must never flex-shrink — a long hint would clip them */}
+      <div className="shrink-0">{children}</div>
     </div>
   )
 }

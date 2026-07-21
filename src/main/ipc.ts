@@ -588,7 +588,8 @@ export function registerIpc(): void {
       notifier.noteInbound(provider)
     },
     (threadIds) => notifier.noteLabeled(threadIds),
-    (threadIds) => notifier.noteImportant(threadIds)
+    (threadIds) => notifier.noteImportant(threadIds),
+    (count) => notifier.noteTriageDeferred(count)
   )
   commsManager = manager
 

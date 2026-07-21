@@ -63,9 +63,11 @@ export class CommsSyncManager {
     /** fired with the thread ids the labeler classified (notification hook) */
     onLabeled?: (threadIds: string[]) => void,
     /** fired with whatsapp thread ids the triage deemed notification-worthy */
-    onImportant?: (threadIds: string[]) => void
+    onImportant?: (threadIds: string[]) => void,
+    /** fired once per day when the whatsapp triage budget ran out with threads unchecked */
+    onDeferred?: (count: number) => void
   ) {
-    this.labeler = new CommsLabeler(db, () => this.notifyChanged(), onLabeled, onImportant)
+    this.labeler = new CommsLabeler(db, () => this.notifyChanged(), onLabeled, onImportant, onDeferred)
   }
 
   start(): void {

@@ -23,7 +23,8 @@ import {
   Pause,
   Mic,
   ChevronLeft,
-  Filter
+  Filter,
+  UserPlus
 } from 'lucide-react'
 import type {
   CommsAccount,
@@ -2218,7 +2219,9 @@ function AttachmentChip({ attachment: a }: { attachment: CommsAttachment }): Rea
  */
 function HtmlBody({ html }: { html: string }): React.JSX.Element {
   const ref = useRef<HTMLIFrameElement>(null)
+  const observers = useRef<ResizeObserver[]>([])
   const [height, setHeight] = useState(120)
+  useEffect(() => () => observers.current.forEach((o) => o.disconnect()), [])
 
   const doc = useMemo(
     () =>
@@ -2227,7 +2230,9 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <base target="_blank">
 <style>
-  html { color-scheme: light; }
+  /* the frame is sized to its content and must never scroll on its own — the
+     message pane is the only scroller (two nested scrollbars otherwise) */
+  html { color-scheme: light; overflow: hidden; }
   body { margin: 0; padding: 12px; background: #fff; color: #111;
          font: 13px/1.45 -apple-system, system-ui, sans-serif; word-break: break-word;
          overflow-x: hidden; word-wrap: break-word; }
@@ -2254,9 +2259,15 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
       body.style.boxSizing = 'border-box'
       body.style.transformOrigin = '0 0'
       body.style.transform = `scale(${s})`
-      setHeight(clamp(body.scrollHeight * s + 4, 40, 2000))
+      setHeight(Math.max(body.scrollHeight * s + 4, 40))
     } else {
-      setHeight(clamp(body.scrollHeight + 4, 40, 2000))
+      // undo a previous downscale — the pane may have widened past the content
+      body.style.width = ''
+      body.style.transform = ''
+      // no +4 slack here: with a viewport-tracking body (height:100% email CSS)
+      // scrollHeight follows the frame height, and any positive slack compounds
+      // through the ResizeObserver into unbounded growth
+      setHeight(Math.max(body.scrollHeight, 40))
     }
   }
 
@@ -2264,8 +2275,17 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
     measure()
     // images may finish after the load event; settle once more
     setTimeout(measure, 500)
-    const cdoc = ref.current?.contentDocument
-    if (!cdoc) return
+    const frame = ref.current
+    const cdoc = frame?.contentDocument
+    if (!frame || !cdoc?.body) return
+    // keep the height honest as images stream in and the pane is resized —
+    // a stale height is what brings the frame's own scrollbar back
+    observers.current.forEach((o) => o.disconnect())
+    const body = new ResizeObserver(measure)
+    body.observe(cdoc.body)
+    const pane = new ResizeObserver(measure)
+    pane.observe(frame)
+    observers.current = [body, pane]
     cdoc.addEventListener('click', (e) => {
       const a = (e.target as Element | null)?.closest?.('a')
       if (a?.href) {
@@ -2297,7 +2317,25 @@ function LinkSenderPopover({
   onDone: () => void
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState(false)
   const { data: persons } = useInvoke('people:list', [{ search: query || undefined }], ['people'])
+  const createName = query.trim() || m.sender_name || ''
+  const create = async (): Promise<void> => {
+    if (creating || !createName) return
+    setCreating(true)
+    try {
+      // gmail handles are addresses worth keeping on the contact; whatsapp/slack
+      // handles are opaque ids (lid numbers, U…) that would show up as junk
+      const p = await api.invoke('people:upsert', {
+        name: createName,
+        ...(m.provider === 'gmail' ? { email: m.sender_handle } : {})
+      })
+      await api.invoke('comms:linkSender', m.provider, m.sender_handle, p.id)
+      onDone()
+    } finally {
+      setCreating(false)
+    }
+  }
   return (
     <div className="absolute top-5 left-0 z-30 w-60 bg-overlay border border-border-strong rounded-lg shadow-xl p-2 space-y-1.5">
       <Input
@@ -2324,6 +2362,18 @@ function LinkSenderPopover({
         ))}
         {persons?.length === 0 && <p className="px-2 py-1 text-[11.5px] text-faint">no matches</p>}
       </div>
+      {createName && (
+        <button
+          className="w-full flex items-center gap-1.5 px-2 py-1 rounded text-[12.5px] text-accent hover:bg-raised border-t border-border pt-1.5 disabled:opacity-60"
+          disabled={creating}
+          onClick={() => void create()}
+        >
+          <UserPlus size={12} className="shrink-0" />
+          <span className="truncate">
+            {creating ? 'creating…' : `new contact “${createName}”`}
+          </span>
+        </button>
+      )}
     </div>
   )
 }

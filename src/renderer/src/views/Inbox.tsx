@@ -277,12 +277,20 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   // and without the snapshot React would yank the row mid-fold (the "snap").
   const [leaving, setLeaving] = useState<ReadonlyMap<string, CommsThreadListItem>>(new Map())
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set())
+  // an undo landing INSIDE the 240ms fold would otherwise lose to the deferred
+  // setHiddenIds — the fold continuation checks (and consumes) this set
+  const cancelledRemovals = useRef(new Set<string>())
   // which mobile row has its swipe actions revealed (one at a time, like iOS Mail)
   const [swipedId, setSwipedId] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [mode, setMode] = useState<'threads' | 'channels' | 'compose'>('threads')
-  // undo-send restore: an undone new-email lands back in the compose pane
-  const [composeDraft, setComposeDraft] = useState<ComposeDraft | null>(null)
+  // undo-send restore: an undone new-email lands back in the compose pane.
+  // The nonce keys ComposePane so a restore remounts it even when a blank
+  // pane is already open (state initializers only read the draft at mount).
+  const [composeDraft, setComposeDraft] = useState<{
+    draft: ComposeDraft
+    nonce: number
+  } | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [labelFilter, setLabelFilter] = useState<string | null>(null)
 
@@ -385,6 +393,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     action: () => Promise<{ ok: true } | { ok: false; message: string }>
   ): void => {
     if (leaving.has(t.id)) return
+    cancelledRemovals.current.delete(t.id) // stale flag from an earlier undo
     const list = (displayThreads ?? []).filter((x) => !leaving.has(x.id))
     const idx = list.findIndex((x) => x.id === t.id)
     const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1] ?? null) : null
@@ -393,13 +402,15 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     const pending = action()
     void (async () => {
       await fold
-      // the row is at zero height now — drop it for real; the swap is invisible
-      setHiddenIds((prev) => new Set(prev).add(t.id))
       setLeaving((prev) => {
         const m = new Map(prev)
         m.delete(t.id)
         return m
       })
+      // undone mid-fold: the row springs back — don't hide, don't advance
+      if (cancelledRemovals.current.delete(t.id)) return
+      // the row is at zero height now — drop it for real; the swap is invisible
+      setHiddenIds((prev) => new Set(prev).add(t.id))
       // advance only when the removed thread was the open one — a list-row
       // swipe on mobile must stay on the list, not surprise-open a thread
       if (threadId === t.id) {
@@ -427,8 +438,10 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   }, [threads, hiddenIds])
 
   /** undo path: the refetch brings the row back, but hiddenIds keeps ids that
-   *  are still present in the data — clear explicitly or the row stays hidden */
+   *  are still present in the data — clear explicitly or the row stays hidden.
+   *  The cancel flag covers an undo that lands while the fold is still running. */
   const unhide = (id: string): void => {
+    cancelledRemovals.current.add(id)
     setHiddenIds((prev) => {
       const s = new Set(prev)
       s.delete(id)
@@ -895,11 +908,12 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
       <div className="flex-1 min-w-0 flex flex-col">
         {mode === 'compose' && selectedAccount ? (
           <ComposePane
+            key={composeDraft ? `draft-${composeDraft.nonce}` : 'blank'}
             account={selectedAccount}
-            draft={composeDraft}
+            draft={composeDraft?.draft ?? null}
             onSent={() => setMode('threads')}
             onUndoRestore={(d) => {
-              setComposeDraft(d)
+              setComposeDraft((prev) => ({ draft: d, nonce: (prev?.nonce ?? 0) + 1 }))
               setMode('compose')
             }}
           />
@@ -2435,6 +2449,19 @@ function LinkSenderPopover({
   )
 }
 
+/** Reply restoration must outlive the Composer that scheduled the send:
+ *  ThreadPane is keyed by thread id, so switching threads unmounts it and a
+ *  setState captured in the undo closure would silently no-op. Live composers
+ *  register a restorer; restores for unmounted ones stash until remount. */
+const replyRestorers = new Map<string, (text: string) => void>()
+const replyRestoreStash = new Map<string, string>()
+
+function restoreReply(threadId: string, text: string): void {
+  const live = replyRestorers.get(threadId)
+  if (live) live(text)
+  else replyRestoreStash.set(threadId, text)
+}
+
 function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
   const mobile = useIsMobile()
   const [body, setBody] = useState('')
@@ -2442,6 +2469,20 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
   const [aiOpen, setAiOpen] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [drafting, setDrafting] = useState(false)
+
+  useEffect(() => {
+    const merge = (text: string): void =>
+      setBody((prev) => (prev.trim() ? `${text}\n\n${prev}` : text))
+    const stashed = replyRestoreStash.get(thread.id)
+    if (stashed !== undefined) {
+      replyRestoreStash.delete(thread.id)
+      merge(stashed)
+    }
+    replyRestorers.set(thread.id, merge)
+    return () => {
+      replyRestorers.delete(thread.id)
+    }
+  }, [thread.id])
 
   /** deferred behind the undo window — ⌘Z within it pulls the text back */
   const send = (): void => {
@@ -2457,10 +2498,14 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
         void api
           .invoke('comms:send', { accountId: thread.account_id, threadId: thread.id, body: text })
           .then((res) => {
-            if (!res.ok) toast({ variant: 'error', text: 'Send failed', detail: res.message })
+            if (!res.ok) {
+              // the draft must survive a failed send, wherever the user is now
+              restoreReply(thread.id, text)
+              toast({ variant: 'error', text: 'Send failed', detail: res.message })
+            }
           })
       },
-      revert: () => setBody((prev) => (prev.trim() ? `${text}\n\n${prev}` : text))
+      revert: () => restoreReply(thread.id, text)
     })
   }
 
@@ -2574,7 +2619,12 @@ function ComposePane({
             body: body.trim()
           })
           .then((res) => {
-            if (!res.ok) toast({ variant: 'error', text: 'Send failed', detail: res.message })
+            if (!res.ok) {
+              // reopen the pane with the full draft — a failed send must
+              // never cost the user their email
+              onUndoRestore(d)
+              toast({ variant: 'error', text: 'Send failed', detail: res.message })
+            }
           })
       },
       revert: () => onUndoRestore(d)

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { Check, CircleAlert, Loader2, X } from 'lucide-react'
 import { dismissToast, getToasts, subscribeToasts } from '../lib/toast'
+import { Linkified } from './Linkify'
 
 /** Draining arc showing how long an undo window has left. Starts full and
  *  empties linearly over `ms` (pathLength=1 + the undo-ring-drain keyframes). */
@@ -24,7 +25,6 @@ function CountdownRing({ ms }: { ms: number }): React.JSX.Element {
     </svg>
   )
 }
-import { Linkified } from './Linkify'
 
 /** Renders the global toast stack above every view (mounted once at the
  *  app root). Floating chrome → bg-overlay, per popover-opacity rule. */

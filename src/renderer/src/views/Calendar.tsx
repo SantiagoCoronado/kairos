@@ -25,7 +25,14 @@ const MODE_KEY = 'kairos.calendarMode'
 
 type CalendarMode = 'month' | 'week' | 'day'
 
-export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }): React.JSX.Element {
+export function CalendarView({
+  onNavigate,
+  focusDate
+}: {
+  onNavigate: (v: ViewId) => void
+  /** deep link (invite card "show in calendar") — new Date identity per jump */
+  focusDate?: Date | null
+}): React.JSX.Element {
   const mobile = useIsMobile()
   const [mode, setMode] = useState<CalendarMode>(() => {
     const stored = localStorage.getItem(MODE_KEY)
@@ -33,9 +40,17 @@ export function CalendarView({ onNavigate }: { onNavigate: (v: ViewId) => void }
     // a 7-column grid is unreadable at phone width — day is the usable default
     return mobile ? 'day' : 'month'
   })
-  const [anchor, setAnchor] = useState(() => new Date())
+  const [anchor, setAnchor] = useState(() => focusDate ?? new Date())
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [showCalendars, setShowCalendars] = useState(false)
+
+  useEffect(() => {
+    if (focusDate) {
+      setAnchor(focusDate)
+      setModePersist(mobile ? 'day' : 'week')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusDate])
 
   const setModePersist = (m: CalendarMode): void => {
     localStorage.setItem(MODE_KEY, m)

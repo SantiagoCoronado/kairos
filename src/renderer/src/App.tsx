@@ -92,6 +92,18 @@ export default function App(): React.JSX.Element {
     setView('chat')
   }
 
+  // "show in calendar" from invite cards — fresh Date identity each call so
+  // the calendar re-anchors even for the same day twice
+  const [calendarFocus, setCalendarFocus] = useState<Date | null>(null)
+  const openCalendarAt = (day: Date): void => {
+    setCalendarFocus(new Date(day))
+    setView('calendar')
+  }
+  // a later plain visit to the calendar must open on today, not the old jump
+  useEffect(() => {
+    if (view !== 'calendar') setCalendarFocus(null)
+  }, [view])
+
   // shrinking into the phone shell while on a desktop-only view strands the
   // user on a blank pane — snap home instead (also catches nav:goto deep links).
   // Terminal counts as hostable only when it's actually reachable here.
@@ -103,10 +115,10 @@ export default function App(): React.JSX.Element {
   const commonViews = (
     <>
       {view === 'today' && <TodayView onOpenPerson={openPerson} />}
-      {view === 'inbox' && <InboxView onOpenPerson={openPerson} />}
+      {view === 'inbox' && <InboxView onOpenPerson={openPerson} onOpenCalendar={openCalendarAt} />}
       {view === 'people' && <PeopleView selectedId={personId} onSelect={setPersonId} />}
       {view === 'notes' && <NotesView onOpenSession={openChatSession} />}
-      {view === 'calendar' && <CalendarView onNavigate={setView} />}
+      {view === 'calendar' && <CalendarView onNavigate={setView} focusDate={calendarFocus} />}
       {view === 'chat' && (
         <ChatView key={chatSessionId ?? 'default'} initialSessionId={chatSessionId} />
       )}

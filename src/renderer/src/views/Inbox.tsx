@@ -40,6 +40,7 @@ import { api, useInvoke } from '../lib/api'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
+import { InviteCard } from '../components/InviteCard'
 import { SettingsModal } from '../components/SettingsModal'
 import {
   GmailIcon,
@@ -257,7 +258,13 @@ function threadLabel(t: CommsThreadListItem): { name: string | null; title: stri
   return { name: t.person_name, title: t.title || '(untitled)' }
 }
 
-export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => void }): React.JSX.Element {
+export function InboxView({
+  onOpenPerson,
+  onOpenCalendar
+}: {
+  onOpenPerson?: (id: string) => void
+  onOpenCalendar?: (day: Date) => void
+}): React.JSX.Element {
   const mobile = useIsMobile()
   const [accountId, setAccountId] = useState<string | null>(null)
   // provider-wide view with no account selected ("All email" = every gmail inbox)
@@ -577,6 +584,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
               thread={thread}
               onBack={closeThread}
               onOpenPerson={onOpenPerson}
+              onOpenCalendar={onOpenCalendar}
               onArchive={() => archiveThread(thread)}
               onDelete={() => deleteThread(thread)}
               onMarkUnread={() => markUnread(thread)}
@@ -851,6 +859,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
             key={thread.id}
             thread={thread}
             onOpenPerson={onOpenPerson}
+            onOpenCalendar={onOpenCalendar}
             onArchive={() => archiveThread(thread)}
             onDelete={() => deleteThread(thread)}
             onMarkUnread={() => markUnread(thread)}
@@ -1609,6 +1618,7 @@ function ChannelManager({ account }: { account: CommsAccount }): React.JSX.Eleme
 function ThreadPane({
   thread,
   onOpenPerson,
+  onOpenCalendar,
   onArchive,
   onDelete,
   onMarkUnread,
@@ -1617,6 +1627,7 @@ function ThreadPane({
 }: {
   thread: CommsThreadListItem
   onOpenPerson?: (id: string) => void
+  onOpenCalendar?: (day: Date) => void
   /** fire-and-forget — the list owns the exit animation and error banner */
   onArchive: () => void
   onDelete: () => void
@@ -1760,6 +1771,7 @@ function ThreadPane({
             message={m}
             attachments={attachmentsByMessage.get(m.id)}
             onOpenPerson={onOpenPerson}
+            onOpenCalendar={onOpenCalendar}
           />
         ))}
         <div ref={bottomRef} />
@@ -1872,14 +1884,21 @@ function LabelMenu({ thread }: { thread: CommsThreadListItem }): React.JSX.Eleme
   )
 }
 
+const isInviteAtt = (a: CommsAttachment): boolean =>
+  a.mime_type?.startsWith('text/calendar') ||
+  a.mime_type?.startsWith('application/ics') ||
+  /\.ics$/i.test(a.filename ?? '')
+
 function MessageBubble({
   message: m,
   attachments,
-  onOpenPerson
+  onOpenPerson,
+  onOpenCalendar
 }: {
   message: CommsMessage
   attachments?: CommsAttachment[]
   onOpenPerson?: (id: string) => void
+  onOpenCalendar?: (day: Date) => void
 }): React.JSX.Element {
   const [linking, setLinking] = useState(false)
   const when = new Date(m.sent_at).toLocaleString(undefined, {
@@ -1891,9 +1910,15 @@ function MessageBubble({
   const html = m.body_html
   const audioAtts = attachments?.filter((a) => a.mime_type?.startsWith('audio/')) ?? []
   const imageAtts = attachments?.filter((a) => a.mime_type?.startsWith('image/')) ?? []
+  // invite emails often carry the same .ics twice (text/calendar part +
+  // application/ics attachment) — one card covers them all
+  const inviteAtts = attachments?.filter(isInviteAtt) ?? []
   const fileAtts =
     attachments?.filter(
-      (a) => !a.mime_type?.startsWith('audio/') && !a.mime_type?.startsWith('image/')
+      (a) =>
+        !a.mime_type?.startsWith('audio/') &&
+        !a.mime_type?.startsWith('image/') &&
+        !isInviteAtt(a)
     ) ?? []
   // a voice note's body is just the '[voice message]' placeholder — the
   // player replaces it rather than showing both; same for an uncaptioned
@@ -1962,6 +1987,9 @@ function MessageBubble({
       {imageAtts.map((a) => (
         <ImageThumb key={a.id} attachment={a} />
       ))}
+      {inviteAtts.length > 0 && (
+        <InviteCard attachment={inviteAtts[0]} onOpenCalendar={onOpenCalendar} />
+      )}
       {fileAtts.map((a) => (
         <AttachmentChip key={a.id} attachment={a} />
       ))}

@@ -33,6 +33,14 @@ export function ToastHost(): React.JSX.Element | null {
               </p>
             )}
           </div>
+          {t.action && (
+            <button
+              onClick={t.action.run}
+              className="shrink-0 text-[11.5px] text-accent hover:underline font-medium"
+            >
+              {t.action.label}
+            </button>
+          )}
           <button
             onClick={() => dismissToast(t.id)}
             className="shrink-0 text-faint hover:text-text"

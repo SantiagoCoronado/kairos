@@ -40,6 +40,7 @@ import { api, useInvoke } from '../lib/api'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
+import { Linkified } from '../components/Linkify'
 import { SettingsModal } from '../components/SettingsModal'
 import {
   GmailIcon,
@@ -1953,7 +1954,11 @@ function MessageBubble({
             m.is_me ? 'bg-accent/10 border border-accent/20' : 'bg-panel border border-border'
           )}
         >
-          {m.body_text || <span className="text-faint italic">(no text)</span>}
+          {m.body_text ? (
+            <Linkified text={m.body_text} />
+          ) : (
+            <span className="text-faint italic">(no text)</span>
+          )}
         </div>
       )}
       {audioAtts.map((a) => (

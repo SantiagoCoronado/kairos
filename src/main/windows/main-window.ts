@@ -55,7 +55,9 @@ export function createMainWindow(): BrowserWindow {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    // renderer content includes untrusted email HTML — only forward schemes
+    // that are safe to hand to the OS
+    if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 

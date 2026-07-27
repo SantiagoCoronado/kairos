@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { Check, CircleAlert, Loader2, X } from 'lucide-react'
 import { dismissToast, getToasts, subscribeToasts } from '../lib/toast'
+import { Linkified } from './Linkify'
 
 /** Renders the global toast stack above every view (mounted once at the
  *  app root). Floating chrome → bg-overlay, per popover-opacity rule. */
@@ -23,8 +24,14 @@ export function ToastHost(): React.JSX.Element | null {
             <CircleAlert size={15} className="text-danger shrink-0 mt-px" />
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[12.5px] text-text break-words">{t.text}</p>
-            {t.detail && <p className="text-[11px] text-faint truncate">{t.detail}</p>}
+            <p className="text-[12.5px] text-text break-words">
+              <Linkified text={t.text} />
+            </p>
+            {t.detail && (
+              <p className="text-[11px] text-faint truncate">
+                <Linkified text={t.detail} />
+              </p>
+            )}
           </div>
           <button
             onClick={() => dismissToast(t.id)}

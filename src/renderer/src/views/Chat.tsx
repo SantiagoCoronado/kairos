@@ -6,6 +6,7 @@ import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Button, cn } from '../components/ui'
 import { MicButton } from '../components/MicButton'
+import { Linkified } from '../components/Linkify'
 
 /** remote client: file bytes travel over HTTP into the Mac's staging dir —
  *  the native dialog and pathForFile only exist inside Electron */
@@ -422,7 +423,7 @@ export function ChatView({
                   ))}
                 </div>
               )}
-              {b.text}
+              <Linkified text={b.text} />
             </div>
           </div>
         ))}

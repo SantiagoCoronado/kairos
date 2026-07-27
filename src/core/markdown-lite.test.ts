@@ -1,7 +1,63 @@
 import { describe, it, expect } from 'vitest'
-import { parseMarkdown, parseInline } from './markdown-lite'
+import { parseMarkdown, parseInline, splitBareUrls } from './markdown-lite'
+
+describe('splitBareUrls', () => {
+  it('splits text around bare URLs', () => {
+    expect(splitBareUrls('see https://a.io/x and http://b.co')).toEqual([
+      { text: 'see ', url: false },
+      { text: 'https://a.io/x', url: true },
+      { text: ' and ', url: false },
+      { text: 'http://b.co', url: true }
+    ])
+  })
+
+  it('returns one literal segment when there is no URL', () => {
+    expect(splitBareUrls('no links here')).toEqual([{ text: 'no links here', url: false }])
+  })
+
+  it('leaves trailing prose punctuation out of the URL', () => {
+    expect(splitBareUrls('read https://a.io/doc.')).toEqual([
+      { text: 'read ', url: false },
+      { text: 'https://a.io/doc', url: true },
+      { text: '.', url: false }
+    ])
+    expect(splitBareUrls('(see https://a.io/doc)')).toEqual([
+      { text: '(see ', url: false },
+      { text: 'https://a.io/doc', url: true },
+      { text: ')', url: false }
+    ])
+  })
+
+  it('keeps balanced parens inside Wikipedia-style URLs', () => {
+    expect(splitBareUrls('https://en.wikipedia.org/wiki/Foo_(bar)')).toEqual([
+      { text: 'https://en.wikipedia.org/wiki/Foo_(bar)', url: true }
+    ])
+  })
+
+  it('does not linkify other schemes', () => {
+    expect(splitBareUrls('run javascript:alert(1) now')).toEqual([
+      { text: 'run javascript:alert(1) now', url: false }
+    ])
+  })
+})
 
 describe('markdown-lite inline', () => {
+  it('autolinks bare URLs in plain text', () => {
+    expect(parseInline('docs at https://a.io/x, then **https://b.co** too')).toEqual([
+      { kind: 'text', text: 'docs at ' },
+      { kind: 'link', href: 'https://a.io/x', children: [{ kind: 'text', text: 'https://a.io/x' }] },
+      { kind: 'text', text: ', then ' },
+      {
+        kind: 'bold',
+        children: [
+          { kind: 'link', href: 'https://b.co', children: [{ kind: 'text', text: 'https://b.co' }] }
+        ]
+      },
+      { kind: 'text', text: ' too' }
+    ])
+  })
+
+
   it('parses code, bold, italic, links, and plain text runs', () => {
     expect(parseInline('run `npm test` **now** or *later*, see [docs](https://x.y/z)')).toEqual([
       { kind: 'text', text: 'run ' },

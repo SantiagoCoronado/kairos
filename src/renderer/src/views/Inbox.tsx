@@ -40,6 +40,7 @@ import { api, useInvoke } from '../lib/api'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
+import { clamp, useResizableWidth, ResizeHandle } from '../components/ResizeHandle'
 import { SettingsModal } from '../components/SettingsModal'
 import {
   GmailIcon,
@@ -59,8 +60,6 @@ const LIST_W_KEY = 'kairos.inbox.listW'
 const RAIL_COLLAPSED_KEY = 'kairos.inbox.railCollapsed'
 const RAIL_W = { def: 176, min: 140, max: 280 }
 const LIST_W = { def: 320, min: 240, max: 480 }
-
-const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v))
 
 /* --- mobile swipe-to-reveal on thread rows --------------------------------
    Same touch plumbing as useCalendarDrag: Chromium only delivers cancelable
@@ -212,11 +211,6 @@ function PullToRefreshList({
   )
 }
 
-const storedWidth = (key: string, spec: { def: number; min: number; max: number }): number => {
-  const raw = Number(localStorage.getItem(key))
-  return Number.isFinite(raw) && raw > 0 ? clamp(raw, spec.min, spec.max) : spec.def
-}
-
 const timeAgo = (iso: string | null): string => {
   if (!iso) return ''
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000)
@@ -285,8 +279,8 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
   const [railCollapsed, setRailCollapsed] = useState(
     () => localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'
   )
-  const [railW, setRailW] = useState(() => storedWidth(RAIL_W_KEY, RAIL_W))
-  const [listW, setListW] = useState(() => storedWidth(LIST_W_KEY, LIST_W))
+  const { width: railW, startResize: startRailResize } = useResizableWidth(RAIL_W_KEY, RAIL_W)
+  const { width: listW, startResize: startListResize } = useResizableWidth(LIST_W_KEY, LIST_W)
 
   // debounced: title/snippet LIKE is cheap but body search scans message
   // bodies — don't run either on every keystroke
@@ -526,26 +520,6 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
     void api.invoke('comms:reorderAccount', draggedId, beforeId)
   }
 
-  const startResize = (e: React.MouseEvent, which: 'rail' | 'list'): void => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startW = which === 'rail' ? railW : listW
-    const spec = which === 'rail' ? RAIL_W : LIST_W
-    let latest = startW
-    const move = (ev: MouseEvent): void => {
-      latest = clamp(startW + ev.clientX - startX, spec.min, spec.max)
-      if (which === 'rail') setRailW(latest)
-      else setListW(latest)
-    }
-    const up = (): void => {
-      window.removeEventListener('mousemove', move)
-      window.removeEventListener('mouseup', up)
-      localStorage.setItem(which === 'rail' ? RAIL_W_KEY : LIST_W_KEY, String(latest))
-    }
-    window.addEventListener('mousemove', move)
-    window.addEventListener('mouseup', up)
-  }
-
   const toggleRail = (): void => {
     setRailCollapsed((c) => {
       localStorage.setItem(RAIL_COLLAPSED_KEY, c ? '0' : '1')
@@ -739,7 +713,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
             {railCollapsed ? <PanelLeftOpen size={13} /> : <PanelLeftClose size={13} />}
           </button>
         </div>
-        {!railCollapsed && <ResizeHandle onMouseDown={(e) => startResize(e, 'rail')} />}
+        {!railCollapsed && <ResizeHandle onMouseDown={startRailResize} />}
       </div>
 
       {/* thread list / channel manager */}
@@ -839,7 +813,7 @@ export function InboxView({ onOpenPerson }: { onOpenPerson?: (id: string) => voi
             </>
           )}
         </div>
-        <ResizeHandle onMouseDown={(e) => startResize(e, 'list')} />
+        <ResizeHandle onMouseDown={startListResize} />
       </div>
 
       {/* message pane */}
@@ -888,20 +862,6 @@ function MobileAccountChip({
     >
       {label}
     </button>
-  )
-}
-
-/** 4px grab strip over a column's right border. */
-function ResizeHandle({
-  onMouseDown
-}: {
-  onMouseDown: (e: React.MouseEvent) => void
-}): React.JSX.Element {
-  return (
-    <div
-      className="absolute top-0 right-0 h-full w-1 cursor-col-resize hover:bg-accent/30 z-10"
-      onMouseDown={onMouseDown}
-    />
   )
 }
 

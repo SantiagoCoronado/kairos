@@ -30,6 +30,7 @@ import type { AppSettings } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Select, Chip, Segmented, EmptyState, cn } from '../components/ui'
 import { Markdown } from '../components/Markdown'
+import { Linkified } from '../components/Linkify'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -829,7 +830,11 @@ function RunRow({
               {run.model && ` · ${run.model}`}
             </p>
           )}
-          {run.error && <p className="text-[12px] text-danger whitespace-pre-wrap">{run.error}</p>}
+          {run.error && (
+            <p className="text-[12px] text-danger whitespace-pre-wrap">
+              <Linkified text={run.error} />
+            </p>
+          )}
           {run.result && (
             <Markdown
               text={run.result}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
+import { useResizableWidth, ResizeHandle } from './ResizeHandle'
 import { useInvoke } from '../lib/api'
 import { useTerminalAvailable } from '../lib/mobile'
 
@@ -38,6 +39,9 @@ export function SidebarToggle({
   )
 }
 
+const SIDEBAR_W_KEY = 'kairos.sidebar.w'
+const SIDEBAR_W = { def: 208, min: 160, max: 320 }
+
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
   { id: 'inbox', label: 'Inbox', icon: Inbox },
@@ -69,8 +73,12 @@ export function Sidebar({
   const terminalOk = useTerminalAvailable()
   const { data: termAttention } = useInvoke('terminal:attentionCount', [], ['terminal'], terminalOk)
   const nav = terminalOk ? NAV : NAV.filter((n) => n.id !== 'terminal')
+  const { width, startResize } = useResizableWidth(SIDEBAR_W_KEY, SIDEBAR_W)
   return (
-    <aside className="w-52 shrink-0 border-r border-border surface-sidebar flex flex-col select-none">
+    <aside
+      className="relative shrink-0 border-r border-border surface-sidebar flex flex-col select-none"
+      style={{ width }}
+    >
       {/* space for macOS traffic lights */}
       <div className="drag-region h-11 shrink-0 relative">
         <SidebarToggle hidden={false} onToggle={onHide} />
@@ -137,6 +145,7 @@ export function Sidebar({
         </button>
       </div>
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      <ResizeHandle onMouseDown={startResize} />
     </aside>
   )
 }

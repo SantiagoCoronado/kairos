@@ -38,9 +38,13 @@ import type {
 import { COMMS_LABELS } from '../../../core/labels'
 import { api, useInvoke } from '../lib/api'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
+import { pushUndo } from '../lib/undo'
+import { toast } from '../lib/toast'
 import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
 import { InviteCard } from '../components/InviteCard'
+import { Linkified } from '../components/Linkify'
+import { clamp, useResizableWidth, ResizeHandle } from '../components/ResizeHandle'
 import { SettingsModal } from '../components/SettingsModal'
 import {
   GmailIcon,
@@ -60,8 +64,6 @@ const LIST_W_KEY = 'kairos.inbox.listW'
 const RAIL_COLLAPSED_KEY = 'kairos.inbox.railCollapsed'
 const RAIL_W = { def: 176, min: 140, max: 280 }
 const LIST_W = { def: 320, min: 240, max: 480 }
-
-const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v))
 
 /* --- mobile swipe-to-reveal on thread rows --------------------------------
    Same touch plumbing as useCalendarDrag: Chromium only delivers cancelable
@@ -213,11 +215,6 @@ function PullToRefreshList({
   )
 }
 
-const storedWidth = (key: string, spec: { def: number; min: number; max: number }): number => {
-  const raw = Number(localStorage.getItem(key))
-  return Number.isFinite(raw) && raw > 0 ? clamp(raw, spec.min, spec.max) : spec.def
-}
-
 const timeAgo = (iso: string | null): string => {
   if (!iso) return ''
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000)
@@ -282,18 +279,28 @@ export function InboxView({
   // and without the snapshot React would yank the row mid-fold (the "snap").
   const [leaving, setLeaving] = useState<ReadonlyMap<string, CommsThreadListItem>>(new Map())
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set())
+  // an undo landing INSIDE the 240ms fold would otherwise lose to the deferred
+  // setHiddenIds — the fold continuation checks (and consumes) this set
+  const cancelledRemovals = useRef(new Set<string>())
   // which mobile row has its swipe actions revealed (one at a time, like iOS Mail)
   const [swipedId, setSwipedId] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [mode, setMode] = useState<'threads' | 'channels' | 'compose'>('threads')
+  // undo-send restore: an undone new-email lands back in the compose pane.
+  // The nonce keys ComposePane so a restore remounts it even when a blank
+  // pane is already open (state initializers only read the draft at mount).
+  const [composeDraft, setComposeDraft] = useState<{
+    draft: ComposeDraft
+    nonce: number
+  } | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [labelFilter, setLabelFilter] = useState<string | null>(null)
 
   const [railCollapsed, setRailCollapsed] = useState(
     () => localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'
   )
-  const [railW, setRailW] = useState(() => storedWidth(RAIL_W_KEY, RAIL_W))
-  const [listW, setListW] = useState(() => storedWidth(LIST_W_KEY, LIST_W))
+  const { width: railW, startResize: startRailResize } = useResizableWidth(RAIL_W_KEY, RAIL_W)
+  const { width: listW, startResize: startListResize } = useResizableWidth(LIST_W_KEY, LIST_W)
 
   // debounced: title/snippet LIKE is cheap but body search scans message
   // bodies — don't run either on every keystroke
@@ -388,6 +395,7 @@ export function InboxView({
     action: () => Promise<{ ok: true } | { ok: false; message: string }>
   ): void => {
     if (leaving.has(t.id)) return
+    cancelledRemovals.current.delete(t.id) // stale flag from an earlier undo
     const list = (displayThreads ?? []).filter((x) => !leaving.has(x.id))
     const idx = list.findIndex((x) => x.id === t.id)
     const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1] ?? null) : null
@@ -396,13 +404,15 @@ export function InboxView({
     const pending = action()
     void (async () => {
       await fold
-      // the row is at zero height now — drop it for real; the swap is invisible
-      setHiddenIds((prev) => new Set(prev).add(t.id))
       setLeaving((prev) => {
         const m = new Map(prev)
         m.delete(t.id)
         return m
       })
+      // undone mid-fold: the row springs back — don't hide, don't advance
+      if (cancelledRemovals.current.delete(t.id)) return
+      // the row is at zero height now — drop it for real; the swap is invisible
+      setHiddenIds((prev) => new Set(prev).add(t.id))
       // advance only when the removed thread was the open one — a list-row
       // swipe on mobile must stay on the list, not surprise-open a thread
       if (threadId === t.id) {
@@ -429,11 +439,47 @@ export function InboxView({
     if (still.length !== hiddenIds.size) setHiddenIds(new Set(still))
   }, [threads, hiddenIds])
 
-  const archiveThread = (t: CommsThreadListItem): void =>
-    removeWithAnimation(t, () => api.invoke('comms:archiveThread', t.id, t.is_archived !== 1))
+  /** undo path: the refetch brings the row back, but hiddenIds keeps ids that
+   *  are still present in the data — clear explicitly or the row stays hidden.
+   *  The cancel flag covers an undo that lands while the fold is still running. */
+  const unhide = (id: string): void => {
+    cancelledRemovals.current.add(id)
+    setHiddenIds((prev) => {
+      const s = new Set(prev)
+      s.delete(id)
+      return s
+    })
+  }
 
-  const deleteThread = (t: CommsThreadListItem): void =>
-    removeWithAnimation(t, () => api.invoke('comms:deleteThread', t.id))
+  const archiveThread = (t: CommsThreadListItem): void => {
+    const toArchived = t.is_archived !== 1
+    removeWithAnimation(t, () => api.invoke('comms:archiveThread', t.id, toArchived))
+    pushUndo({
+      label: toArchived ? 'Conversation archived' : 'Conversation unarchived',
+      revert: () => {
+        unhide(t.id)
+        void api.invoke('comms:archiveThread', t.id, !toArchived)
+      }
+    })
+  }
+
+  /** deferred: the row folds away now, the provider delete runs only when the
+   *  undo window closes — Gmail trash has no untrash path in the app */
+  const deleteThread = (t: CommsThreadListItem): void => {
+    removeWithAnimation(t, () => Promise.resolve({ ok: true as const }))
+    pushUndo({
+      label: 'Conversation deleted',
+      commit: () => {
+        void api.invoke('comms:deleteThread', t.id).then((res) => {
+          if (!res.ok) {
+            unhide(t.id)
+            toast({ variant: 'error', text: 'Delete failed', detail: res.message })
+          }
+        })
+      },
+      revert: () => unhide(t.id)
+    })
+  }
 
   /** mark unread but keep it open — the badge flips, reading continues */
   const markUnread = (t: CommsThreadListItem): void => {
@@ -447,6 +493,13 @@ export function InboxView({
     // thread is only in the list via the snapshot (e.g. under the Unread filter)
     setHeldThread((h) => (h && h.id === t.id ? { ...h, pinned: next ? 1 : 0 } : h))
     void api.invoke('comms:pinThread', t.id, next)
+    pushUndo({
+      label: next ? 'Conversation pinned' : 'Conversation unpinned',
+      revert: () => {
+        setHeldThread((h) => (h && h.id === t.id ? { ...h, pinned: t.pinned } : h))
+        void api.invoke('comms:pinThread', t.id, !next)
+      }
+    })
   }
 
   /** pull-to-refresh: kick a sync, resolve when the resulting db:changed
@@ -513,6 +566,7 @@ export function InboxView({
         document.getElementById('inbox-search')?.focus()
       } else if (e.key === 'c' && selectedAccount?.provider === 'gmail') {
         e.preventDefault()
+        setComposeDraft(null)
         setMode('compose')
       }
     }
@@ -531,26 +585,6 @@ export function InboxView({
       beforeId = rest[i + 1]?.id ?? null
     }
     void api.invoke('comms:reorderAccount', draggedId, beforeId)
-  }
-
-  const startResize = (e: React.MouseEvent, which: 'rail' | 'list'): void => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startW = which === 'rail' ? railW : listW
-    const spec = which === 'rail' ? RAIL_W : LIST_W
-    let latest = startW
-    const move = (ev: MouseEvent): void => {
-      latest = clamp(startW + ev.clientX - startX, spec.min, spec.max)
-      if (which === 'rail') setRailW(latest)
-      else setListW(latest)
-    }
-    const up = (): void => {
-      window.removeEventListener('mousemove', move)
-      window.removeEventListener('mouseup', up)
-      localStorage.setItem(which === 'rail' ? RAIL_W_KEY : LIST_W_KEY, String(latest))
-    }
-    window.addEventListener('mousemove', move)
-    window.addEventListener('mouseup', up)
   }
 
   const toggleRail = (): void => {
@@ -747,7 +781,7 @@ export function InboxView({
             {railCollapsed ? <PanelLeftOpen size={13} /> : <PanelLeftClose size={13} />}
           </button>
         </div>
-        {!railCollapsed && <ResizeHandle onMouseDown={(e) => startResize(e, 'rail')} />}
+        {!railCollapsed && <ResizeHandle onMouseDown={startRailResize} />}
       </div>
 
       {/* thread list / channel manager */}
@@ -784,7 +818,10 @@ export function InboxView({
             )}
             {selectedAccount?.provider === 'gmail' && (
               <button
-                onClick={() => setMode(mode === 'compose' ? 'threads' : 'compose')}
+                onClick={() => {
+                  if (mode !== 'compose') setComposeDraft(null)
+                  setMode(mode === 'compose' ? 'threads' : 'compose')
+                }}
                 className={cn(
                   'px-2 py-1 rounded text-[11.5px] border transition-colors inline-flex items-center gap-1',
                   mode === 'compose'
@@ -847,13 +884,22 @@ export function InboxView({
             </>
           )}
         </div>
-        <ResizeHandle onMouseDown={(e) => startResize(e, 'list')} />
+        <ResizeHandle onMouseDown={startListResize} />
       </div>
 
       {/* message pane */}
       <div className="flex-1 min-w-0 flex flex-col">
         {mode === 'compose' && selectedAccount ? (
-          <ComposePane account={selectedAccount} onSent={() => setMode('threads')} />
+          <ComposePane
+            key={composeDraft ? `draft-${composeDraft.nonce}` : 'blank'}
+            account={selectedAccount}
+            draft={composeDraft?.draft ?? null}
+            onSent={() => setMode('threads')}
+            onUndoRestore={(d) => {
+              setComposeDraft((prev) => ({ draft: d, nonce: (prev?.nonce ?? 0) + 1 }))
+              setMode('compose')
+            }}
+          />
         ) : thread ? (
           <ThreadPane
             key={thread.id}
@@ -897,20 +943,6 @@ function MobileAccountChip({
     >
       {label}
     </button>
-  )
-}
-
-/** 4px grab strip over a column's right border. */
-function ResizeHandle({
-  onMouseDown
-}: {
-  onMouseDown: (e: React.MouseEvent) => void
-}): React.JSX.Element {
-  return (
-    <div
-      className="absolute top-0 right-0 h-full w-1 cursor-col-resize hover:bg-accent/30 z-10"
-      onMouseDown={onMouseDown}
-    />
   )
 }
 
@@ -1980,7 +2012,11 @@ function MessageBubble({
             m.is_me ? 'bg-accent/10 border border-accent/20' : 'bg-panel border border-border'
           )}
         >
-          {m.body_text || <span className="text-faint italic">(no text)</span>}
+          {m.body_text ? (
+            <Linkified text={m.body_text} />
+          ) : (
+            <span className="text-faint italic">(no text)</span>
+          )}
         </div>
       )}
       {audioAtts.map((a) => (
@@ -2408,28 +2444,64 @@ function LinkSenderPopover({
   )
 }
 
+/** Reply restoration must outlive the Composer that scheduled the send:
+ *  ThreadPane is keyed by thread id, so switching threads unmounts it and a
+ *  setState captured in the undo closure would silently no-op. Live composers
+ *  register a restorer; restores for unmounted ones stash until remount. */
+const replyRestorers = new Map<string, (text: string) => void>()
+const replyRestoreStash = new Map<string, string>()
+
+function restoreReply(threadId: string, text: string): void {
+  const live = replyRestorers.get(threadId)
+  if (live) live(text)
+  else replyRestoreStash.set(threadId, text)
+}
+
 function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
   const mobile = useIsMobile()
   const [body, setBody] = useState('')
-  const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [drafting, setDrafting] = useState(false)
 
-  const send = async (): Promise<void> => {
+  useEffect(() => {
+    const merge = (text: string): void =>
+      setBody((prev) => (prev.trim() ? `${text}\n\n${prev}` : text))
+    const stashed = replyRestoreStash.get(thread.id)
+    if (stashed !== undefined) {
+      replyRestoreStash.delete(thread.id)
+      merge(stashed)
+    }
+    replyRestorers.set(thread.id, merge)
+    return () => {
+      replyRestorers.delete(thread.id)
+    }
+  }, [thread.id])
+
+  /** deferred behind the undo window — ⌘Z within it pulls the text back */
+  const send = (): void => {
     const text = body.trim()
-    if (!text || sending) return
-    setSending(true)
+    if (!text) return
+    setBody('')
     setError(null)
-    const res = await api.invoke('comms:send', {
-      accountId: thread.account_id,
-      threadId: thread.id,
-      body: text
+    // ⌘Z must reach the undo layer, not the textarea's native text undo
+    document.getElementById('inbox-reply')?.blur()
+    pushUndo({
+      label: 'Reply sent',
+      commit: () => {
+        void api
+          .invoke('comms:send', { accountId: thread.account_id, threadId: thread.id, body: text })
+          .then((res) => {
+            if (!res.ok) {
+              // the draft must survive a failed send, wherever the user is now
+              restoreReply(thread.id, text)
+              toast({ variant: 'error', text: 'Send failed', detail: res.message })
+            }
+          })
+      },
+      revert: () => restoreReply(thread.id, text)
     })
-    setSending(false)
-    if (res.ok) setBody('')
-    else setError(res.message)
   }
 
   // only ever runs when the user presses Draft — never automatic
@@ -2484,7 +2556,7 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault()
-              void send()
+              send()
             }
             if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur()
           }}
@@ -2501,41 +2573,58 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
         >
           <Sparkles size={14} />
         </button>
-        <Button variant="accent" disabled={!body.trim() || sending} onClick={() => void send()}>
+        <Button variant="accent" disabled={!body.trim()} onClick={send}>
           <Send size={13} className="inline mr-1" />
-          {sending ? 'sending…' : 'send'}
+          send
         </Button>
       </div>
     </div>
   )
 }
 
+type ComposeDraft = { to: string; subject: string; body: string }
+
 function ComposePane({
   account,
-  onSent
+  draft,
+  onSent,
+  onUndoRestore
 }: {
   account: CommsAccount
+  /** restored fields from an undone send */
+  draft?: ComposeDraft | null
   onSent: () => void
+  onUndoRestore: (d: ComposeDraft) => void
 }): React.JSX.Element {
-  const [to, setTo] = useState('')
-  const [subject, setSubject] = useState('')
-  const [body, setBody] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [to, setTo] = useState(draft?.to ?? '')
+  const [subject, setSubject] = useState(draft?.subject ?? '')
+  const [body, setBody] = useState(draft?.body ?? '')
 
-  const send = async (): Promise<void> => {
-    if (sending) return
-    setSending(true)
-    setError(null)
-    const res = await api.invoke('comms:send', {
-      accountId: account.id,
-      to: to.split(',').map((s) => s.trim()).filter(Boolean),
-      subject: subject.trim(),
-      body: body.trim()
+  /** deferred behind the undo window — ⌘Z reopens the pane with the draft */
+  const send = (): void => {
+    const d = { to, subject, body }
+    pushUndo({
+      label: 'Email sent',
+      commit: () => {
+        void api
+          .invoke('comms:send', {
+            accountId: account.id,
+            to: to.split(',').map((s) => s.trim()).filter(Boolean),
+            subject: subject.trim(),
+            body: body.trim()
+          })
+          .then((res) => {
+            if (!res.ok) {
+              // reopen the pane with the full draft — a failed send must
+              // never cost the user their email
+              onUndoRestore(d)
+              toast({ variant: 'error', text: 'Send failed', detail: res.message })
+            }
+          })
+      },
+      revert: () => onUndoRestore(d)
     })
-    setSending(false)
-    if (res.ok) onSent()
-    else setError(res.message)
+    onSent()
   }
 
   return (
@@ -2562,15 +2651,14 @@ function ComposePane({
         value={body}
         onChange={(e) => setBody(e.target.value)}
       />
-      {error && <p className="text-[11.5px] text-danger">{error}</p>}
       <div className="flex justify-end">
         <Button
           variant="accent"
-          disabled={!to.trim() || !subject.trim() || !body.trim() || sending}
-          onClick={() => void send()}
+          disabled={!to.trim() || !subject.trim() || !body.trim()}
+          onClick={send}
         >
           <Send size={13} className="inline mr-1" />
-          {sending ? 'sending…' : 'send'}
+          send
         </Button>
       </div>
     </div>

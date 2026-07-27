@@ -34,23 +34,69 @@ const MAX_INLINE_DEPTH = 8
 /** only schemes safe to hand to shell.openExternal render as links */
 const SAFE_HREF_RE = /^(https?:|mailto:)/i
 
-export function parseInline(text: string, depth = 0): MdInline[] {
+// exclude <> so angle-bracket autolinks (`<https://a.io>`) keep their brackets
+const BARE_URL_RE = /https?:\/\/[^\s<>]+/g
+
+/** Split text into literal and bare-URL segments. Trailing punctuation is
+ *  almost always prose, not URL; a ')' only stays while parens are balanced
+ *  (Wikipedia-style URLs). */
+export function splitBareUrls(text: string): { text: string; url: boolean }[] {
+  const out: { text: string; url: boolean }[] = []
+  let last = 0
+  for (const m of text.matchAll(BARE_URL_RE)) {
+    let url = m[0]
+    for (;;) {
+      const ch = url[url.length - 1]
+      if ('.,;:!?\'"'.includes(ch)) url = url.slice(0, -1)
+      else if (
+        ch === ')' &&
+        (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0)
+      )
+        url = url.slice(0, -1)
+      else break
+    }
+    if (m.index > last) out.push({ text: text.slice(last, m.index), url: false })
+    out.push({ text: url, url: true })
+    last = m.index + url.length
+  }
+  if (last < text.length) out.push({ text: text.slice(last), url: false })
+  return out
+}
+
+/** push literal text, autolinking bare URLs unless already inside a link
+ *  (`[https://a](https://b)` must not nest an anchor in an anchor) */
+function pushText(out: MdInline[], text: string, autolink: boolean): void {
+  if (!autolink) {
+    out.push({ kind: 'text', text })
+    return
+  }
+  for (const seg of splitBareUrls(text)) {
+    if (seg.url)
+      out.push({ kind: 'link', href: seg.text, children: [{ kind: 'text', text: seg.text }] })
+    else out.push({ kind: 'text', text: seg.text })
+  }
+}
+
+export function parseInline(text: string, depth = 0, autolink = true): MdInline[] {
   if (depth >= MAX_INLINE_DEPTH) return [{ kind: 'text', text }]
   const out: MdInline[] = []
   let rest = text
   while (rest.length > 0) {
     const m = INLINE_RE.exec(rest)
     if (!m) {
-      out.push({ kind: 'text', text: rest })
+      pushText(out, rest, autolink)
       break
     }
-    if (m.index > 0) out.push({ kind: 'text', text: rest.slice(0, m.index) })
+    if (m.index > 0) pushText(out, rest.slice(0, m.index), autolink)
     if (m[2] !== undefined) out.push({ kind: 'code', text: m[2] })
-    else if (m[3] !== undefined) out.push({ kind: 'bold', children: parseInline(m[3], depth + 1) })
-    else if (m[4] !== undefined) out.push({ kind: 'italic', children: parseInline(m[4], depth + 1) })
-    else if (m[5] !== undefined) out.push({ kind: 'italic', children: parseInline(m[5], depth + 1) })
+    else if (m[3] !== undefined)
+      out.push({ kind: 'bold', children: parseInline(m[3], depth + 1, autolink) })
+    else if (m[4] !== undefined)
+      out.push({ kind: 'italic', children: parseInline(m[4], depth + 1, autolink) })
+    else if (m[5] !== undefined)
+      out.push({ kind: 'italic', children: parseInline(m[5], depth + 1, autolink) })
     else if (SAFE_HREF_RE.test(m[7])) {
-      out.push({ kind: 'link', href: m[7], children: parseInline(m[6], depth + 1) })
+      out.push({ kind: 'link', href: m[7], children: parseInline(m[6], depth + 1, false) })
     } else {
       // javascript:/file:/custom schemes stay visible, inert text
       out.push({ kind: 'text', text: m[0] })

@@ -15,6 +15,7 @@ import { ChatView } from './views/Chat'
 import { TerminalView } from './views/Terminal'
 import { api } from './lib/api'
 import { applyTranslucency } from './lib/translucency'
+import { undoLast } from './lib/undo'
 
 const SIDEBAR_KEY = 'kairos.sidebarHidden'
 const VIEW_ORDER: ViewId[] = [
@@ -76,6 +77,14 @@ export default function App(): React.JSX.Element {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && n >= 1 && n <= VIEW_ORDER.length) {
         e.preventDefault()
         setView(VIEW_ORDER[n - 1])
+      }
+      // ⌘Z undoes the newest pending inbox action — but inside a text field
+      // native text undo must win
+      if (e.key === 'z' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+        const el = document.activeElement as HTMLElement | null
+        const typing =
+          el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+        if (!typing && undoLast()) e.preventDefault()
       }
     }
     window.addEventListener('keydown', down)

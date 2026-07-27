@@ -3,6 +3,29 @@ import { Check, CircleAlert, Loader2, X } from 'lucide-react'
 import { dismissToast, getToasts, subscribeToasts } from '../lib/toast'
 import { Linkified } from './Linkify'
 
+/** Draining arc showing how long an undo window has left. Starts full and
+ *  empties linearly over `ms` (pathLength=1 + the undo-ring-drain keyframes). */
+function CountdownRing({ ms }: { ms: number }): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" className="shrink-0 mt-px -rotate-90 text-accent">
+      <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="2" />
+      <circle
+        cx="8"
+        cy="8"
+        r="6.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        pathLength={1}
+        strokeDasharray="1"
+        strokeDashoffset="0"
+        style={{ animation: `undo-ring-drain ${ms}ms linear forwards` }}
+      />
+    </svg>
+  )
+}
+
 /** Renders the global toast stack above every view (mounted once at the
  *  app root). Floating chrome → bg-overlay, per popover-opacity rule. */
 export function ToastHost(): React.JSX.Element | null {
@@ -16,12 +39,18 @@ export function ToastHost(): React.JSX.Element | null {
           key={t.id}
           className="pointer-events-auto w-[340px] flex items-start gap-2.5 rounded-lg border border-border-strong bg-overlay shadow-2xl px-3.5 py-2.5"
         >
-          {t.variant === 'working' && (
-            <Loader2 size={15} className="text-accent animate-spin shrink-0 mt-px" />
-          )}
-          {t.variant === 'success' && <Check size={15} className="text-ok shrink-0 mt-px" />}
-          {t.variant === 'error' && (
-            <CircleAlert size={15} className="text-danger shrink-0 mt-px" />
+          {t.countdownMs ? (
+            <CountdownRing ms={t.countdownMs} />
+          ) : (
+            <>
+              {t.variant === 'working' && (
+                <Loader2 size={15} className="text-accent animate-spin shrink-0 mt-px" />
+              )}
+              {t.variant === 'success' && <Check size={15} className="text-ok shrink-0 mt-px" />}
+              {t.variant === 'error' && (
+                <CircleAlert size={15} className="text-danger shrink-0 mt-px" />
+              )}
+            </>
           )}
           <div className="min-w-0 flex-1">
             <p className="text-[12.5px] text-text break-words">

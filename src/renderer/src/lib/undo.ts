@@ -53,6 +53,7 @@ export function pushUndo(opts: {
     variant: 'success',
     text: opts.label,
     timeoutMs: windowMs,
+    countdownMs: windowMs,
     action: { label: 'Undo ⌘Z', run: () => undoEntry(id) }
   })
   const timer = setTimeout(() => expire(id), windowMs)

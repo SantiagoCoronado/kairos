@@ -496,12 +496,24 @@ export class CommsSyncManager {
       body_text: input.body,
       source: 'app'
     })
-    const [claimed] = repo.claimQueued(this.db, 1)
-    // the 3 s drain may already have grabbed it; either way it gets delivered
-    if (claimed && claimed.id === item.id) {
-      const err = await this.dispatch(claimed.id)
+    // claim our own item by id — claiming "oldest queued" here could grab an
+    // agent-enqueued message and strand it in 'sending'
+    if (repo.claimOutboxItem(this.db, item.id)) {
+      const err = await this.dispatch(item.id)
       if (err) return { ok: false, message: err }
+      return { ok: true, outboxId: item.id }
     }
+    // the 3 s drain grabbed it first — report its real outcome, not the
+    // enqueue: callers (undo-send commit) surface failures to the user
+    for (let i = 0; i < 120; i++) {
+      const row = repo.getOutboxItem(this.db, item.id)
+      if (!row || row.status === 'sent') return { ok: true, outboxId: item.id }
+      if (row.status === 'failed') {
+        return { ok: false, message: row.error ?? 'send failed' }
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    // still in flight after 30 s — the drain/requeue machinery owns it now
     return { ok: true, outboxId: item.id }
   }
 

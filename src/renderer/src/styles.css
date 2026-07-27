@@ -108,6 +108,14 @@ textarea,
   animation: fade-in-up 160ms ease-out;
 }
 
+/* undo-toast countdown ring: the arc drains linearly over the undo window.
+   Works for any circle with pathLength=1; duration set inline per toast. */
+@keyframes undo-ring-drain {
+  to {
+    stroke-dashoffset: 1;
+  }
+}
+
 /* thread row exit: one continuous fold — slide, fade and collapse share a
    single curve so it reads as one motion. max-height matches the real
    two-line row height so the collapse starts immediately. The selection

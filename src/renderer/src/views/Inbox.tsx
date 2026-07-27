@@ -39,6 +39,7 @@ import { COMMS_LABELS } from '../../../core/labels'
 import { api, useInvoke } from '../lib/api'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { pushUndo } from '../lib/undo'
+import { pendingEchoLanded } from '../lib/pending-echo'
 import { toast } from '../lib/toast'
 import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
@@ -58,6 +59,10 @@ const PROVIDER_ICON: Record<CommsProvider, ProviderIconComponent> = {
   slack: SlackIcon,
   whatsapp: WhatsAppIcon
 }
+
+/** own-message bubble styling — shared by MessageBubble and the optimistic
+ *  pending-send bubble so the two can't drift apart */
+const MY_BUBBLE_CLASS = 'bg-accent/10 border border-accent/20'
 
 const RAIL_W_KEY = 'kairos.inbox.railW'
 const LIST_W_KEY = 'kairos.inbox.listW'
@@ -1701,9 +1706,60 @@ function ThreadPane({
   const archived = thread.is_archived === 1
   const { name, title } = threadLabel(thread)
 
+  // optimistic echo of a queued reply: visible immediately so a mistake can
+  // be caught inside the undo window. queued (⌘Z live) → committed (window
+  // closed, dispatch in flight) → sent (provider accepted) → retired when the
+  // real message syncs back; gone at once on undo or send failure
+  const [pendingSends, setPendingSends] = useState<
+    { key: number; text: string; state: 'queued' | 'committed' | 'sent'; seen: ReadonlySet<string> }[]
+  >([])
+  const pendingKey = useRef(0)
+  const ghostTimers = useRef(new Map<number, number>())
+  const addPending = (text: string): number => {
+    const key = ++pendingKey.current
+    // snapshot the thread now — the echo must be a NEW message, or an older
+    // reply sharing a prefix ("thanks" vs "thanks for…") retires it instantly
+    const seen = new Set((messages ?? []).map((m) => m.id))
+    setPendingSends((prev) => [...prev, { key, text, state: 'queued', seen }])
+    return key
+  }
+  const removePending = (key: number): void => {
+    const timer = ghostTimers.current.get(key)
+    if (timer !== undefined) window.clearTimeout(timer)
+    ghostTimers.current.delete(key)
+    setPendingSends((prev) => prev.filter((p) => p.key !== key))
+  }
+  /** undo window closed — ⌘Z is no longer wired, the caption must not offer it */
+  const markPendingCommitted = (key: number): void =>
+    setPendingSends((prev) => prev.map((p) => (p.key === key ? { ...p, state: 'committed' } : p)))
+  const markPendingSent = (key: number): void => {
+    setPendingSends((prev) => prev.map((p) => (p.key === key ? { ...p, state: 'sent' } : p)))
+    // a missed echo match must never leave a permanent ghost bubble
+    ghostTimers.current.set(key, window.setTimeout(() => removePending(key), 30_000))
+  }
+  useEffect(() => {
+    const timers = ghostTimers.current
+    return () => timers.forEach((t) => window.clearTimeout(t))
+  }, [])
+  // the placeholder retires once the provider's echo of the message lands
+  useEffect(() => {
+    if (!messages) return
+    setPendingSends((prev) => {
+      const next = prev.filter(
+        (p) =>
+          p.state !== 'sent' ||
+          !pendingEchoLanded(
+            p.text,
+            messages.filter((m) => !p.seen.has(m.id))
+          )
+      )
+      return next.length === prev.length ? prev : next
+    })
+  }, [messages])
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView()
-  }, [messages, thread.id])
+  }, [messages, pendingSends, thread.id])
 
   // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
   // u = mark unread + back to list, p = pin/unpin, r = focus the reply box
@@ -1806,9 +1862,34 @@ function ThreadPane({
             onOpenCalendar={onOpenCalendar}
           />
         ))}
+        {pendingSends.map((p) => (
+          <div key={`pending-${p.key}`} className="max-w-[85%] ml-auto">
+            <div
+              className={cn(
+                'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words',
+                MY_BUBBLE_CLASS,
+                p.state !== 'sent' && 'opacity-70'
+              )}
+            >
+              <Linkified text={p.text} />
+            </div>
+            {p.state === 'queued' && (
+              <p className="mt-0.5 text-right text-[10.5px] text-faint">sending — ⌘Z to undo</p>
+            )}
+            {p.state === 'committed' && (
+              <p className="mt-0.5 text-right text-[10.5px] text-faint">sending…</p>
+            )}
+          </div>
+        ))}
         <div ref={bottomRef} />
       </div>
-      <Composer thread={thread} />
+      <Composer
+        thread={thread}
+        addPending={addPending}
+        markPendingCommitted={markPendingCommitted}
+        markPendingSent={markPendingSent}
+        removePending={removePending}
+      />
     </>
   )
 }
@@ -2009,7 +2090,7 @@ function MessageBubble({
         <div
           className={cn(
             'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words',
-            m.is_me ? 'bg-accent/10 border border-accent/20' : 'bg-panel border border-border'
+            m.is_me ? MY_BUBBLE_CLASS : 'bg-panel border border-border'
           )}
         >
           {m.body_text ? (
@@ -2457,7 +2538,20 @@ function restoreReply(threadId: string, text: string): void {
   else replyRestoreStash.set(threadId, text)
 }
 
-function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
+function Composer({
+  thread,
+  addPending,
+  markPendingCommitted,
+  markPendingSent,
+  removePending
+}: {
+  thread: CommsThread
+  /** optimistic sent-bubble lifecycle, owned by ThreadPane */
+  addPending: (text: string) => number
+  markPendingCommitted: (key: number) => void
+  markPendingSent: (key: number) => void
+  removePending: (key: number) => void
+}): React.JSX.Element {
   const mobile = useIsMobile()
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -2487,20 +2581,37 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
     setError(null)
     // ⌘Z must reach the undo layer, not the textarea's native text undo
     document.getElementById('inbox-reply')?.blur()
+    const pending = addPending(text)
+    // the draft must survive a failed send, wherever the user is now — and an
+    // IPC rejection must not strand a "⌘Z to undo" bubble the stack no longer
+    // holds an entry for
+    const failed = (message: string): void => {
+      removePending(pending)
+      restoreReply(thread.id, text)
+      toast({ variant: 'error', text: 'Send failed', detail: message })
+    }
     pushUndo({
       label: 'Reply sent',
       commit: () => {
+        // window closed — the bubble's ⌘Z caption must drop NOW, not when the
+        // dispatch (possibly a 30s outbox poll) resolves
+        markPendingCommitted(pending)
         void api
           .invoke('comms:send', { accountId: thread.account_id, threadId: thread.id, body: text })
-          .then((res) => {
-            if (!res.ok) {
-              // the draft must survive a failed send, wherever the user is now
-              restoreReply(thread.id, text)
-              toast({ variant: 'error', text: 'Send failed', detail: res.message })
-            }
-          })
+          .then(
+            // two-arg then: a throw inside markPendingSent must not run
+            // failed() and restore a draft for a send that succeeded
+            (res) => {
+              if (res.ok) markPendingSent(pending)
+              else failed(res.message)
+            },
+            (err) => failed(err instanceof Error ? err.message : String(err))
+          )
       },
-      revert: () => restoreReply(thread.id, text)
+      revert: () => {
+        removePending(pending)
+        restoreReply(thread.id, text)
+      }
     })
   }
 

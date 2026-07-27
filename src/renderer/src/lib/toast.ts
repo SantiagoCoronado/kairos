@@ -17,6 +17,8 @@ export interface Toast {
   detail?: string
   /** inline button (e.g. Undo) — clicking runs it; the owner dismisses */
   action?: ToastAction
+  /** show a draining countdown ring over this many ms (undo windows) */
+  countdownMs?: number
 }
 
 interface ToastOptions {
@@ -26,6 +28,7 @@ interface ToastOptions {
   /** auto-dismiss delay; omit for sticky (default for working/error) */
   timeoutMs?: number
   action?: ToastAction
+  countdownMs?: number
 }
 
 const SUCCESS_TIMEOUT_MS = 4000
@@ -61,7 +64,14 @@ export function toast(opts: ToastOptions): number {
   const id = nextId++
   commit([
     ...toasts,
-    { id, variant: opts.variant, text: opts.text, detail: opts.detail, action: opts.action }
+    {
+      id,
+      variant: opts.variant,
+      text: opts.text,
+      detail: opts.detail,
+      action: opts.action,
+      countdownMs: opts.countdownMs
+    }
   ])
   schedule(id, opts.timeoutMs ?? (opts.variant === 'success' ? SUCCESS_TIMEOUT_MS : undefined))
   return id
@@ -73,7 +83,14 @@ export function updateToast(id: number, opts: ToastOptions): void {
   commit(
     toasts.map((t) =>
       t.id === id
-        ? { id, variant: opts.variant, text: opts.text, detail: opts.detail, action: opts.action }
+        ? {
+            id,
+            variant: opts.variant,
+            text: opts.text,
+            detail: opts.detail,
+            action: opts.action,
+            countdownMs: opts.countdownMs
+          }
         : t
     )
   )

@@ -4,12 +4,19 @@
 
 export type ToastVariant = 'working' | 'success' | 'error'
 
+export interface ToastAction {
+  label: string
+  run: () => void
+}
+
 export interface Toast {
   id: number
   variant: ToastVariant
   text: string
   /** secondary line, e.g. the spoken transcript */
   detail?: string
+  /** inline button (e.g. Undo) — clicking runs it; the owner dismisses */
+  action?: ToastAction
 }
 
 interface ToastOptions {
@@ -18,6 +25,7 @@ interface ToastOptions {
   detail?: string
   /** auto-dismiss delay; omit for sticky (default for working/error) */
   timeoutMs?: number
+  action?: ToastAction
 }
 
 const SUCCESS_TIMEOUT_MS = 4000
@@ -51,7 +59,10 @@ export function getToasts(): readonly Toast[] {
 /** success auto-dismisses unless told otherwise; working/error stick */
 export function toast(opts: ToastOptions): number {
   const id = nextId++
-  commit([...toasts, { id, variant: opts.variant, text: opts.text, detail: opts.detail }])
+  commit([
+    ...toasts,
+    { id, variant: opts.variant, text: opts.text, detail: opts.detail, action: opts.action }
+  ])
   schedule(id, opts.timeoutMs ?? (opts.variant === 'success' ? SUCCESS_TIMEOUT_MS : undefined))
   return id
 }
@@ -61,7 +72,9 @@ export function updateToast(id: number, opts: ToastOptions): void {
   if (!toasts.some((t) => t.id === id)) return
   commit(
     toasts.map((t) =>
-      t.id === id ? { id, variant: opts.variant, text: opts.text, detail: opts.detail } : t
+      t.id === id
+        ? { id, variant: opts.variant, text: opts.text, detail: opts.detail, action: opts.action }
+        : t
     )
   )
   schedule(id, opts.timeoutMs ?? (opts.variant === 'success' ? SUCCESS_TIMEOUT_MS : undefined))

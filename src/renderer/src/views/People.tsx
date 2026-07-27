@@ -4,6 +4,7 @@ import type { Person, Area, InteractionKind, FollowupDue } from '../../../core/t
 import type { MacContact } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Select, Chip, Segmented, EmptyState, InlineText, cn } from '../components/ui'
+import { Linkified } from '../components/Linkify'
 
 
 const KINDS: InteractionKind[] = ['coffee', 'call', 'message', 'email', 'meeting', 'other']
@@ -516,7 +517,9 @@ function PersonDetail({
             </span>
             <div className="min-w-0">
               <Chip>{i.kind}</Chip>
-              <p className="text-[13px] mt-1">{i.summary}</p>
+              <p className="text-[13px] mt-1">
+                <Linkified text={i.summary} />
+              </p>
             </div>
           </div>
         ))}

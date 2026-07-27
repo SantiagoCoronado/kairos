@@ -42,6 +42,7 @@ import { pushUndo } from '../lib/undo'
 import { toast } from '../lib/toast'
 import { useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
+import { Linkified } from '../components/Linkify'
 import { clamp, useResizableWidth, ResizeHandle } from '../components/ResizeHandle'
 import { SettingsModal } from '../components/SettingsModal'
 import {
@@ -1984,7 +1985,11 @@ function MessageBubble({
             m.is_me ? 'bg-accent/10 border border-accent/20' : 'bg-panel border border-border'
           )}
         >
-          {m.body_text || <span className="text-faint italic">(no text)</span>}
+          {m.body_text ? (
+            <Linkified text={m.body_text} />
+          ) : (
+            <span className="text-faint italic">(no text)</span>
+          )}
         </div>
       )}
       {audioAtts.map((a) => (

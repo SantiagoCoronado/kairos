@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import type { Note, NoteItem, NoteRepeat, NotePatch, NoteFilter } from '../../../core/types'
 import { api, useInvoke } from '../lib/api'
+import { Linkified } from '../components/Linkify'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { Input, Button, Select, Chip, Segmented, EmptyState, cn } from '../components/ui'
 import { CaptureMic } from '../components/CaptureMic'
@@ -82,32 +83,6 @@ function fmtReminder(iso: string): string {
 }
 
 // ---------- misc helpers ----------
-
-const URL_SPLIT_RE = /(https?:\/\/[^\s]+)/g
-
-function Linkified({ text }: { text: string }): React.JSX.Element {
-  const parts = text.split(URL_SPLIT_RE)
-  return (
-    <>
-      {parts.map((p, i) =>
-        /^https?:\/\//.test(p) ? (
-          <a
-            key={i}
-            href={p}
-            target="_blank"
-            rel="noreferrer"
-            className="text-accent underline underline-offset-2 break-all"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {p}
-          </a>
-        ) : (
-          <span key={i}>{p}</span>
-        )
-      )}
-    </>
-  )
-}
 
 function noteToClipboard(n: Note): string {
   const lines: string[] = []
@@ -479,7 +454,7 @@ function NoteCard({
                       it.done ? 'text-faint line-through' : 'text-muted'
                     )}
                   >
-                    {it.text}
+                    <Linkified text={it.text} />
                   </span>
                 </button>
                 {!it.done && !archived && (

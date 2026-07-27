@@ -1701,9 +1701,39 @@ function ThreadPane({
   const archived = thread.is_archived === 1
   const { name, title } = threadLabel(thread)
 
+  // optimistic echo of a queued reply: visible immediately so a mistake can
+  // be caught inside the undo window; 'sent' after commit until the real
+  // message syncs back, gone at once on undo or send failure
+  const [pendingSends, setPendingSends] = useState<
+    { key: number; text: string; state: 'queued' | 'sent' }[]
+  >([])
+  const pendingKey = useRef(0)
+  const addPending = (text: string): number => {
+    const key = ++pendingKey.current
+    setPendingSends((prev) => [...prev, { key, text, state: 'queued' }])
+    return key
+  }
+  const markPendingSent = (key: number): void =>
+    setPendingSends((prev) => prev.map((p) => (p.key === key ? { ...p, state: 'sent' } : p)))
+  const removePending = (key: number): void =>
+    setPendingSends((prev) => prev.filter((p) => p.key !== key))
+  // the placeholder retires once the provider's echo of the message lands
+  // (startsWith: mail ingestion may append quoting under the sent body)
+  useEffect(() => {
+    if (!messages) return
+    setPendingSends((prev) => {
+      const next = prev.filter(
+        (p) =>
+          p.state !== 'sent' ||
+          !messages.some((m) => m.is_me === 1 && m.body_text?.trim().startsWith(p.text))
+      )
+      return next.length === prev.length ? prev : next
+    })
+  }, [messages])
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView()
-  }, [messages, thread.id])
+  }, [messages, pendingSends, thread.id])
 
   // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
   // u = mark unread + back to list, p = pin/unpin, r = focus the reply box
@@ -1806,9 +1836,29 @@ function ThreadPane({
             onOpenCalendar={onOpenCalendar}
           />
         ))}
+        {pendingSends.map((p) => (
+          <div key={`pending-${p.key}`} className="max-w-[85%] ml-auto">
+            <div
+              className={cn(
+                'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words bg-accent/10 border border-accent/20',
+                p.state === 'queued' && 'opacity-70'
+              )}
+            >
+              {p.text}
+            </div>
+            {p.state === 'queued' && (
+              <p className="mt-0.5 text-right text-[10.5px] text-faint">sending — ⌘Z to undo</p>
+            )}
+          </div>
+        ))}
         <div ref={bottomRef} />
       </div>
-      <Composer thread={thread} />
+      <Composer
+        thread={thread}
+        addPending={addPending}
+        markPendingSent={markPendingSent}
+        removePending={removePending}
+      />
     </>
   )
 }
@@ -2457,7 +2507,18 @@ function restoreReply(threadId: string, text: string): void {
   else replyRestoreStash.set(threadId, text)
 }
 
-function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
+function Composer({
+  thread,
+  addPending,
+  markPendingSent,
+  removePending
+}: {
+  thread: CommsThread
+  /** optimistic sent-bubble lifecycle, owned by ThreadPane */
+  addPending: (text: string) => number
+  markPendingSent: (key: number) => void
+  removePending: (key: number) => void
+}): React.JSX.Element {
   const mobile = useIsMobile()
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -2487,6 +2548,7 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
     setError(null)
     // ⌘Z must reach the undo layer, not the textarea's native text undo
     document.getElementById('inbox-reply')?.blur()
+    const pending = addPending(text)
     pushUndo({
       label: 'Reply sent',
       commit: () => {
@@ -2494,13 +2556,19 @@ function Composer({ thread }: { thread: CommsThread }): React.JSX.Element {
           .invoke('comms:send', { accountId: thread.account_id, threadId: thread.id, body: text })
           .then((res) => {
             if (!res.ok) {
+              removePending(pending)
               // the draft must survive a failed send, wherever the user is now
               restoreReply(thread.id, text)
               toast({ variant: 'error', text: 'Send failed', detail: res.message })
+            } else {
+              markPendingSent(pending)
             }
           })
       },
-      revert: () => restoreReply(thread.id, text)
+      revert: () => {
+        removePending(pending)
+        restoreReply(thread.id, text)
+      }
     })
   }
 

@@ -44,14 +44,18 @@ export function InviteCard({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    void api.invoke('comms:attachmentData', attachment.id).then((res) => {
-      if (!res.ok) return setFailed(true)
-      const b64 = res.dataUrl.slice(res.dataUrl.indexOf(',') + 1)
-      const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
-      const first = parseIcs(text)[0]
-      if (first?.start_at) setEv(first)
-      else setFailed(true)
-    })
+    void api
+      .invoke('comms:attachmentData', attachment.id)
+      .then((res) => {
+        if (!res.ok) return setFailed(true)
+        const b64 = res.dataUrl.slice(res.dataUrl.indexOf(',') + 1)
+        const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
+        const first = parseIcs(text)[0]
+        if (first?.start_at) setEv(first)
+        else setFailed(true)
+      })
+      // IPC rejection or a non-base64 payload must not strand the skeleton
+      .catch(() => setFailed(true))
   }, [attachment.id])
 
   // an event synced down from Google (or added from a duplicate invite part)

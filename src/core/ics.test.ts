@@ -106,4 +106,33 @@ describe('parseIcs', () => {
   it('returns an empty list for non-calendar text', () => {
     expect(parseIcs('hello world')).toEqual([])
   })
+
+  it('honors quotes when splitting params (semicolon inside CN)', () => {
+    const [ev] = parseIcs(
+      [
+        'BEGIN:VCALENDAR',
+        'BEGIN:VEVENT',
+        'DTSTART:20260728T100000Z',
+        'ORGANIZER;CN="Rios; Anna";ROLE=CHAIR:mailto:anna@example.com',
+        'SUMMARY:Quoted semicolon',
+        'END:VEVENT',
+        'END:VCALENDAR'
+      ].join('\r\n')
+    )
+    expect(ev.organizer?.displayName).toBe('Rios; Anna')
+  })
+
+  it('unescapes in one pass — escaped backslash before n stays literal', () => {
+    const [ev] = parseIcs(
+      [
+        'BEGIN:VCALENDAR',
+        'BEGIN:VEVENT',
+        'DTSTART:20260728T100000Z',
+        'SUMMARY:a\\nb and c\\\\nd and semi\\; comma\\,',
+        'END:VEVENT',
+        'END:VCALENDAR'
+      ].join('\r\n')
+    )
+    expect(ev.summary).toBe('a\nb and c\\nd and semi; comma,')
+  })
 })

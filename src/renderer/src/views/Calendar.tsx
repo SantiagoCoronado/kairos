@@ -47,7 +47,8 @@ export function CalendarView({
   useEffect(() => {
     if (focusDate) {
       setAnchor(focusDate)
-      setModePersist(mobile ? 'day' : 'week')
+      // transient jump — don't overwrite the user's stored mode preference
+      setMode(mobile ? 'day' : 'week')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusDate])

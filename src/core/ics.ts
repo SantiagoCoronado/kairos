@@ -32,8 +32,24 @@ function splitProp(line: string): [string, string] | null {
   return null
 }
 
+/** split on ';' outside double quotes — CN="Rios; Anna" is one param */
+function splitParams(head: string): string[] {
+  const segs: string[] = []
+  let start = 0
+  let quoted = false
+  for (let i = 0; i < head.length; i++) {
+    if (head[i] === '"') quoted = !quoted
+    else if (head[i] === ';' && !quoted) {
+      segs.push(head.slice(start, i))
+      start = i + 1
+    }
+  }
+  segs.push(head.slice(start))
+  return segs
+}
+
 function parseParams(head: string): { name: string; params: Record<string, string> } {
-  const segs = head.split(';')
+  const segs = splitParams(head)
   const params: Record<string, string> = {}
   for (const seg of segs.slice(1)) {
     const eq = seg.indexOf('=')
@@ -43,8 +59,9 @@ function parseParams(head: string): { name: string; params: Record<string, strin
   return { name: segs[0].toUpperCase(), params }
 }
 
+/** single pass so an escaped backslash never re-parses ('\\n' → '\' + 'n') */
 const unescapeText = (v: string): string =>
-  v.replace(/\\n/gi, '\n').replace(/\\([\\;,])/g, '$1')
+  v.replace(/\\(n|N|[\\;,])/g, (_, c: string) => (c === 'n' || c === 'N' ? '\n' : c))
 
 /** wall-clock offset of an IANA zone at a given UTC instant */
 function tzOffsetMs(tz: string, utcMs: number): number {

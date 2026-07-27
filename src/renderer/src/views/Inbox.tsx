@@ -1911,7 +1911,9 @@ function MessageBubble({
   const audioAtts = attachments?.filter((a) => a.mime_type?.startsWith('audio/')) ?? []
   const imageAtts = attachments?.filter((a) => a.mime_type?.startsWith('image/')) ?? []
   // invite emails often carry the same .ics twice (text/calendar part +
-  // application/ics attachment) — one card covers them all
+  // application/ics attachment) — one card covers them all. Assumes every
+  // invite attachment on a message describes the same event; a message with
+  // two genuinely different .ics files would only surface the first.
   const inviteAtts = attachments?.filter(isInviteAtt) ?? []
   const fileAtts =
     attachments?.filter(

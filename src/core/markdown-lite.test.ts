@@ -34,6 +34,14 @@ describe('splitBareUrls', () => {
     ])
   })
 
+  it('keeps angle brackets out of the URL', () => {
+    expect(splitBareUrls('see <https://a.io/x> for details')).toEqual([
+      { text: 'see <', url: false },
+      { text: 'https://a.io/x', url: true },
+      { text: '> for details', url: false }
+    ])
+  })
+
   it('does not linkify other schemes', () => {
     expect(splitBareUrls('run javascript:alert(1) now')).toEqual([
       { text: 'run javascript:alert(1) now', url: false }
@@ -57,6 +65,19 @@ describe('markdown-lite inline', () => {
     ])
   })
 
+  it('does not autolink inside markdown-link text (no nested anchors)', () => {
+    expect(parseInline('[https://a.io/x](https://b.io/y)')).toEqual([
+      { kind: 'link', href: 'https://b.io/y', children: [{ kind: 'text', text: 'https://a.io/x' }] }
+    ])
+    // bold inside link text stays autolink-free too
+    expect(parseInline('[**https://a.io**](https://b.io)')).toEqual([
+      {
+        kind: 'link',
+        href: 'https://b.io',
+        children: [{ kind: 'bold', children: [{ kind: 'text', text: 'https://a.io' }] }]
+      }
+    ])
+  })
 
   it('parses code, bold, italic, links, and plain text runs', () => {
     expect(parseInline('run `npm test` **now** or *later*, see [docs](https://x.y/z)')).toEqual([

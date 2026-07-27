@@ -1008,6 +1008,18 @@ export function claimQueued(db: DbDriver, limit = 10): OutboxItem[] {
   })
 }
 
+/**
+ * Atomically claim ONE specific queued item (sendNow's own enqueue). Returns
+ * false when the drain already grabbed it — never touches other items, so a
+ * queued agent message can't be stranded in 'sending' by a user send.
+ */
+export function claimOutboxItem(db: DbDriver, id: string): boolean {
+  return (
+    db.run("UPDATE comms_outbox SET status = 'sending' WHERE id = ? AND status = 'queued'", id)
+      .changes > 0
+  )
+}
+
 export function finishOutbox(
   db: DbDriver,
   id: string,

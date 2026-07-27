@@ -496,9 +496,10 @@ export class CommsSyncManager {
       body_text: input.body,
       source: 'app'
     })
-    const [claimed] = repo.claimQueued(this.db, 1)
-    if (claimed && claimed.id === item.id) {
-      const err = await this.dispatch(claimed.id)
+    // claim our own item by id — claiming "oldest queued" here could grab an
+    // agent-enqueued message and strand it in 'sending'
+    if (repo.claimOutboxItem(this.db, item.id)) {
+      const err = await this.dispatch(item.id)
       if (err) return { ok: false, message: err }
       return { ok: true, outboxId: item.id }
     }

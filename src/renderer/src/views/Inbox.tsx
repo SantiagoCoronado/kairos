@@ -1707,29 +1707,52 @@ function ThreadPane({
   const { name, title } = threadLabel(thread)
 
   // optimistic echo of a queued reply: visible immediately so a mistake can
-  // be caught inside the undo window; 'sent' after commit until the real
-  // message syncs back, gone at once on undo or send failure
+  // be caught inside the undo window. queued (⌘Z live) → committed (window
+  // closed, dispatch in flight) → sent (provider accepted) → retired when the
+  // real message syncs back; gone at once on undo or send failure
   const [pendingSends, setPendingSends] = useState<
-    { key: number; text: string; state: 'queued' | 'sent' }[]
+    { key: number; text: string; state: 'queued' | 'committed' | 'sent'; seen: ReadonlySet<string> }[]
   >([])
   const pendingKey = useRef(0)
+  const ghostTimers = useRef(new Map<number, number>())
   const addPending = (text: string): number => {
     const key = ++pendingKey.current
-    setPendingSends((prev) => [...prev, { key, text, state: 'queued' }])
+    // snapshot the thread now — the echo must be a NEW message, or an older
+    // reply sharing a prefix ("thanks" vs "thanks for…") retires it instantly
+    const seen = new Set((messages ?? []).map((m) => m.id))
+    setPendingSends((prev) => [...prev, { key, text, state: 'queued', seen }])
     return key
   }
-  const removePending = (key: number): void =>
+  const removePending = (key: number): void => {
+    const timer = ghostTimers.current.get(key)
+    if (timer !== undefined) window.clearTimeout(timer)
+    ghostTimers.current.delete(key)
     setPendingSends((prev) => prev.filter((p) => p.key !== key))
+  }
+  /** undo window closed — ⌘Z is no longer wired, the caption must not offer it */
+  const markPendingCommitted = (key: number): void =>
+    setPendingSends((prev) => prev.map((p) => (p.key === key ? { ...p, state: 'committed' } : p)))
   const markPendingSent = (key: number): void => {
     setPendingSends((prev) => prev.map((p) => (p.key === key ? { ...p, state: 'sent' } : p)))
     // a missed echo match must never leave a permanent ghost bubble
-    window.setTimeout(() => removePending(key), 30_000)
+    ghostTimers.current.set(key, window.setTimeout(() => removePending(key), 30_000))
   }
+  useEffect(() => {
+    const timers = ghostTimers.current
+    return () => timers.forEach((t) => window.clearTimeout(t))
+  }, [])
   // the placeholder retires once the provider's echo of the message lands
   useEffect(() => {
     if (!messages) return
     setPendingSends((prev) => {
-      const next = prev.filter((p) => p.state !== 'sent' || !pendingEchoLanded(p.text, messages))
+      const next = prev.filter(
+        (p) =>
+          p.state !== 'sent' ||
+          !pendingEchoLanded(
+            p.text,
+            messages.filter((m) => !p.seen.has(m.id))
+          )
+      )
       return next.length === prev.length ? prev : next
     })
   }, [messages])
@@ -1845,13 +1868,16 @@ function ThreadPane({
               className={cn(
                 'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words',
                 MY_BUBBLE_CLASS,
-                p.state === 'queued' && 'opacity-70'
+                p.state !== 'sent' && 'opacity-70'
               )}
             >
               <Linkified text={p.text} />
             </div>
             {p.state === 'queued' && (
               <p className="mt-0.5 text-right text-[10.5px] text-faint">sending — ⌘Z to undo</p>
+            )}
+            {p.state === 'committed' && (
+              <p className="mt-0.5 text-right text-[10.5px] text-faint">sending…</p>
             )}
           </div>
         ))}
@@ -1860,6 +1886,7 @@ function ThreadPane({
       <Composer
         thread={thread}
         addPending={addPending}
+        markPendingCommitted={markPendingCommitted}
         markPendingSent={markPendingSent}
         removePending={removePending}
       />
@@ -2514,12 +2541,14 @@ function restoreReply(threadId: string, text: string): void {
 function Composer({
   thread,
   addPending,
+  markPendingCommitted,
   markPendingSent,
   removePending
 }: {
   thread: CommsThread
   /** optimistic sent-bubble lifecycle, owned by ThreadPane */
   addPending: (text: string) => number
+  markPendingCommitted: (key: number) => void
   markPendingSent: (key: number) => void
   removePending: (key: number) => void
 }): React.JSX.Element {
@@ -2564,13 +2593,20 @@ function Composer({
     pushUndo({
       label: 'Reply sent',
       commit: () => {
+        // window closed — the bubble's ⌘Z caption must drop NOW, not when the
+        // dispatch (possibly a 30s outbox poll) resolves
+        markPendingCommitted(pending)
         void api
           .invoke('comms:send', { accountId: thread.account_id, threadId: thread.id, body: text })
-          .then((res) => {
-            if (res.ok) markPendingSent(pending)
-            else failed(res.message)
-          })
-          .catch((err) => failed(err instanceof Error ? err.message : String(err)))
+          .then(
+            // two-arg then: a throw inside markPendingSent must not run
+            // failed() and restore a draft for a send that succeeded
+            (res) => {
+              if (res.ok) markPendingSent(pending)
+              else failed(res.message)
+            },
+            (err) => failed(err instanceof Error ? err.message : String(err))
+          )
       },
       revert: () => {
         removePending(pending)

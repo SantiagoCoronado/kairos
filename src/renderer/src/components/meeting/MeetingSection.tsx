@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
-import { Circle, Pause, Play, Square, Trash2 } from 'lucide-react'
-import type { Meeting } from '../../../../core/types'
+import { Circle, FileText, Pause, Play, Square, Trash2 } from 'lucide-react'
+import type { Meeting, MeetingTranscript } from '../../../../core/types'
 import { api, useInvoke } from '../../lib/api'
+import { TranscriptModal } from './TranscriptModal'
 import {
   startRecording,
   stopRecording,
@@ -75,7 +76,13 @@ export function MeetingSection({
 
 function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [transcript, setTranscript] = useState<MeetingTranscript | null>(null)
   const started = new Date(m.started_at)
+
+  const openTranscript = async (): Promise<void> => {
+    const res = await api.invoke('meetings:get', m.id)
+    if (res.transcript) setTranscript(res.transcript)
+  }
   const dateLabel = started.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -98,11 +105,23 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
       )}
       {m.status === 'processing' && <Chip tone="muted">transcribing…</Chip>}
       <div className="flex-1" />
+      {m.status === 'ready' && (
+        <button
+          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
+          title="View transcript"
+          onClick={() => void openTranscript()}
+        >
+          <FileText size={10} /> transcript
+        </button>
+      )}
       {m.status === 'ready' && !m.audio_deleted_at && (
         <>
           {m.mic_path && <AudioButton meetingId={m.id} channel="mic" label="me" />}
           {m.system_path && <AudioButton meetingId={m.id} channel="system" label="them" />}
         </>
+      )}
+      {transcript && (
+        <TranscriptModal meeting={m} transcript={transcript} onClose={() => setTranscript(null)} />
       )}
       <button
         className={cn(

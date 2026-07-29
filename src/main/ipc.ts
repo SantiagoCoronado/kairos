@@ -36,6 +36,7 @@ import { resolveDisplayMedia } from './display-media'
 import { ensureModelFile, isModelPresent, VAD_MODEL, WHISPER_MODELS } from './models'
 import { WhisperServer } from './whisper'
 import { MeetingProcessor, type Transcriber } from './meeting-processor'
+import { summarizeMeeting } from './chat/meeting-summarizer'
 import { spawn as childSpawn } from 'node:child_process'
 import { rmSync, statSync } from 'node:fs'
 import { app, Notification } from 'electron'
@@ -535,6 +536,22 @@ export function registerIpc(): void {
   meetingManager = meetMgr
   meetMgr.recoverOrphans()
 
+  const runSummarize = async (
+    id: string,
+    force = false
+  ): Promise<{ ok: true } | { ok: false; message: string }> => {
+    const res = await summarizeMeeting(db, id, { force })
+    if (!res.ok) return res
+    broadcast('db:changed', { entity: 'meetings' })
+    broadcast('meetings:event', {
+      kind: 'summarized',
+      meetingId: id,
+      taskIds: [],
+      interactionCount: 0
+    })
+    return { ok: true }
+  }
+
   const processor = new MeetingProcessor(db, join(DATA_DIR, 'recordings'), {
     getTranscriber: () =>
       getTranscriber((received, total) => {
@@ -564,7 +581,10 @@ export function registerIpc(): void {
       n.on('click', () => broadcast('nav:goto', { view: 'calendar', id: meetingId }))
       n.show()
     },
-    log: (level, message) => logLine(level, 'meetings', message)
+    log: (level, message) => logLine(level, 'meetings', message),
+    summarize: async (id) => {
+      await runSummarize(id)
+    }
   })
   meetingProcessor = processor
   processor.sweepIncomplete()
@@ -588,6 +608,7 @@ export function registerIpc(): void {
   )
   handle('meetings:delete', (id) => meetMgr.delete(id))
   handle('meetings:active', () => meetMgr.activeMeetingId)
+  handle('meetings:summarize', (id, force) => runSummarize(id, force ?? false))
   let modelDownloading = false
   handle('meetings:modelStatus', async () => {
     const modelsDir = join(DATA_DIR, 'models')

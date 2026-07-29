@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
-import { Circle, FileText, Pause, Play, Square, Trash2 } from 'lucide-react'
+import { Circle, FileText, Pause, Play, Sparkles, Square, Trash2 } from 'lucide-react'
 import type { Meeting, MeetingTranscript } from '../../../../core/types'
 import { api, useInvoke } from '../../lib/api'
+import { SummaryModal } from './SummaryModal'
 import { TranscriptModal } from './TranscriptModal'
 import {
   startRecording,
@@ -77,6 +78,7 @@ export function MeetingSection({
 function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [transcript, setTranscript] = useState<MeetingTranscript | null>(null)
+  const [showSummary, setShowSummary] = useState(false)
   const started = new Date(m.started_at)
 
   const openTranscript = async (): Promise<void> => {
@@ -105,6 +107,24 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
       )}
       {m.status === 'processing' && <Chip tone="muted">transcribing…</Chip>}
       <div className="flex-1" />
+      {m.status === 'ready' && m.summary_md && (
+        <button
+          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-accent hover:bg-raised"
+          title="View summary and action items"
+          onClick={() => setShowSummary(true)}
+        >
+          <Sparkles size={10} /> summary
+        </button>
+      )}
+      {m.status === 'ready' && !m.summary_md && (
+        <button
+          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
+          title="Generate summary and action items"
+          onClick={() => void api.invoke('meetings:summarize', m.id)}
+        >
+          <Sparkles size={10} /> summarize
+        </button>
+      )}
       {m.status === 'ready' && (
         <button
           className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
@@ -123,6 +143,7 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
       {transcript && (
         <TranscriptModal meeting={m} transcript={transcript} onClose={() => setTranscript(null)} />
       )}
+      {showSummary && <SummaryModal meeting={m} onClose={() => setShowSummary(false)} />}
       <button
         className={cn(
           'p-1 rounded hover:bg-raised',

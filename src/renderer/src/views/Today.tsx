@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CalendarDays, Loader2, RefreshCw, Sparkles, Square, Volume2 } from 'lucide-react'
+import { AudioLines, CalendarDays, Loader2, RefreshCw, Sparkles, Square, Volume2 } from 'lucide-react'
 import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
 import { stoicForDate } from '../../../core/stoic'
@@ -8,6 +8,7 @@ import { api, useInvoke } from '../lib/api'
 import { Chip, cn } from '../components/ui'
 import { PushBell } from '../components/PushBell'
 import { MicButton } from '../components/MicButton'
+import { SummaryModal } from '../components/meeting/SummaryModal'
 import { ProgressBar } from './Objectives'
 
 export function TodayView({
@@ -96,6 +97,8 @@ export function TodayView({
           ))}
         </Section>
       )}
+
+      <RecentMeetings />
 
       {nothingDue && <StoicMoment />}
 
@@ -527,6 +530,42 @@ function UsageHeatmap({ days }: { days: { date: string; tokens: number }[] }): R
           document.body
         )}
     </div>
+  )
+}
+
+/** yesterday's (well, last 24h) recorded meetings — summaries one click away */
+function RecentMeetings(): React.JSX.Element | null {
+  const { data: meetings } = useInvoke('meetings:list', [{ status: 'ready' }], ['meetings'])
+  const [openId, setOpenId] = useState<string | null>(null)
+  const cutoff = Date.now() - 24 * 60 * 60_000
+  const recent = (meetings ?? []).filter((m) => new Date(m.started_at).getTime() >= cutoff)
+  if (recent.length === 0) return null
+  const open = recent.find((m) => m.id === openId) ?? null
+
+  return (
+    <Section title="recent meetings">
+      {recent.map((m) => (
+        <div key={m.id} className="flex items-center gap-3 py-1.5 min-w-0">
+          <AudioLines size={13} className="text-faint shrink-0" />
+          <span className="font-mono text-[11px] text-muted w-24 shrink-0">
+            {new Date(m.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <span className="text-[13px] truncate">{m.title || 'Untitled meeting'}</span>
+          <span className="flex-1" />
+          {m.summary_md ? (
+            <button
+              className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-accent hover:bg-raised shrink-0"
+              onClick={() => setOpenId(m.id)}
+            >
+              <Sparkles size={10} /> summary
+            </button>
+          ) : (
+            <span className="text-[11px] text-faint shrink-0">transcribed</span>
+          )}
+        </div>
+      ))}
+      {open && <SummaryModal meeting={open} onClose={() => setOpenId(null)} />}
+    </Section>
   )
 }
 

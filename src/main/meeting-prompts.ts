@@ -7,8 +7,8 @@ import * as meetings from '../core/repo/meetings'
  *  URL reaching its start time earns exactly one prompt (toast + notification);
  *  recording never auto-starts. Opt-in via the meetingPromptsEnabled setting. */
 
-// prompt from one scheduler tick before start until five minutes after —
-// enough grace to catch a late join without nagging about long-over calls
+// prompt from a minute before start (two scheduler ticks) until five minutes
+// after — enough grace to catch a late join without nagging about long-over calls
 export const PROMPT_LEAD_MS = 60_000
 export const PROMPT_GRACE_MS = 5 * 60_000
 
@@ -101,5 +101,19 @@ export class MeetingPromptWatcher {
       this.deps.emit({ kind: 'record-prompt', ...prompt })
       this.deps.notify?.(prompt)
     }
+  }
+
+  /** notification-click path: the in-app toast lives 60s but the grace window
+   *  is 5min, so a late click would otherwise land in an app with nothing to
+   *  act on — re-emit the toast if the event is still actionable (no second
+   *  notification; the user is already looking) */
+  reprompt(prompt: PromptedEvent): void {
+    if (!this.deps.enabled() || this.deps.recordingActive()) return
+    const nowMs = this.clock().getTime()
+    const start = Date.parse(prompt.startAt)
+    if (nowMs < start - PROMPT_LEAD_MS || nowMs > start + PROMPT_GRACE_MS) return
+    if (meetings.listMeetings(this.deps.db, { calendar_event_id: prompt.eventId, limit: 1 }).length > 0)
+      return
+    this.deps.emit({ kind: 'record-prompt', ...prompt })
   }
 }

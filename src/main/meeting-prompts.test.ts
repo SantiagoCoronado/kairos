@@ -164,6 +164,42 @@ describe('MeetingPromptWatcher', () => {
     expect(emitted).toHaveLength(1)
   })
 
+  it('reprompt (notification click) re-emits while the event is still actionable', () => {
+    const id = seedEvent()
+    watcher.tick()
+    expect(emitted).toHaveLength(1)
+
+    // toast expired, user clicks the notification 3 min into the call
+    now = new Date(NOW.getTime() + 3 * 60_000)
+    watcher.reprompt({ eventId: id, title: 'Design review', startAt: NOW.toISOString() })
+    expect(emitted).toHaveLength(2)
+    expect(notified).toHaveLength(1) // no second notification — user is already looking
+  })
+
+  it('reprompt refuses when out of window, recording, disabled, or already recorded', () => {
+    const id = seedEvent()
+    const prompt = { eventId: id, title: 'Design review', startAt: NOW.toISOString() }
+    watcher.tick()
+    emitted = []
+
+    now = new Date(NOW.getTime() + PROMPT_GRACE_MS + 1000)
+    watcher.reprompt(prompt)
+
+    now = new Date(NOW)
+    recording = true
+    watcher.reprompt(prompt)
+    recording = false
+
+    enabled = false
+    watcher.reprompt(prompt)
+    enabled = true
+
+    meetingsRepo.createMeeting(db, { calendar_event_id: id }, NOW)
+    watcher.reprompt(prompt)
+
+    expect(emitted).toEqual([])
+  })
+
   it('prunes prompted entries after their window passes', () => {
     seedEvent()
     watcher.tick()

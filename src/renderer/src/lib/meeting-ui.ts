@@ -42,7 +42,8 @@ export function recordPromptToast(
 ): { text: string; detail: string } {
   const title = prompt.title.trim()
   const lateMs = now.getTime() - Date.parse(prompt.startAt)
-  const lateMin = Math.round(lateMs / 60_000)
+  // floor: 31s in is still "now", not "1 min ago"
+  const lateMin = Math.floor(lateMs / 60_000)
   return {
     text: title ? `Record “${title}”?` : 'Record this meeting?',
     detail: lateMin >= 1 ? `Started ${lateMin} min ago` : 'Starting now'

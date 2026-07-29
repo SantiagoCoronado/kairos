@@ -62,4 +62,9 @@ describe('recordPromptToast', () => {
       detail: 'Started 3 min ago'
     })
   })
+
+  it('floors lateness: 31s in is still "now", 90s is 1 min', () => {
+    expect(recordPromptToast({ title: 'x', startAt }, at(31_000)).detail).toBe('Starting now')
+    expect(recordPromptToast({ title: 'x', startAt }, at(90_000)).detail).toBe('Started 1 min ago')
+  })
 })

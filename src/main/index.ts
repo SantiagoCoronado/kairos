@@ -97,7 +97,7 @@ if (!gotLock) {
         if (!Notification.isSupported()) return
         const n = new Notification({
           title: 'Meeting starting — record it?',
-          body: prompt.title || 'Open Kairos to start recording'
+          body: prompt.title
         })
         n.on('click', () => {
           const win = createMainWindow()
@@ -105,6 +105,9 @@ if (!gotLock) {
           win.show()
           win.focus()
           app.focus({ steal: true })
+          // the toast only lives 60s of the 5min window — a late click must
+          // not land in an app with nothing to act on
+          promptWatcher.reprompt(prompt)
         })
         n.show()
       }

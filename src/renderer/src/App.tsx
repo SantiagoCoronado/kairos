@@ -21,6 +21,10 @@ import { api } from './lib/api'
 import { applyTranslucency } from './lib/translucency'
 import { undoLast } from './lib/undo'
 
+// one visible prompt toast per event: a notification-click reprompt while the
+// original toast is still up replaces it instead of stacking a duplicate
+const promptToasts = new Map<string, number>()
+
 const SIDEBAR_KEY = 'kairos.sidebarHidden'
 const VIEW_ORDER: ViewId[] = [
   'today',
@@ -68,6 +72,8 @@ export default function App(): React.JSX.Element {
         // opt-in nudge from the calendar watcher: countdown toast whose Record
         // button is the trusted click getDisplayMedia needs — never auto-start
         if (ev.kind === 'record-prompt') {
+          const prev = promptToasts.get(ev.eventId)
+          if (prev != null) dismissToast(prev) // no-op if already gone
           const { text, detail } = recordPromptToast(ev, new Date())
           const id = toast({
             variant: 'success', // icon slot shows the countdown ring
@@ -79,6 +85,7 @@ export default function App(): React.JSX.Element {
               label: 'Record',
               run: () => {
                 dismissToast(id)
+                promptToasts.delete(ev.eventId)
                 void startRecording({ calendarEventId: ev.eventId, title: ev.title }).then(
                   (started) => {
                     // null = already recording (chip shows it) or failure —
@@ -91,6 +98,7 @@ export default function App(): React.JSX.Element {
               }
             }
           })
+          promptToasts.set(ev.eventId, id)
           return
         }
         if (ev.kind !== 'summarized' || ev.taskIds.length === 0) return

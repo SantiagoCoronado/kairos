@@ -16,6 +16,7 @@ export type DbEntity =
   | 'calendar_events'
   | 'calendars'
   | 'calendar_accounts'
+  | 'meetings'
   | 'settings'
   | 'terminal'
   | 'all'
@@ -70,6 +71,7 @@ export interface Task {
   priority: number // 1=urgent .. 4=someday
   project_id: string | null
   person_id: string | null
+  meeting_id: string | null // action item extracted from a recorded meeting
   due_date: string | null // YYYY-MM-DD
   completed_at: string | null
   sort_order: number
@@ -330,6 +332,93 @@ export interface CalendarEventPatch {
   attendees?: CalendarAttendee[]
   conferencing_url?: string | null
   status?: CalendarEventStatus
+}
+
+export type MeetingStatus = 'recording' | 'processing' | 'ready' | 'error'
+
+export interface MeetingActionItem {
+  text: string
+  person_id?: string | null
+  task_id?: string | null // set once fanned out into a task
+}
+
+/** parsed form of meetings.summary_json */
+export interface MeetingSummaryData {
+  action_items: MeetingActionItem[]
+  decisions: string[]
+  participants: string[]
+}
+
+export interface Meeting {
+  id: string
+  calendar_event_id: string | null
+  title: string
+  status: MeetingStatus
+  error: string | null
+  started_at: string
+  ended_at: string | null
+  duration_seconds: number | null
+  mic_path: string | null // ~/Kairos/recordings/<id>/mic.webm
+  system_path: string | null
+  audio_deleted_at: string | null // transcript survives audio deletion
+  summary_md: string | null
+  summary: MeetingSummaryData
+  summary_model: string | null
+  summarized_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TranscriptSegment {
+  t0: number // seconds from meeting start
+  t1: number
+  channel: 'me' | 'them' // mic vs system audio — never mixed
+  text: string
+}
+
+export interface MeetingTranscript {
+  meeting_id: string
+  segments: TranscriptSegment[]
+  text: string // merged plain text for search/export
+  language: string | null
+  model: string | null
+  transcribed_at: string | null
+  created_at: string
+}
+
+export interface NewMeeting {
+  calendar_event_id?: string | null
+  title?: string
+  started_at?: string
+}
+
+export interface MeetingPatch {
+  calendar_event_id?: string | null
+  title?: string
+  status?: MeetingStatus
+  error?: string | null
+  ended_at?: string | null
+  duration_seconds?: number | null
+  mic_path?: string | null
+  system_path?: string | null
+  summary_md?: string | null
+  summary?: MeetingSummaryData
+  summary_model?: string | null
+  summarized_at?: string | null
+}
+
+export interface MeetingFilter {
+  status?: MeetingStatus | MeetingStatus[]
+  calendar_event_id?: string
+  limit?: number
+}
+
+export interface NewTranscript {
+  segments: TranscriptSegment[]
+  text?: string // derived from segments when omitted
+  language?: string | null
+  model?: string | null
+  transcribed_at?: string | null
 }
 
 export interface ChatSession {

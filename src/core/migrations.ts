@@ -514,6 +514,46 @@ CREATE TABLE semantic_meta (
 DROP TABLE IF EXISTS embeddings;
 DROP TABLE IF EXISTS semantic_clusters;
 DROP TABLE IF EXISTS semantic_meta;
+`,
+  // 020 — meeting capture: recorded meetings (audio on disk under
+  // ~/Kairos/recordings/<id>/, paths in the row), one transcript per meeting,
+  // summary lives on the meeting row. Transcripts survive audio deletion
+  // (audio_deleted_at is a marker, not a cascade). Action-item tasks link
+  // back via tasks.meeting_id.
+  `
+CREATE TABLE meetings (
+  id                 TEXT PRIMARY KEY,
+  calendar_event_id  TEXT REFERENCES calendar_events(id) ON DELETE SET NULL,
+  title              TEXT NOT NULL DEFAULT '',
+  status             TEXT NOT NULL DEFAULT 'recording'
+                     CHECK (status IN ('recording','processing','ready','error')),
+  error              TEXT,
+  started_at         TEXT NOT NULL,
+  ended_at           TEXT,
+  duration_seconds   INTEGER,
+  mic_path           TEXT,
+  system_path        TEXT,
+  audio_deleted_at   TEXT,
+  summary_md         TEXT,
+  summary_json       TEXT NOT NULL DEFAULT '{}',
+  summary_model      TEXT,
+  summarized_at      TEXT,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
+CREATE TABLE meeting_transcripts (
+  meeting_id      TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+  segments        TEXT NOT NULL DEFAULT '[]',
+  text            TEXT NOT NULL DEFAULT '',
+  language        TEXT,
+  model           TEXT,
+  transcribed_at  TEXT,
+  created_at      TEXT NOT NULL
+);
+ALTER TABLE tasks ADD COLUMN meeting_id TEXT REFERENCES meetings(id) ON DELETE SET NULL;
+CREATE INDEX idx_meetings_event ON meetings(calendar_event_id);
+CREATE INDEX idx_meetings_started ON meetings(started_at DESC);
+CREATE INDEX idx_tasks_meeting ON tasks(meeting_id);
 `
 ]
 

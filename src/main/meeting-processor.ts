@@ -32,6 +32,8 @@ interface Deps {
   onChange(): void
   notify(title: string, body: string, meetingId: string): void
   log(level: 'info' | 'warn' | 'error', message: string): void
+  /** post-transcription summarization — failures must not fail the meeting */
+  summarize?(meetingId: string): Promise<void>
   now?: () => Date
 }
 
@@ -125,6 +127,17 @@ export class MeetingProcessor {
         id
       )
       this.deps.log('info', `meetings: transcribed ${id} (${segments.length} segments)`)
+      if (this.deps.summarize && segments.length > 0) {
+        try {
+          await this.deps.summarize(id)
+        } catch (err) {
+          // the transcript is safe either way; summaries can be retried
+          this.deps.log(
+            'warn',
+            `meetings: summarize failed for ${id}: ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       meetings.updateMeeting(this.db, id, { status: 'error', error: message })

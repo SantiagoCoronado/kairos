@@ -3,6 +3,7 @@ import { Sidebar, SidebarToggle, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
 import { useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
+import { pushUndo } from './lib/undo'
 import { TodayView } from './views/Today'
 import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
@@ -55,6 +56,23 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     void api.invoke('settings:get').then((s) => applyTranslucency(s.translucency))
   }, [])
+
+  // meeting summarized in the background → surface the fan-out with an
+  // undo window (revert-style: the tasks exist; undo deletes them)
+  useEffect(
+    () =>
+      api.on('meetings:event', (ev) => {
+        if (ev.kind !== 'summarized' || ev.taskIds.length === 0) return
+        const n = ev.taskIds.length
+        pushUndo({
+          label: `Meeting summarized — ${n} task${n === 1 ? '' : 's'} added`,
+          // scoped undo: deletes the created tasks AND clears their summary
+          // links (interactions stay — the meeting still happened)
+          revert: () => void api.invoke('meetings:undoTasks', ev.meetingId, ev.taskIds)
+        })
+      }),
+    []
+  )
 
   // deep links from main-process notifications (reminder clicks). A
   // calendar goto carrying a meeting id also focuses that meeting's day.

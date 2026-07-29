@@ -1,4 +1,4 @@
-import { Repeat, Video } from 'lucide-react'
+import { AudioLines, Repeat, Video } from 'lucide-react'
 import type { CalendarEventRecord } from '../../../../core/types'
 import { fmtTime, parseEventDate } from '../../lib/dates'
 import { touchBlockRef } from './useCalendarDrag'
@@ -12,6 +12,7 @@ export function EventCard({
   leftPct,
   widthPct,
   dimmed,
+  hasMeeting,
   onBodyPointerDown,
   onResizePointerDown
 }: {
@@ -22,6 +23,8 @@ export function EventCard({
   leftPct: number
   widthPct: number
   dimmed: boolean
+  /** a recorded meeting is attached (transcript/summary in the editor) */
+  hasMeeting?: boolean
   onBodyPointerDown: (e: React.PointerEvent) => void
   onResizePointerDown?: (e: React.PointerEvent) => void
 }): React.JSX.Element {
@@ -47,6 +50,7 @@ export function EventCard({
         <div className="text-[11.5px] leading-4 text-text truncate flex items-center gap-1">
           {event.recurring_event_id && <Repeat size={9} className="shrink-0 text-muted" />}
           {event.conferencing_url && <Video size={9} className="shrink-0 text-muted" />}
+          {hasMeeting && <AudioLines size={9} className="shrink-0 text-accent" />}
           <span className="truncate">{event.title || '(untitled)'}</span>
         </div>
         {!compact && (

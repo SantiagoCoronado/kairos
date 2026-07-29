@@ -28,9 +28,13 @@ import { logLine } from '../logger'
 // a shell on this machine — refused unless the user explicitly opts in
 // (Settings → remote access → allow terminal).
 // meetings mutations stay local-only: the Mac owns the live capture rig, and
-// a remote client must never start/stop/feed/delete a recording it can't see
-// (reads — list/get/active/audioData — remain available for phone playback)
-const ALWAYS_DENIED = [/^capture:(?!submit$|smart$)/, /^meetings:(start|stop|chunk|delete)$/]
+// a remote client must never start/stop/feed/delete a recording it can't
+// see — nor trigger paid model calls (summarize). Reads (list/get/active/
+// audioData) and the scoped undo remain available for phone use.
+const ALWAYS_DENIED = [
+  /^capture:(?!submit$|smart$)/,
+  /^meetings:(start|stop|chunk|delete|summarize)$/
+]
 const TERMINAL = /^terminal:/
 
 function isDenied(channel: string): boolean {

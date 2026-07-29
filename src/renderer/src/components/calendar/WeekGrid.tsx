@@ -49,12 +49,14 @@ export function WeekGrid({
   onCreate,
   onMoveResize,
   onNavigate,
-  onSwipeWeek
+  onSwipeWeek,
+  meetingEventIds
 }: {
   days: Date[]
   events: CalendarEventRecord[]
   calendars: Map<string, CalendarCalendar>
   overlay: CalendarOverlay | undefined
+  meetingEventIds?: Set<string>
   onEventClick: (e: CalendarEventRecord) => void
   onCreate: (startAt: Date, endAt: Date) => void
   onMoveResize: (id: string, startAt: Date, endAt: Date) => void
@@ -397,6 +399,7 @@ export function WeekGrid({
                     leftPct={(col / cols) * 100}
                     widthPct={(1 / cols) * 100}
                     dimmed={dragging}
+                    hasMeeting={meetingEventIds?.has(seg.event.id)}
                     onBodyPointerDown={(e) => beginMove(e, { event: seg.event, seg, dayIdx })}
                     onResizePointerDown={
                       seg.event.recurring_event_id

@@ -45,6 +45,18 @@ export function CalendarView({
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [showCalendars, setShowCalendars] = useState(false)
   const recPhase = useMeetingRecording().phase
+  // events with an attached recording get the AudioLines glyph in the grid
+  // (meetings reads are remote-allowed, so the phone calendar shows them too)
+  const { data: allMeetings } = useInvoke('meetings:list', [{}], ['meetings'])
+  const meetingEventIds = useMemo(
+    () =>
+      new Set(
+        (allMeetings ?? [])
+          .map((m) => m.calendar_event_id)
+          .filter((id): id is string => id !== null)
+      ),
+    [allMeetings]
+  )
 
   useEffect(() => {
     if (focusDate) {
@@ -224,6 +236,7 @@ export function CalendarView({
           onMoveResize={patchTimes}
           onNavigate={onNavigate}
           onSwipeWeek={step}
+          meetingEventIds={meetingEventIds}
         />
       )}
 

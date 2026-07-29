@@ -244,6 +244,14 @@ export interface IpcApi {
   }>
   /** pull the configured model + VAD model; progress via meetings:event */
   'meetings:downloadModel': () => Promise<{ ok: true } | { ok: false; message: string }>
+  /** (re)generate the summary; force re-runs an existing one (text only —
+   *  fan-out into tasks/interactions happens once, on first summarize) */
+  'meetings:summarize': (
+    id: string,
+    force?: boolean
+  ) => Promise<{ ok: true } | { ok: false; message: string }>
+  /** undo toast: delete the fan-out's created tasks + clear their summary links */
+  'meetings:undoTasks': (id: string, taskIds: string[]) => void
 
   'capture:submit': (raw: string) => CaptureSubmitResult
   /** voice capture: NL → task/note/event/interaction via a one-shot haiku
@@ -631,6 +639,7 @@ export type MeetingEvent =
   | { kind: 'processing'; meetingId: string }
   | { kind: 'transcribed'; meetingId: string }
   | { kind: 'transcribe-error'; meetingId: string; message: string }
+  | { kind: 'summarized'; meetingId: string; taskIds: string[]; interactionCount: number }
 
 export interface IpcEvents {
   'db:changed': { entity: import('../core/types').DbEntity }

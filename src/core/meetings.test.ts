@@ -29,11 +29,20 @@ describe('migration 020', () => {
         applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))`)
       old.run('INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)', i + 1)
     })
-    const t = tasks.createTask(old, { title: 'pre-020 task' }, T0)
+    // raw insert: repo code targets the migrated schema (it now writes
+    // meeting_id), so pre-020 rows must be seeded with 019-era SQL
+    old.run(
+      `INSERT INTO tasks (id, title, notes, status, area, priority, sort_order, created_at, updated_at)
+       VALUES (?, ?, '', 'todo', 'personal', 2, 0, ?, ?)`,
+      '01PRE020TASK00000000000000',
+      'pre-020 task',
+      T0.toISOString(),
+      T0.toISOString()
+    )
 
     migrate(old)
 
-    const after = tasks.getTask(old, t.id)!
+    const after = tasks.getTask(old, '01PRE020TASK00000000000000')!
     expect(after.title).toBe('pre-020 task')
     expect(after.meeting_id).toBeNull()
     old.close()

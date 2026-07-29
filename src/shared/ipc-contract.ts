@@ -37,7 +37,11 @@ import type {
   CalendarCalendar,
   CalendarEventRecord,
   NewCalendarEvent,
-  CalendarEventPatch
+  CalendarEventPatch,
+  Meeting,
+  MeetingFilter,
+  MeetingTranscript,
+  NewMeeting
 } from '../core/types'
 import type {
   CommsAccount,
@@ -206,6 +210,31 @@ export interface IpcApi {
   'calendar:overlay': (startIso: string, endIso: string) => CalendarOverlay
   /** invite-field autocomplete: people with emails + past event attendees */
   'calendar:attendeeSuggest': (query: string) => AttendeeSuggestion[]
+
+  /** meeting capture: renderer records (MediaRecorder + worklet taps) and
+   *  streams chunks here; main owns files + row lifecycle. One recording
+   *  at a time — meetings:start throws while another is live. */
+  'meetings:list': (f?: MeetingFilter) => Meeting[]
+  'meetings:get': (id: string) => { meeting: Meeting; transcript: MeetingTranscript | null }
+  'meetings:start': (input?: NewMeeting) => Meeting
+  'meetings:stop': (id: string) => Meeting
+  /** base64 audio chunk: webm = playback archive, pcm = 16k int16 mono
+   *  appended into the channel's WAV (header patched at stop) */
+  'meetings:chunk': (
+    id: string,
+    channel: 'mic' | 'system',
+    kind: 'webm' | 'pcm',
+    dataBase64: string
+  ) => void
+  /** removes the recording directory and the row (transcript cascades) */
+  'meetings:delete': (id: string) => void
+  /** playback bytes as a data URL (VoiceNoteChip pattern) — webm archive */
+  'meetings:audioData': (
+    id: string,
+    channel: 'mic' | 'system'
+  ) => Promise<{ ok: true; dataUrl: string } | { ok: false; message: string }>
+  /** id of the meeting currently recording, if any (window reload recovery) */
+  'meetings:active': () => string | null
 
   'capture:submit': (raw: string) => CaptureSubmitResult
   /** voice capture: NL → task/note/event/interaction via a one-shot haiku
@@ -404,6 +433,13 @@ export interface AppSettings {
   /** native notifications for new messages: DMs + action-needed email
    *  ('important'), everything ('all'), or never ('off') */
   notifyInbox: 'off' | 'important' | 'all'
+  /** system-audio loopback path for meeting capture. 'sck' (default)
+   *  forces Chromium's ScreenCaptureKit path — the Core Audio tap path
+   *  ('catap') captures silence on this setup because Chromium never
+   *  triggers the system-audio TCC prompt (spike, 2026-07-28). Needs an
+   *  app restart; no UI — flip in ~/Kairos/settings.json to re-test after
+   *  Electron upgrades. */
+  meetingCaptureBackend: 'sck' | 'catap'
   chatProvider: ChatProvider
   /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
   chatModel: string | null

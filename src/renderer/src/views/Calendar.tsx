@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CircleDot, Plus, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import type { CalendarEventRecord } from '../../../core/types'
 import type { ViewId } from '../components/Sidebar'
 import { api, useInvoke } from '../lib/api'
+import { startRecording, useMeetingRecording } from '../lib/meeting-store'
 import { Button, Chip, Segmented } from '../components/ui'
 import {
   addDays,
@@ -43,6 +44,7 @@ export function CalendarView({
   const [anchor, setAnchor] = useState(() => focusDate ?? new Date())
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [showCalendars, setShowCalendars] = useState(false)
+  const recPhase = useMeetingRecording().phase
 
   useEffect(() => {
     if (focusDate) {
@@ -174,6 +176,18 @@ export function CalendarView({
             <CalendarsPopover onClose={() => setShowCalendars(false)} />
           )}
         </div>
+        {window.api && recPhase === 'idle' && (
+          <Button
+            variant="ghost"
+            className="!py-1 text-[12px]"
+            title="Record now (mic + system audio, stored locally) — link to an event later"
+            onClick={() => void startRecording()}
+          >
+            <span className="inline-flex items-center gap-1 text-danger">
+              <CircleDot size={12} /> Record
+            </span>
+          </Button>
+        )}
         <Button variant="accent" className="!py-1 text-[12px]" onClick={openNewEvent} title="New event (n)">
           <span className="inline-flex items-center gap-1">
             <Plus size={13} /> Event

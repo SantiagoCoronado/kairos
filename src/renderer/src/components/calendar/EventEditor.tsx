@@ -3,6 +3,7 @@ import { Check, Repeat, Trash2, Video, X } from 'lucide-react'
 import type { CalendarAttendee, CalendarCalendar, CalendarEventRecord } from '../../../../core/types'
 import type { AttendeeSuggestion } from '../../../../shared/ipc-contract'
 import { api } from '../../lib/api'
+import { MeetingSection } from '../meeting/MeetingSection'
 import { Button, Input, Select, cn } from '../ui'
 import { EVENT_COLORS } from './colors'
 import {
@@ -463,6 +464,10 @@ export function EventEditor({
           >
             <Video size={11} /> Join call
           </a>
+        )}
+
+        {existing && window.api && (
+          <MeetingSection eventId={existing.id} eventTitle={existing.title} />
         )}
 
         {error && <p className="text-[11.5px] text-danger">{error}</p>}

@@ -250,6 +250,8 @@ export interface IpcApi {
     id: string,
     force?: boolean
   ) => Promise<{ ok: true } | { ok: false; message: string }>
+  /** undo toast: delete the fan-out's created tasks + clear their summary links */
+  'meetings:undoTasks': (id: string, taskIds: string[]) => void
 
   'capture:submit': (raw: string) => CaptureSubmitResult
   /** voice capture: NL → task/note/event/interaction via a one-shot haiku

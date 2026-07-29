@@ -37,9 +37,14 @@ export function SummaryModal({
   const resummarize = async (): Promise<void> => {
     setBusy(true)
     setError(null)
-    const res = await api.invoke('meetings:summarize', m.id, true)
-    setBusy(false)
-    if (!res.ok) setError(res.message)
+    try {
+      const res = await api.invoke('meetings:summarize', m.id, true)
+      if (!res.ok) setError(res.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false) // a rejection must never leave the button spinning
+    }
   }
 
   const started = new Date(m.started_at)

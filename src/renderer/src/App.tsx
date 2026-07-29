@@ -66,9 +66,9 @@ export default function App(): React.JSX.Element {
         const n = ev.taskIds.length
         pushUndo({
           label: `Meeting summarized — ${n} task${n === 1 ? '' : 's'} added`,
-          revert: () => {
-            for (const id of ev.taskIds) void api.invoke('tasks:delete', id)
-          }
+          // scoped undo: deletes the created tasks AND clears their summary
+          // links (interactions stay — the meeting still happened)
+          revert: () => void api.invoke('meetings:undoTasks', ev.meetingId, ev.taskIds)
         })
       }),
     []

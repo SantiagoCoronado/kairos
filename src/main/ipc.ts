@@ -37,6 +37,7 @@ import { ensureModelFile, isModelPresent, VAD_MODEL, WHISPER_MODELS } from './mo
 import { WhisperServer } from './whisper'
 import { MeetingProcessor, type Transcriber } from './meeting-processor'
 import { summarizeMeeting } from './chat/meeting-summarizer'
+import { undoFanOutTasks } from '../core/meeting-summary'
 import { spawn as childSpawn } from 'node:child_process'
 import { rmSync, statSync } from 'node:fs'
 import { app, Notification } from 'electron'
@@ -536,11 +537,21 @@ export function registerIpc(): void {
   meetingManager = meetMgr
   meetMgr.recoverOrphans()
 
+  // one summarize per meeting at a time: auto-summarize + a Summarize click
+  // in the same window must not race two paid model calls
+  const summarizing = new Set<string>()
   const runSummarize = async (
     id: string,
     force = false
   ): Promise<{ ok: true } | { ok: false; message: string }> => {
-    const res = await summarizeMeeting(db, id, { force })
+    if (summarizing.has(id)) return { ok: true }
+    summarizing.add(id)
+    let res: Awaited<ReturnType<typeof summarizeMeeting>>
+    try {
+      res = await summarizeMeeting(db, id, { force })
+    } finally {
+      summarizing.delete(id)
+    }
     if (!res.ok) return res
     broadcast('db:changed', { entity: 'meetings' })
     if (res.taskIds.length) broadcast('db:changed', { entity: 'tasks' })
@@ -611,6 +622,11 @@ export function registerIpc(): void {
   handle('meetings:delete', (id) => meetMgr.delete(id))
   handle('meetings:active', () => meetMgr.activeMeetingId)
   handle('meetings:summarize', (id, force) => runSummarize(id, force ?? false))
+  handle('meetings:undoTasks', (id, taskIds) => {
+    undoFanOutTasks(db, id, taskIds)
+    broadcast('db:changed', { entity: 'tasks' })
+    broadcast('db:changed', { entity: 'meetings' })
+  })
   let modelDownloading = false
   handle('meetings:modelStatus', async () => {
     const modelsDir = join(DATA_DIR, 'models')

@@ -9,6 +9,7 @@ import {
   applySummaryFanOut,
   buildSummaryPrompt,
   parseSummaryResponse,
+  undoFanOutTasks,
   MAX_TRANSCRIPT_CHARS,
   type ParsedSummary
 } from './meeting-summary'
@@ -141,16 +142,23 @@ describe('applySummaryFanOut', () => {
     expect(res.meeting.summary.action_items.map((a) => a.task_id)).toEqual(res.taskIds)
   })
 
-  it('re-run updates the summary text only — the fan-out never repeats', () => {
+  it('re-run updates the text only and PRESERVES existing task links', () => {
     peopleRepo.upsertPerson(db, { name: 'Ana Torres', email: 'ana@x.com' }, T0)
     const m = meetingsRepo.createMeeting(db, { title: 'Standup' }, T0)
     const attendees = [{ email: 'ana@x.com' }]
-    applySummaryFanOut(db, m.id, PARSED, { model: 'sonnet', attendees }, T0)
+    const first = applySummaryFanOut(db, m.id, PARSED, { model: 'sonnet', attendees }, T0)
 
     const rerun = applySummaryFanOut(
       db,
       m.id,
-      { ...PARSED, summary_md: 'Revised summary.' },
+      {
+        ...PARSED,
+        summary_md: 'Revised summary.',
+        action_items: [
+          { text: 'Review the pull request', person: 'Ana Torres' }, // same text — link survives
+          { text: 'Completely new wording here', person: null } // reworded — no link
+        ]
+      },
       { model: 'sonnet', attendees },
       new Date(T0.getTime() + 60_000)
     )
@@ -159,6 +167,71 @@ describe('applySummaryFanOut', () => {
     expect(rerun.interactionCount).toBe(0)
     expect(rerun.meeting.summary_md).toBe('Revised summary.')
     expect(tasksRepo.listTasks(db, {})).toHaveLength(3) // no duplicates
+    // the SummaryModal's live task state depends on this surviving:
+    const reviewItem = rerun.meeting.summary.action_items.find(
+      (a) => a.text === 'Review the pull request'
+    )!
+    expect(reviewItem.task_id).toBe(first.taskIds[0])
+    expect(
+      rerun.meeting.summary.action_items.find((a) => a.text === 'Completely new wording here')!
+        .task_id
+    ).toBeNull()
+  })
+
+  it('never matches by loose substring: "Ana" stays clear of "Diana"', () => {
+    peopleRepo.upsertPerson(db, { name: 'Diana Prince', email: 'd@x.com' }, T0)
+    const m = meetingsRepo.createMeeting(db, {}, T0)
+    const res = applySummaryFanOut(
+      db,
+      m.id,
+      { ...PARSED, action_items: [{ text: 'Follow up', person: 'Ana' }] },
+      { model: 'sonnet', attendees: [] },
+      T0
+    )
+    expect(tasksRepo.getTask(db, res.taskIds[0])!.person_id).toBeNull()
+  })
+
+  it('matches first names as whole words: "Ana" → Ana Torres when unique', () => {
+    const ana = peopleRepo.upsertPerson(db, { name: 'Ana Torres', email: 'a@x.com' }, T0)
+    peopleRepo.upsertPerson(db, { name: 'Diana Prince', email: 'd@x.com' }, T0)
+    const m = meetingsRepo.createMeeting(db, {}, T0)
+    const res = applySummaryFanOut(
+      db,
+      m.id,
+      { ...PARSED, action_items: [{ text: 'Follow up', person: 'Ana' }] },
+      { model: 'sonnet', attendees: [] },
+      T0
+    )
+    expect(tasksRepo.getTask(db, res.taskIds[0])!.person_id).toBe(ana.id)
+  })
+
+  it('dedupes attendees resolving to the same person', () => {
+    peopleRepo.upsertPerson(db, { name: 'Ana Torres', email: 'ana@x.com' }, T0)
+    const m = meetingsRepo.createMeeting(db, {}, T0)
+    const res = applySummaryFanOut(
+      db,
+      m.id,
+      { ...PARSED, action_items: [] },
+      {
+        model: 'sonnet',
+        attendees: [{ email: 'ana@x.com' }, { email: 'ANA@X.COM', displayName: 'Ana (alt)' }]
+      },
+      T0
+    )
+    expect(res.interactionCount).toBe(1)
+  })
+
+  it('undoFanOutTasks deletes the tasks and clears their summary links', () => {
+    peopleRepo.upsertPerson(db, { name: 'Ana Torres', email: 'ana@x.com' }, T0)
+    const m = meetingsRepo.createMeeting(db, { title: 'Standup' }, T0)
+    const res = applySummaryFanOut(db, m.id, PARSED, { model: 'sonnet', attendees: [] }, T0)
+
+    undoFanOutTasks(db, m.id, res.taskIds)
+
+    for (const id of res.taskIds) expect(tasksRepo.getTask(db, id)).toBeUndefined()
+    const after = meetingsRepo.getMeeting(db, m.id)!
+    expect(after.summary.action_items.every((a) => a.task_id === null)).toBe(true)
+    expect(after.summary_md).toContain('Shipping Friday') // summary itself intact
   })
 
   it('ambiguous owner names stay unmatched instead of guessing', () => {

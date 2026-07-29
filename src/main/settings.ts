@@ -13,6 +13,7 @@ const DEFAULTS: Settings = {
   showClaudeUsage: true,
   autoLabel: false,
   notifyInbox: 'important',
+  meetingCaptureBackend: 'sck',
   chatProvider: 'claude',
   chatModel: null,
   chatEffort: null,

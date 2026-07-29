@@ -9,6 +9,11 @@ import { Scheduler } from './scheduler'
 import { closeDb, getDb } from './db'
 import { logLine } from './logger'
 import { pruneChatUploads } from './chat/uploads'
+import { applyCaptureFlags } from './capture-flags'
+import { getSettings } from './settings'
+
+// must land before app.whenReady() — Chromium reads feature flags at startup
+applyCaptureFlags(app.commandLine, getSettings().meetingCaptureBackend)
 
 // crash forensics — everything lands in ~/Kairos/logs/app.log
 process.on('uncaughtException', (err) => {

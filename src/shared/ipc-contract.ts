@@ -433,6 +433,13 @@ export interface AppSettings {
   /** native notifications for new messages: DMs + action-needed email
    *  ('important'), everything ('all'), or never ('off') */
   notifyInbox: 'off' | 'important' | 'all'
+  /** system-audio loopback path for meeting capture. 'sck' (default)
+   *  forces Chromium's ScreenCaptureKit path — the Core Audio tap path
+   *  ('catap') captures silence on this setup because Chromium never
+   *  triggers the system-audio TCC prompt (spike, 2026-07-28). Needs an
+   *  app restart; no UI — flip in ~/Kairos/settings.json to re-test after
+   *  Electron upgrades. */
+  meetingCaptureBackend: 'sck' | 'catap'
   chatProvider: ChatProvider
   /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
   chatModel: string | null

@@ -149,19 +149,26 @@ async function openRig(
   channel: MeetingChannel
 ): Promise<ChannelRig> {
   const stream = channel === 'mic' ? await media.getMicStream() : await media.getSystemStream()
-  // Chromium refuses video:false on getDisplayMedia — take the track, kill it
-  if (channel === 'system') for (const t of stream.getVideoTracks()) t.stop()
-  const recorder = media.makeRecorder(stream, (bytes) =>
-    sendChunk(invoke, meetingId, channel, 'webm', bytes)
-  )
-  const rig: ChannelRig = { stream, recorder, tap: { stop: () => {} }, pcmPending: [], pcmPendingSamples: 0 }
-  rig.tap = await media.makeTap(stream, (frames) => {
-    rig.pcmPending.push(floatTo16BitPcm(frames))
-    rig.pcmPendingSamples += frames.length
-    if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel)
-  })
-  recorder.start(WEBM_TIMESLICE_MS)
-  return rig
+  try {
+    // Chromium refuses video:false on getDisplayMedia — take the track, kill it
+    if (channel === 'system') for (const t of stream.getVideoTracks()) t.stop()
+    const recorder = media.makeRecorder(stream, (bytes) =>
+      sendChunk(invoke, meetingId, channel, 'webm', bytes)
+    )
+    const rig: ChannelRig = { stream, recorder, tap: { stop: () => {} }, pcmPending: [], pcmPendingSamples: 0 }
+    rig.tap = await media.makeTap(stream, (frames) => {
+      rig.pcmPending.push(floatTo16BitPcm(frames))
+      rig.pcmPendingSamples += frames.length
+      if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel)
+    })
+    recorder.start(WEBM_TIMESLICE_MS)
+    return rig
+  } catch (err) {
+    // a stream acquired here but never returned would be invisible to the
+    // caller's rollback — this is the exact shape of the worklet-CSP failure
+    stopTracks(stream)
+    throw err
+  }
 }
 
 export async function startRecording(opts: {
@@ -190,10 +197,27 @@ export async function startRecording(opts: {
     rigs.mic = await openRig(media, invoke, meeting.id, 'mic')
     rigs.system = await openRig(media, invoke, meeting.id, 'system')
   } catch (err) {
-    // half-open capture: release anything acquired, drop the started row
-    for (const rig of Object.values(rigs)) if (rig) stopTracks(rig.stream)
+    // half-open capture: release the whole rig (tap's AudioContext and
+    // recorder included — tracks alone leak both), drop the started row
+    for (const rig of Object.values(rigs)) {
+      if (!rig) continue
+      rig.tap.stop()
+      void rig.recorder.stop().catch(() => {})
+      stopTracks(rig.stream)
+    }
     rigs = {}
-    track(invoke('meetings:delete', meeting.id))
+    sends = [] // in-flight chunk sends belong to the dead rig
+    try {
+      await invoke('meetings:delete', meeting.id)
+    } catch (deleteErr) {
+      // a row stuck in 'recording' gets swept by recoverOrphans on next
+      // launch — log so a repeat offender is diagnosable
+      void invoke(
+        'log:renderer',
+        'warn',
+        `meetings: rollback delete failed for ${meeting.id}: ${String(deleteErr)}`
+      ).catch(() => {})
+    }
     setState({
       phase: 'error',
       message: `Couldn't start capture: ${err instanceof Error ? err.message : String(err)}`

@@ -64,6 +64,7 @@ interface FakeRig {
   taps: { stream: StreamLike; onFrames: (f: Float32Array) => void; stopped: boolean }[]
   media: CaptureMedia
   failSystem?: Error
+  failTapOn?: StreamLike
 }
 
 function makeFakeMedia(): FakeRig {
@@ -87,6 +88,7 @@ function makeFakeMedia(): FakeRig {
         }
       },
       makeTap: async (stream, onFrames): Promise<TapLike> => {
+        if (rig.failTapOn === stream) throw new Error('worklet module failed')
         const tap = { stream, onFrames, stopped: false }
         rig.taps.push(tap)
         return { stop: () => void (tap.stopped = true) }
@@ -153,7 +155,7 @@ describe('startRecording', () => {
     expect(invokeCalls('meetings:start')).toHaveLength(1)
   })
 
-  it('rolls back on system-capture failure: releases mic, deletes the row', async () => {
+  it('rolls back on system-capture failure: releases the full mic rig, deletes the row', async () => {
     rig.failSystem = new Error('loopback denied')
 
     const m = await startRecording()
@@ -163,8 +165,24 @@ describe('startRecording', () => {
     expect(snap.phase).toBe('error')
     if (snap.phase === 'error') expect(snap.message).toMatch(/loopback denied/)
     expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
+    // tracks alone aren't enough — the tap's AudioContext and the recorder
+    // leak unless explicitly stopped
+    expect(rig.taps.every((t) => t.stopped)).toBe(true)
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
     expect(invokeCalls('meetings:delete')).toEqual([['m1']])
     expect(invokeCalls('meetings:stop')).toHaveLength(0)
+  })
+
+  it('releases a stream acquired inside a failing openRig (worklet-CSP shape)', async () => {
+    rig.failTapOn = rig.systemStream // mic opens fine; system tap explodes
+
+    const m = await startRecording()
+
+    expect(m).toBeNull()
+    expect(rig.systemStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(rig.taps.every((t) => t.stopped)).toBe(true)
+    expect(invokeCalls('meetings:delete')).toEqual([['m1']])
   })
 })
 

@@ -1,6 +1,6 @@
 import { ipcMain, BrowserWindow, desktopCapturer, session } from 'electron'
 import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
@@ -462,6 +462,9 @@ export function registerIpc(): void {
   // Meeting capture: system audio arrives via getDisplayMedia loopback —
   // the handler resolves audio-only requests to pure loopback (Notion's
   // shape); the renderer streams recorded chunks back over meetings:chunk.
+  // NOTE: this grants loopback to ANY audio-only request in defaultSession
+  // with no origin gate — fine while every page is first-party, but must be
+  // revisited if a <webview>/embedded origin ever lands in this session.
   session.defaultSession.setDisplayMediaRequestHandler(
     (request, callback) => {
       void resolveDisplayMedia(request, async () =>
@@ -489,13 +492,15 @@ export function registerIpc(): void {
   )
   handle('meetings:delete', (id) => meetMgr.delete(id))
   handle('meetings:active', () => meetMgr.activeMeetingId)
-  handle('meetings:audioData', (id, channel) => {
+  handle('meetings:audioData', async (id, channel) => {
     const m = meetingsRepo.getMeeting(db, id)
     const path = channel === 'mic' ? m?.mic_path : m?.system_path
     if (!m || !path) return { ok: false as const, message: 'No audio for this channel.' }
     if (m.audio_deleted_at) return { ok: false as const, message: 'Audio was deleted.' }
     try {
-      const bytes = readFileSync(path)
+      // async read: an hour-long webm is tens of MB — a sync read here would
+      // stall every IPC reply (see the stall watchdog in index.ts)
+      const bytes = await readFile(path)
       return { ok: true as const, dataUrl: `data:audio/webm;base64,${bytes.toString('base64')}` }
     } catch (err) {
       return { ok: false as const, message: err instanceof Error ? err.message : String(err) }

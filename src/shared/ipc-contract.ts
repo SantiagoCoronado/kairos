@@ -232,7 +232,7 @@ export interface IpcApi {
   'meetings:audioData': (
     id: string,
     channel: 'mic' | 'system'
-  ) => { ok: true; dataUrl: string } | { ok: false; message: string }
+  ) => Promise<{ ok: true; dataUrl: string } | { ok: false; message: string }>
   /** id of the meeting currently recording, if any (window reload recovery) */
   'meetings:active': () => string | null
 

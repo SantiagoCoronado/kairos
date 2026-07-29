@@ -6,7 +6,7 @@
 // after phase-2 transcription). Filesystem and clock are injected so the
 // whole lifecycle is testable without Electron (see terminal.ts precedent).
 
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import {
   appendFileSync,
   closeSync,
@@ -61,6 +61,24 @@ const realFs: MeetingFs = {
   rmDir: (dir) => rmSync(dir, { recursive: true, force: true })
 }
 
+// IPC-facing inputs are untrusted strings (the preload bridge is a raw
+// passthrough and remote clients speak the same contract): pin ids to the
+// ULID shape and channels/kinds to their literal unions before they touch a
+// path — `join(dir, id)` with a '../'-shaped id walks out of recordingsDir.
+const ULID_SHAPE = /^[0-9A-Z]{26}$/i
+
+function assertMeetingId(id: string): void {
+  if (!ULID_SHAPE.test(id)) throw new Error(`invalid meeting id: ${id}`)
+}
+
+function assertChannel(channel: string): asserts channel is MeetingChannel {
+  if (channel !== 'mic' && channel !== 'system') throw new Error(`invalid channel: ${channel}`)
+}
+
+function assertKind(kind: string): asserts kind is ChunkKind {
+  if (kind !== 'webm' && kind !== 'pcm') throw new Error(`invalid chunk kind: ${kind}`)
+}
+
 export class MeetingManager {
   private activeId: string | null = null
 
@@ -77,7 +95,10 @@ export class MeetingManager {
     const orphans = meetings.listMeetings(this.db, { status: 'recording' })
     for (const m of orphans) {
       const { micPath, systemPath, pcmBytes } = this.finalizeFiles(m.id)
-      const hasAudio = micPath !== null || systemPath !== null
+      // WAV data counts as audio too: the PCM tap flushes ~every 1s vs the
+      // recorder's 3s timeslice, so an early crash can leave transcribable
+      // PCM with no webm yet
+      const hasAudio = micPath !== null || systemPath !== null || pcmBytes > 0
       meetings.updateMeeting(
         this.db,
         m.id,
@@ -85,6 +106,8 @@ export class MeetingManager {
           ? {
               status: 'ready',
               ended_at: this.now().toISOString(),
+              // wall-clock is meaningless after a crash — derive from PCM
+              // bytes (stop() uses the clock; both land within a flush)
               duration_seconds: Math.round(pcmBytes / PCM_BYTES_PER_SECOND),
               mic_path: micPath,
               system_path: systemPath
@@ -111,6 +134,8 @@ export class MeetingManager {
 
   appendChunk(id: string, channel: MeetingChannel, kind: ChunkKind, data: Uint8Array): void {
     if (id !== this.activeId) throw new Error(`meeting not recording: ${id}`)
+    assertChannel(channel)
+    assertKind(kind)
     this.fs.append(this.pathOf(id, channel, kind === 'webm' ? 'webm' : 'wav'), data)
   }
 
@@ -138,6 +163,7 @@ export class MeetingManager {
   }
 
   delete(id: string): void {
+    assertMeetingId(id)
     if (id === this.activeId) this.activeId = null
     this.fs.rmDir(this.dirOf(id))
     meetings.deleteMeeting(this.db, id)
@@ -154,7 +180,12 @@ export class MeetingManager {
   }
 
   private dirOf(id: string): string {
-    return join(this.recordingsDir, id)
+    assertMeetingId(id)
+    const dir = resolve(join(this.recordingsDir, id))
+    // defense in depth behind the ULID check — never operate outside the root
+    if (!dir.startsWith(resolve(this.recordingsDir) + sep))
+      throw new Error(`meeting path escapes recordings dir: ${id}`)
+    return dir
   }
 
   private pathOf(id: string, channel: MeetingChannel, ext: 'webm' | 'wav'): string {

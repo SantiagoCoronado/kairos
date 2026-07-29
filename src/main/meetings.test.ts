@@ -125,6 +125,37 @@ describe('MeetingManager', () => {
     expect(recovered.mic_path).toBe(`/rec/${m.id}/mic.webm`)
   })
 
+  it('rejects traversal-shaped ids before any filesystem access', () => {
+    const mgr = mkManager()
+    const rmDir = vi.spyOn(fs, 'rmDir')
+    expect(() => mgr.delete('../../../Users/someone/Documents')).toThrow(/invalid meeting id/)
+    expect(() => mgr.delete('..')).toThrow(/invalid meeting id/)
+    expect(rmDir).not.toHaveBeenCalled()
+  })
+
+  it('rejects unknown channels and kinds on appendChunk', () => {
+    const mgr = mkManager()
+    const m = mgr.start()
+    expect(() =>
+      mgr.appendChunk(m.id, '../../evil' as never, 'webm', new Uint8Array([1]))
+    ).toThrow(/invalid channel/)
+    expect(() => mgr.appendChunk(m.id, 'mic', '../x' as never, new Uint8Array([1]))).toThrow(
+      /invalid chunk kind/
+    )
+    expect(fs.size(`/rec/${m.id}/../../evil.webm`)).toBeNull()
+  })
+
+  it('recoverOrphans keeps WAV-only audio (early crash, no webm yet)', () => {
+    const mgr = mkManager()
+    const m = mgr.start()
+    mgr.appendChunk(m.id, 'mic', 'pcm', new Uint8Array(PCM_SAMPLE_RATE * 2 * 2)) // 2s PCM, no webm
+    mkManager().recoverOrphans()
+    const recovered = meetings.getMeeting(db, m.id)!
+    expect(recovered.status).toBe('ready')
+    expect(recovered.duration_seconds).toBe(2)
+    expect(recovered.mic_path).toBeNull() // no playback archive, but transcribable
+  })
+
   it('recoverOrphans marks fileless recordings as error', () => {
     const m = meetings.createMeeting(db, {}, T0) // row exists, nothing on disk
     mkManager().recoverOrphans()

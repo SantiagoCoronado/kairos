@@ -17,6 +17,7 @@ const DEFAULTS: Settings = {
   meetingModel: 'large-v3-turbo',
   meetingLanguage: null,
   meetingAudioRetentionDays: null,
+  meetingPromptsEnabled: false,
   chatProvider: 'claude',
   chatModel: null,
   chatEffort: null,

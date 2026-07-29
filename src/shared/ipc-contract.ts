@@ -464,6 +464,9 @@ export interface AppSettings {
    *  app restart; no UI — flip in ~/Kairos/settings.json to re-test after
    *  Electron upgrades. */
   meetingCaptureBackend: 'sck' | 'catap'
+  /** opt-in "start recording?" toast when a calendar event with a meeting
+   *  link reaches its start time (default off — recording never auto-starts) */
+  meetingPromptsEnabled: boolean
   chatProvider: ChatProvider
   /** model alias ('opus', 'sonnet', …) or full id; null = Claude Code default */
   chatModel: string | null
@@ -640,6 +643,9 @@ export type MeetingEvent =
   | { kind: 'transcribed'; meetingId: string }
   | { kind: 'transcribe-error'; meetingId: string; message: string }
   | { kind: 'summarized'; meetingId: string; taskIds: string[]; interactionCount: number }
+  /** a calendar event with a conferencing URL just hit its start time —
+   *  renderer shows the opt-in "record?" toast; nothing auto-starts */
+  | { kind: 'record-prompt'; eventId: string; title: string; startAt: string }
 
 export interface IpcEvents {
   'db:changed': { entity: import('../core/types').DbEntity }

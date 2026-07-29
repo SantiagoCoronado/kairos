@@ -254,16 +254,10 @@ export async function recoverActiveRecording(): Promise<void> {
 
 // ---- real media implementation ---------------------------------------------
 
-/** inline AudioWorklet: forwards 128-frame input blocks to the main thread */
-const TAP_WORKLET_SOURCE = `
-registerProcessor('kairos-pcm-tap', class extends AudioWorkletProcessor {
-  process(inputs) {
-    const ch = inputs[0]?.[0]
-    if (ch && ch.length) this.port.postMessage(ch.slice(0))
-    return true
-  }
-})
-`
+/** static worklet asset (public/pcm-tap.worklet.js) — the renderer CSP
+ *  blocks blob:-URL modules, and a relative URL works under the dev
+ *  server, packaged file://, and remote http alike */
+const TAP_WORKLET_URL = 'pcm-tap.worklet.js'
 
 const realMedia: CaptureMedia = {
   getMicStream: () =>
@@ -296,14 +290,7 @@ const realMedia: CaptureMedia = {
 
   makeTap: async (stream, onFrames) => {
     const ctx = new AudioContext({ sampleRate: 16000 })
-    const workletUrl = URL.createObjectURL(
-      new Blob([TAP_WORKLET_SOURCE], { type: 'application/javascript' })
-    )
-    try {
-      await ctx.audioWorklet.addModule(workletUrl)
-    } finally {
-      URL.revokeObjectURL(workletUrl)
-    }
+    await ctx.audioWorklet.addModule(TAP_WORKLET_URL)
     const source = ctx.createMediaStreamSource(stream as MediaStream)
     const tap = new AudioWorkletNode(ctx, 'kairos-pcm-tap', {
       numberOfInputs: 1,

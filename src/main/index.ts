@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { createMainWindow } from './windows/main-window'
 import { createCaptureWindow } from './windows/capture-window'
 import { registerCaptureHotkey } from './hotkey'
-import { registerIpc, getCommsManager, getTaskRunner, getTerminalManager, getCalendarManager } from './ipc'
+import { registerIpc, getCommsManager, getTaskRunner, getTerminalManager, getCalendarManager, getMeetingManager } from './ipc'
 import { Scheduler } from './scheduler'
 import { closeDb, getDb } from './db'
 import { logLine } from './logger'
@@ -130,6 +130,7 @@ if (!gotLock) {
     getCommsManager()?.stop()
     getCalendarManager()?.stop()
     getTerminalManager()?.disposeAll()
+    getMeetingManager()?.shutdown()
     closeDb()
   })
 }

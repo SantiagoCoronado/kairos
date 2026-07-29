@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, desktopCapturer, session } from 'electron'
 import { join } from 'node:path'
 import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
@@ -29,6 +29,9 @@ import { executeCapture } from '../core/capture'
 import { hideCaptureWindow } from './windows/capture-window'
 import * as comms from '../core/repo/comms'
 import * as calendarRepo from '../core/repo/calendar'
+import * as meetingsRepo from '../core/repo/meetings'
+import { MeetingManager } from './meetings'
+import { resolveDisplayMedia } from './display-media'
 import { localDate } from '../core/ids'
 import { CommsSyncManager } from './comms/manager'
 import { CommsNotifier } from './comms/notifier'
@@ -97,6 +100,12 @@ let calendarManager: CalendarSyncManager | null = null
 
 export function getCalendarManager(): CalendarSyncManager | null {
   return calendarManager
+}
+
+let meetingManager: MeetingManager | null = null
+
+export function getMeetingManager(): MeetingManager | null {
+  return meetingManager
 }
 
 export function registerIpc(): void {
@@ -449,6 +458,37 @@ export function registerIpc(): void {
       if (cal?.account_id) calManager.syncNow(cal.account_id)
     }
   })
+  // Meeting capture: system audio arrives via getDisplayMedia loopback —
+  // the handler resolves audio-only requests to pure loopback (Notion's
+  // shape); the renderer streams recorded chunks back over meetings:chunk.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      void resolveDisplayMedia(request, async () =>
+        desktopCapturer.getSources({ types: ['screen'] })
+      ).then(callback)
+    },
+    { useSystemPicker: false }
+  )
+  const meetMgr = new MeetingManager(db, join(DATA_DIR, 'recordings'), () =>
+    broadcast('db:changed', { entity: 'meetings' })
+  )
+  meetingManager = meetMgr
+  meetMgr.recoverOrphans()
+
+  handle('meetings:list', (f) => meetingsRepo.listMeetings(db, f))
+  handle('meetings:get', (id) => {
+    const meeting = meetingsRepo.getMeeting(db, id)
+    if (!meeting) throw new Error(`meeting not found: ${id}`)
+    return { meeting, transcript: meetingsRepo.getTranscript(db, id) ?? null }
+  })
+  handle('meetings:start', (input) => meetMgr.start(input))
+  handle('meetings:stop', (id) => meetMgr.stop(id))
+  handle('meetings:chunk', (id, channel, kind, dataBase64) =>
+    meetMgr.appendChunk(id, channel, kind, Buffer.from(dataBase64, 'base64'))
+  )
+  handle('meetings:delete', (id) => meetMgr.delete(id))
+  handle('meetings:active', () => meetMgr.activeMeetingId)
+
   handle('calendar:accounts', () => calendarRepo.listCalendarAccounts(db))
   handle('calendar:connectGoogle', async () => {
     try {

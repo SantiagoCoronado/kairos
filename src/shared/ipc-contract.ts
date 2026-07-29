@@ -37,7 +37,11 @@ import type {
   CalendarCalendar,
   CalendarEventRecord,
   NewCalendarEvent,
-  CalendarEventPatch
+  CalendarEventPatch,
+  Meeting,
+  MeetingFilter,
+  MeetingTranscript,
+  NewMeeting
 } from '../core/types'
 import type {
   CommsAccount,
@@ -206,6 +210,26 @@ export interface IpcApi {
   'calendar:overlay': (startIso: string, endIso: string) => CalendarOverlay
   /** invite-field autocomplete: people with emails + past event attendees */
   'calendar:attendeeSuggest': (query: string) => AttendeeSuggestion[]
+
+  /** meeting capture: renderer records (MediaRecorder + worklet taps) and
+   *  streams chunks here; main owns files + row lifecycle. One recording
+   *  at a time — meetings:start throws while another is live. */
+  'meetings:list': (f?: MeetingFilter) => Meeting[]
+  'meetings:get': (id: string) => { meeting: Meeting; transcript: MeetingTranscript | null }
+  'meetings:start': (input?: NewMeeting) => Meeting
+  'meetings:stop': (id: string) => Meeting
+  /** base64 audio chunk: webm = playback archive, pcm = 16k int16 mono
+   *  appended into the channel's WAV (header patched at stop) */
+  'meetings:chunk': (
+    id: string,
+    channel: 'mic' | 'system',
+    kind: 'webm' | 'pcm',
+    dataBase64: string
+  ) => void
+  /** removes the recording directory and the row (transcript cascades) */
+  'meetings:delete': (id: string) => void
+  /** id of the meeting currently recording, if any (window reload recovery) */
+  'meetings:active': () => string | null
 
   'capture:submit': (raw: string) => CaptureSubmitResult
   /** voice capture: NL → task/note/event/interaction via a one-shot haiku

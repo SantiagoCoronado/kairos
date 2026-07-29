@@ -30,4 +30,11 @@ mkdir -p "$DEST"
 cp "build/bin/whisper-server" "$DEST/whisper-server"
 codesign --force --sign - "$DEST/whisper-server" 2>/dev/null || true
 echo "[whisper] staged $DEST/whisper-server ($(du -h "$DEST/whisper-server" | cut -f1 | tr -d ' '))"
-"$DEST/whisper-server" --help > /dev/null 2>&1 && echo "[whisper] binary runs OK" || true
+# hard smoke test: shipping a binary that can't even print --help would put
+# a broken sidecar in the dmg (npm run dist depends on this script)
+if "$DEST/whisper-server" --help > /dev/null 2>&1; then
+  echo "[whisper] binary runs OK"
+else
+  echo "[whisper] ERROR: staged binary failed to execute" >&2
+  exit 1
+fi

@@ -39,6 +39,10 @@ const MAINTENANCE_MS = 60 * 60_000
 
 export class MeetingProcessor {
   private queue: string[] = []
+  /** ids shifted out of the queue but still being processed — enqueue must
+   *  dedup against these too, or a mid-job re-enqueue runs a second pass
+   *  after the WAVs are gone and overwrites the transcript with an empty one */
+  private inFlight = new Set<string>()
   private draining = false
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null
 
@@ -63,7 +67,7 @@ export class MeetingProcessor {
   }
 
   enqueue(meetingId: string): void {
-    if (this.queue.includes(meetingId)) return
+    if (this.queue.includes(meetingId) || this.inFlight.has(meetingId)) return
     const m = meetings.getMeeting(this.db, meetingId)
     if (!m) return
     if (m.status !== 'processing')
@@ -81,7 +85,12 @@ export class MeetingProcessor {
       for (;;) {
         const id = this.queue.shift()
         if (!id) return
-        await this.process(id)
+        this.inFlight.add(id)
+        try {
+          await this.process(id)
+        } finally {
+          this.inFlight.delete(id)
+        }
       }
     } finally {
       this.draining = false
@@ -155,8 +164,10 @@ export class MeetingProcessor {
     if (retentionDays == null) return
     const now = this.deps.now?.() ?? new Date()
     const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60_000).toISOString()
+    // error'd meetings age out too — they get retried by every launch's
+    // sweep until retention expires, then their audio goes like anyone's
     const old = meetings
-      .listMeetings(this.db, { status: 'ready' })
+      .listMeetings(this.db, { status: ['ready', 'error'] })
       .filter((m) => !m.audio_deleted_at && m.ended_at !== null && m.ended_at < cutoff)
     for (const m of old) {
       this.deleteAudioFiles(m)

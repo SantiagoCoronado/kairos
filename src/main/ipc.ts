@@ -119,7 +119,9 @@ let meetingProcessor: MeetingProcessor | null = null
 let whisperServer: WhisperServer | null = null
 let whisperKey: string | null = null
 
-/** quit-time: stop the retention timer and kill the sidecar */
+/** quit-time: stop the retention timer and kill the sidecar. A job that
+ *  was mid-transcription is NOT re-enqueued here on purpose — its row is
+ *  still 'processing', so the next launch's sweepIncomplete retries it. */
 export function shutdownMeetings(): void {
   meetingProcessor?.stopMaintenance()
   whisperServer?.stop()
@@ -555,10 +557,11 @@ export function registerIpc(): void {
     },
     onEvent: (ev) => broadcast('meetings:event', ev),
     onChange: () => broadcast('db:changed', { entity: 'meetings' }),
-    notify: (title, body) => {
+    notify: (title, body, meetingId) => {
       if (!Notification.isSupported()) return
       const n = new Notification({ title, body, silent: true })
-      n.on('click', () => broadcast('nav:goto', { view: 'calendar' }))
+      // id rides along so the renderer can focus the meeting's day
+      n.on('click', () => broadcast('nav:goto', { view: 'calendar', id: meetingId }))
       n.show()
     },
     log: (level, message) => logLine(level, 'meetings', message)

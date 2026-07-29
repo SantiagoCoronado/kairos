@@ -10,6 +10,7 @@ import type { TranscriptSegment } from '../core/types'
 export interface WhisperChildLike {
   kill(): void
   on(event: 'exit', cb: () => void): void
+  on(event: 'error', cb: (err: Error) => void): void
 }
 
 export type WhisperSpawn = (file: string, args: string[]) => WhisperChildLike
@@ -103,6 +104,7 @@ export class WhisperServer {
   private ready: Promise<void> | null = null
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private inFlight = 0
+  private spawnError: Error | null = null
 
   constructor(
     private readonly cfg: WhisperConfig,
@@ -152,11 +154,23 @@ export class WhisperServer {
   private async ensureRunning(): Promise<void> {
     if (!this.child) {
       this.deps.log('info', `whisper: starting sidecar (${this.cfg.modelPath})`)
+      this.spawnError = null
       const child = this.deps.spawn(this.cfg.binaryPath, buildServerArgs(this.cfg))
       child.on('exit', () => {
         // crash or external kill — next transcribe() respawns
         if (this.child === child) {
           this.deps.log('warn', 'whisper: sidecar exited')
+          this.child = null
+          this.ready = null
+        }
+      })
+      // spawn failures (missing binary, not executable, quarantined) emit
+      // 'error', never 'exit' — without this we'd poll fetch for the full
+      // ready timeout and surface a useless generic message
+      child.on('error', (err: Error) => {
+        if (this.child === child) {
+          this.deps.log('error', `whisper: sidecar failed to start: ${err.message}`)
+          this.spawnError = err
           this.child = null
           this.ready = null
         }
@@ -170,7 +184,10 @@ export class WhisperServer {
   private async waitUntilReady(): Promise<void> {
     const deadline = Date.now() + (this.cfg.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS)
     for (;;) {
-      if (!this.child) throw new Error('whisper-server exited during startup')
+      if (!this.child)
+        throw this.spawnError
+          ? new Error(`whisper-server failed to start: ${this.spawnError.message}`)
+          : new Error('whisper-server exited during startup')
       try {
         // any HTTP response means the server (and thus the model) is up
         await this.deps.fetchFn(this.baseUrl, { method: 'GET' })

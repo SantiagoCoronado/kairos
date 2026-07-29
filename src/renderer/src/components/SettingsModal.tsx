@@ -413,6 +413,24 @@ const MEETING_MODELS: { value: AppSettings['meetingModel']; label: string }[] = 
   { value: 'tiny', label: 'Tiny (78 MB) — quick tests' }
 ]
 
+// valid whisper.cpp -l codes only — free text here would silently
+// transcribe in the wrong language
+const MEETING_LANGUAGES: { value: string; label: string }[] = [
+  { value: '', label: 'Autodetect' },
+  { value: 'en', label: 'English' },
+  { value: 'es', label: 'Spanish' },
+  { value: 'pt', label: 'Portuguese' },
+  { value: 'fr', label: 'French' },
+  { value: 'de', label: 'German' },
+  { value: 'it', label: 'Italian' },
+  { value: 'nl', label: 'Dutch' },
+  { value: 'ja', label: 'Japanese' },
+  { value: 'ko', label: 'Korean' },
+  { value: 'zh', label: 'Chinese' },
+  { value: 'ru', label: 'Russian' },
+  { value: 'hi', label: 'Hindi' }
+]
+
 const RETENTION: { value: string; label: string }[] = [
   { value: '', label: 'Keep forever' },
   { value: '7', label: 'Delete after 7 days' },
@@ -501,13 +519,17 @@ function MeetingsSection({ settings, save }: SectionProps): React.JSX.Element {
           </Button>
         )}
       </Row>
-      <Row label="language" hint="Force a transcription language, or leave blank to autodetect.">
-        <Input
-          className="w-24 font-mono text-[11px]"
-          placeholder="auto"
-          defaultValue={settings.meetingLanguage ?? ''}
-          onBlur={(e) => save({ meetingLanguage: e.target.value.trim() || null })}
-        />
+      <Row label="language" hint="Force a transcription language when autodetect guesses wrong.">
+        <Select
+          value={settings.meetingLanguage ?? ''}
+          onChange={(e) => save({ meetingLanguage: e.target.value || null })}
+        >
+          {MEETING_LANGUAGES.map((l) => (
+            <option key={l.value} value={l.value}>
+              {l.label}
+            </option>
+          ))}
+        </Select>
       </Row>
       <Row
         label="keep audio"

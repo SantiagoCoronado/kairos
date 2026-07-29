@@ -16,8 +16,10 @@ export interface ModelFile {
   label: string
 }
 
-// sizes verified against HF content-length 2026-07-28 — the byte count is
-// the integrity check, keep in sync when bumping model versions
+// Sizes verified against HF content-length 2026-07-28. The byte count IS
+// the integrity check — deliberately: if HF re-uploads a file with a new
+// size, downloads fail as "truncated" until the pin here is bumped, which
+// beats silently accepting a different model than the one we tested.
 export const WHISPER_MODELS: Record<MeetingModel, ModelFile> = {
   'large-v3-turbo': {
     file: 'ggml-large-v3-turbo.bin',
@@ -57,8 +59,31 @@ export async function isModelPresent(dir: string, info: ModelFile): Promise<bool
   }
 }
 
-/** Download (or confirm) a model file; resolves to its absolute path. */
-export async function ensureModelFile(
+// Concurrent callers (Settings button + the transcription pipeline's lazy
+// pull) must join one in-flight download — two writers on the same .part
+// interleave chunks, and either failure path rm's the other's file.
+const inFlightDownloads = new Map<string, Promise<string>>()
+
+/** Download (or confirm) a model file; resolves to its absolute path.
+ *  Concurrent calls for the same destination share one download (the
+ *  first caller's onProgress reports for everyone). */
+export function ensureModelFile(
+  dir: string,
+  info: ModelFile,
+  onProgress?: ModelProgress,
+  fetchFn: typeof fetch = fetch
+): Promise<string> {
+  const path = join(dir, info.file)
+  const existing = inFlightDownloads.get(path)
+  if (existing) return existing
+  const job = downloadModelFile(dir, info, onProgress, fetchFn).finally(() =>
+    inFlightDownloads.delete(path)
+  )
+  inFlightDownloads.set(path, job)
+  return job
+}
+
+async function downloadModelFile(
   dir: string,
   info: ModelFile,
   onProgress?: ModelProgress,

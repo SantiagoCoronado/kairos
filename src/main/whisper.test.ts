@@ -81,6 +81,7 @@ describe('parseWhisperResponse', () => {
 interface FakeChild extends WhisperChildLike {
   killed: boolean
   fireExit: () => void
+  fireError: (err: Error) => void
 }
 
 function makeRig(opts: { failFetches?: number } = {}): {
@@ -93,12 +94,13 @@ function makeRig(opts: { failFetches?: number } = {}): {
   let failuresLeft = opts.failFetches ?? 0
 
   const spawn = (_file: string, _args: string[]): WhisperChildLike => {
-    let exitCb: () => void = () => {}
+    const cbs = new Map<string, (err?: Error) => void>()
     const child: FakeChild = {
       killed: false,
       kill: () => void (child.killed = true),
-      on: (_e, cb) => void (exitCb = cb),
-      fireExit: () => exitCb()
+      on: ((e: string, cb: (err?: Error) => void) => void cbs.set(e, cb)) as FakeChild['on'],
+      fireExit: () => cbs.get('exit')?.(),
+      fireError: (err: Error) => cbs.get('error')?.(err)
     }
     children.push(child)
     return child
@@ -166,6 +168,16 @@ describe('WhisperServer', () => {
     expect(children).toHaveLength(2)
   })
 
+  it('fails fast with the real message on spawn error (missing/quarantined binary)', async () => {
+    const { server, children } = makeRig({ failFetches: 99 }) // server never answers
+    const attempt = server.transcribe('/rec/a.wav')
+    // spawn errors emit 'error' (never 'exit') on the next tick
+    await new Promise((r) => setTimeout(r, 0))
+    children[0].fireError(new Error('spawn ENOENT'))
+    await expect(attempt).rejects.toThrow(/failed to start: spawn ENOENT/)
+    expect(server.running).toBe(false)
+  })
+
   it('fails fast when the server never becomes ready', async () => {
     const { server, children } = makeRig({ failFetches: 99 })
     // deadline already passed → first failed poll throws
@@ -179,7 +191,8 @@ describe('WhisperServer', () => {
             killed: false,
             kill: () => void (child.killed = true),
             on: () => {},
-            fireExit: () => {}
+            fireExit: () => {},
+            fireError: () => {}
           }
           children.push(child)
           return child

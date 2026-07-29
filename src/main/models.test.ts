@@ -56,4 +56,30 @@ describe('ensureModelFile', () => {
     const fetch404 = (async () => new Response('nope', { status: 404 })) as typeof fetch
     await expect(ensureModelFile(dir, INFO, undefined, fetch404)).rejects.toThrow(/404/)
   })
+
+  it('concurrent callers join one in-flight download (no .part clobbering)', async () => {
+    let fetches = 0
+    const slowFetch = (async () => {
+      fetches++
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          setTimeout(() => {
+            controller.enqueue(new Uint8Array([1, 2, 3, 4, 5, 6]))
+            controller.close()
+          }, 20)
+        }
+      })
+      return new Response(body, { status: 200 })
+    }) as typeof fetch
+
+    // Settings button and the transcription pipeline pulling simultaneously
+    const [a, b] = await Promise.all([
+      ensureModelFile(dir, INFO, undefined, slowFetch),
+      ensureModelFile(dir, INFO, undefined, slowFetch)
+    ])
+    expect(a).toBe(b)
+    expect(fetches).toBe(1)
+    expect([...(await readFile(a))]).toEqual([1, 2, 3, 4, 5, 6])
+    expect(await readdir(dir)).toEqual(['ggml-test.bin'])
+  })
 })

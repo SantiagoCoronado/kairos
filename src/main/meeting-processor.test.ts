@@ -197,6 +197,54 @@ describe('MeetingProcessor', () => {
     p.enqueue(id)
     p.enqueue(id)
     await flush()
-    expect(spy.mock.calls.length).toBeLessThanOrEqual(2) // one job, ≤2 channels
+    expect(spy.mock.calls.length).toBe(2) // exactly one job: mic + system
+    expect(meetings.getTranscript(db, id)!.segments.length).toBeGreaterThan(0)
+  })
+
+  it('a re-enqueue while the job is in flight cannot wipe the transcript', async () => {
+    const id = seedMeeting()
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const transcriber: Transcriber = {
+      modelName: 'base',
+      transcribe: async (wavPath) => {
+        await gate // hold the job in flight
+        transcribed.push(wavPath)
+        return result(wavPath)
+      }
+    }
+    const p = new MeetingProcessor(db, REC, {
+      getTranscriber: async () => transcriber,
+      fs,
+      onEvent: (ev) => void events.push(ev),
+      onChange: () => {},
+      notify: () => {},
+      log: () => {},
+      now: () => T0
+    })
+
+    p.enqueue(id)
+    await flush() // job shifted out of the queue, awaiting the gate
+    p.enqueue(id) // the in-flight dedup must reject this
+    release()
+    await flush()
+    await flush()
+
+    const tr = meetings.getTranscript(db, id)!
+    expect(tr.segments.length).toBeGreaterThan(0) // not wiped by a second pass
+    expect(transcribed).toHaveLength(2) // one job's two channels, no re-run
+    expect(events.filter((e) => e.kind === 'transcribed')).toHaveLength(1)
+  })
+
+  it('pruneAudio also ages out error’d meetings', () => {
+    const failed = seedMeeting()
+    meetings.updateMeeting(db, failed, {
+      status: 'error',
+      error: 'boom',
+      ended_at: new Date(T0.getTime() - 10 * 24 * 60 * 60_000).toISOString()
+    })
+    mkProcessor().pruneAudio(7)
+    expect(meetings.getMeeting(db, failed)!.audio_deleted_at).toBe(T0.toISOString())
+    expect(fs.size(join(REC, failed, 'mic.webm'))).toBeNull()
   })
 })

@@ -2,8 +2,15 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ToastHost } from './components/ToastHost'
+import { RecordingChip } from './components/meeting/RecordingChip'
 import { api } from './lib/api'
+import { recoverActiveRecording } from './lib/meeting-store'
 import './styles.css'
+
+// Electron only: a reload orphans any live recording (its MediaRecorders
+// died with the old page) — finalize what landed on disk. Never run this
+// from a remote client: the Mac may be recording for real.
+if (window.api) void recoverActiveRecording()
 
 // ship every renderer failure to ~/Kairos/logs/app.log — a silent white
 // screen with no trace is not debuggable
@@ -71,6 +78,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
       <App />
       <ToastHost />
+      <RecordingChip />
     </ErrorBoundary>
   </React.StrictMode>
 )

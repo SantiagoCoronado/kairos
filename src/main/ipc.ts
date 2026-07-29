@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow, desktopCapturer, session } from 'electron'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
 import { getDb, DATA_DIR } from './db'
 import { exportMarkdown } from '../core/export/markdown'
@@ -488,6 +489,18 @@ export function registerIpc(): void {
   )
   handle('meetings:delete', (id) => meetMgr.delete(id))
   handle('meetings:active', () => meetMgr.activeMeetingId)
+  handle('meetings:audioData', (id, channel) => {
+    const m = meetingsRepo.getMeeting(db, id)
+    const path = channel === 'mic' ? m?.mic_path : m?.system_path
+    if (!m || !path) return { ok: false as const, message: 'No audio for this channel.' }
+    if (m.audio_deleted_at) return { ok: false as const, message: 'Audio was deleted.' }
+    try {
+      const bytes = readFileSync(path)
+      return { ok: true as const, dataUrl: `data:audio/webm;base64,${bytes.toString('base64')}` }
+    } catch (err) {
+      return { ok: false as const, message: err instanceof Error ? err.message : String(err) }
+    }
+  })
 
   handle('calendar:accounts', () => calendarRepo.listCalendarAccounts(db))
   handle('calendar:connectGoogle', async () => {

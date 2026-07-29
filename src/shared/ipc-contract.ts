@@ -228,6 +228,11 @@ export interface IpcApi {
   ) => void
   /** removes the recording directory and the row (transcript cascades) */
   'meetings:delete': (id: string) => void
+  /** playback bytes as a data URL (VoiceNoteChip pattern) — webm archive */
+  'meetings:audioData': (
+    id: string,
+    channel: 'mic' | 'system'
+  ) => { ok: true; dataUrl: string } | { ok: false; message: string }
   /** id of the meeting currently recording, if any (window reload recovery) */
   'meetings:active': () => string | null
 

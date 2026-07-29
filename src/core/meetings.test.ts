@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate, migrations } from './migrations'
+import { migrate, migrations, applyMigration } from './migrations'
 import * as meetings from './repo/meetings'
 import * as tasks from './repo/tasks'
 import * as calendar from './repo/calendar'
@@ -22,8 +22,8 @@ describe('migration 020', () => {
   it('upgrades a 019 database without touching existing tasks', () => {
     const old = openNodeSqliteDb(':memory:')
     // simulate a DB that stopped at migration 019
-    migrations.slice(0, 19).forEach((sql, i) => {
-      old.exec(sql)
+    migrations.slice(0, 19).forEach((_m, i) => {
+      applyMigration(old, i)
       old.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')))`)

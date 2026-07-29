@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import type { CommsAccount, CommsThread } from './comms-types'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate, migrations } from './migrations'
+import { migrate, applyMigration } from './migrations'
 import * as comms from './repo/comms'
 import * as people from './repo/people'
 
@@ -376,7 +376,7 @@ describe('migration 005', () => {
       version INTEGER PRIMARY KEY,
       applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );`)
-    for (let i = 0; i < 4; i++) old.exec(migrations[i])
+    for (let i = 0; i < 4; i++) applyMigration(old, i)
     old.run('INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4)')
     const ts = T0.toISOString()
     old.run(
@@ -427,7 +427,7 @@ describe('migration 021', () => {
       version INTEGER PRIMARY KEY,
       applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );`)
-    for (let i = 0; i < 20; i++) old.exec(migrations[i])
+    for (let i = 0; i < 20; i++) applyMigration(old, i)
     old.run(
       `INSERT INTO schema_migrations (version)
        VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),
@@ -490,6 +490,47 @@ describe('migration 021', () => {
     expect(t.last_message_at).toBe(ts(10))
     expect(t.snippet).toBe('Sent for real')
     expect(t.unread_count).toBe(0)
+    old.close()
+  })
+
+  it('collapses whitespace in the rebuilt snippet exactly as upsertMessage does', () => {
+    const old = dbAt020()
+    // real mail bodies are full of blank lines, CRLFs and double spaces — a
+    // per-character SQL replace() leaves those intact, /\s+/g does not
+    const body = 'Hola a todos,\r\n\r\nLes  comparto\tel link\n\n\nSaludos.'
+    mkThread(old, 't-ws', ts(20), 'draft fragment', 0)
+    mkMsg(old, 'm-sent', 't-ws', ts(10), body, labels('SENT'))
+    mkMsg(old, 'd-1', 't-ws', ts(20), 'half written', labels('DRAFT'), 0)
+
+    migrate(old)
+
+    const snippet = old.get<{ snippet: string }>("SELECT snippet FROM comms_threads WHERE id = 't-ws'")!.snippet
+    expect(snippet).toBe('Hola a todos, Les comparto el link Saludos.')
+    // and it is byte-identical to what a fresh ingest of the same body writes
+    const fresh = comms.upsertThread(db, {
+      account_id: gmailAccount().id, provider: 'gmail', external_id: 'thr-ws', kind: 'email', title: 'x'
+    }, T0)
+    comms.upsertMessage(db, {
+      thread_id: fresh.id, account_id: fresh.account_id, provider: 'gmail',
+      external_id: 'm-fresh', sent_at: T0.toISOString(), body_text: body
+    }, T0)
+    expect(snippet).toBe(comms.getThread(db, fresh.id)!.snippet)
+    old.close()
+  })
+
+  it('breaks sent_at ties on id so the snippet source is deterministic', () => {
+    const old = dbAt020()
+    // autosaves land in the same second constantly; the surviving pair here
+    // shares a timestamp, so ORDER BY sent_at alone leaves the winner to SQLite
+    mkThread(old, 't-tie', ts(20), 'draft fragment', 0)
+    mkMsg(old, 'm-a', 't-tie', ts(10), 'first by id', labels('SENT'))
+    mkMsg(old, 'm-z', 't-tie', ts(10), 'last by id', labels('SENT'))
+    mkMsg(old, 'd-1', 't-tie', ts(20), 'half written', labels('DRAFT'), 0)
+
+    migrate(old)
+
+    expect(old.get<{ snippet: string }>("SELECT snippet FROM comms_threads WHERE id = 't-tie'")!.snippet)
+      .toBe('last by id')
     old.close()
   })
 

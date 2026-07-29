@@ -96,4 +96,17 @@ describe('ingestGmailMessage draft guard', () => {
   it('treats a message with no labelIds as ingestable', () => {
     expect(ingestGmailMessage(db, account, message({ labelIds: undefined }))).toBe(true)
   })
+
+  it('catches DRAFT alongside other labels, in any position', () => {
+    // gmail returns labelIds unordered, and a draft carries the thread's other
+    // labels too — the guard must not depend on DRAFT being alone or first
+    for (const [i, labelIds] of [
+      ['DRAFT', 'INBOX'],
+      ['INBOX', 'DRAFT'],
+      ['UNREAD', 'CATEGORY_PERSONAL', 'DRAFT', 'Label_7']
+    ].entries()) {
+      expect(ingestGmailMessage(db, account, message({ id: `d-${i}`, labelIds }))).toBe(false)
+    }
+    expect(comms.listThreads(db)).toEqual([])
+  })
 })

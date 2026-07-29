@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate, migrations } from './migrations'
+import { migrate, applyMigration, migrations } from './migrations'
 import * as people from './repo/people'
 import * as interactions from './repo/interactions'
 import * as followups from './repo/followups'
@@ -42,8 +42,8 @@ describe('migrations', () => {
       version INTEGER PRIMARY KEY,
       applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );`)
-    old.exec(migrations[0])
-    old.exec(migrations[1])
+    applyMigration(old, 0)
+    applyMigration(old, 1)
     old.run('INSERT INTO schema_migrations (version) VALUES (1), (2)')
     const ins = (id: string, title: string, due: string | null, priority: number): void => {
       old.run(

@@ -5,6 +5,7 @@ import {
   Inbox,
   Sparkles,
   Mic,
+  AudioLines,
   Cable,
   Smartphone
 } from 'lucide-react'
@@ -30,13 +31,14 @@ const EFFORTS: { value: string; label: string }[] = [
   { value: 'max', label: 'Max' }
 ]
 
-type SectionId = 'general' | 'inbox' | 'assistant' | 'voice' | 'connections' | 'remote'
+type SectionId = 'general' | 'inbox' | 'assistant' | 'voice' | 'meetings' | 'connections' | 'remote'
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'assistant', label: 'Assistant', icon: Sparkles },
   { id: 'voice', label: 'Voice', icon: Mic },
+  { id: 'meetings', label: 'Meetings', icon: AudioLines },
   { id: 'connections', label: 'Connections', icon: Cable },
   { id: 'remote', label: 'Remote access', icon: Smartphone }
 ]
@@ -46,6 +48,7 @@ const SECTION_BLURB: Record<SectionId, string> = {
   inbox: 'Email classification and message notifications.',
   assistant: 'The Chat tab: model, personality, and your Claude login.',
   voice: 'ElevenLabs voice briefing and dictation.',
+  meetings: 'Local meeting recording and on-device transcription.',
   connections: 'Gmail, Slack, WhatsApp and Google Calendar accounts.',
   remote: 'Use the app from a phone or browser on your private network.'
 }
@@ -141,6 +144,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }): React.JSX.E
                 {section === 'inbox' && <InboxSection settings={settings} save={save} />}
                 {section === 'assistant' && <AssistantSection settings={settings} save={save} />}
                 {section === 'voice' && <VoiceSection settings={settings} save={save} />}
+                {section === 'meetings' && <MeetingsSection settings={settings} save={save} />}
                 {section === 'connections' && <ConnectionsSection settings={settings} save={save} />}
                 {section === 'remote' && <RemoteSection settings={settings} save={save} />}
               </>
@@ -399,6 +403,129 @@ function AssistantSection({ settings, save }: SectionProps): React.JSX.Element {
           }}
         />
       </div>
+    </>
+  )
+}
+
+const MEETING_MODELS: { value: AppSettings['meetingModel']; label: string }[] = [
+  { value: 'large-v3-turbo', label: 'Large v3 turbo (1.6 GB) — best quality' },
+  { value: 'base', label: 'Base (148 MB) — fast, rougher' },
+  { value: 'tiny', label: 'Tiny (78 MB) — quick tests' }
+]
+
+const RETENTION: { value: string; label: string }[] = [
+  { value: '', label: 'Keep forever' },
+  { value: '7', label: 'Delete after 7 days' },
+  { value: '30', label: 'Delete after 30 days' },
+  { value: '90', label: 'Delete after 90 days' }
+]
+
+function MeetingsSection({ settings, save }: SectionProps): React.JSX.Element {
+  const [status, setStatus] = useState<{
+    modelPresent: boolean
+    vadPresent: boolean
+    downloading: boolean
+  } | null>(null)
+  const [progress, setProgress] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = (): void => {
+    void api.invoke('meetings:modelStatus').then((s) => {
+      setStatus(s)
+      if (!s.downloading) setProgress(null)
+    })
+  }
+
+  useEffect(refresh, [settings.meetingModel])
+  useEffect(
+    () =>
+      api.on('meetings:event', (ev) => {
+        if (ev.kind === 'model-progress') setProgress(Math.floor((ev.received / ev.total) * 100))
+        if (ev.kind === 'model-ready') {
+          setProgress(null)
+          setError(null)
+          refresh()
+        }
+        if (ev.kind === 'model-error') {
+          setProgress(null)
+          setError(ev.message)
+          refresh()
+        }
+      }),
+    []
+  )
+
+  const ready = status?.modelPresent && status?.vadPresent
+
+  return (
+    <>
+      <Row
+        label="transcription model"
+        hint="Runs fully on this Mac (whisper.cpp + Metal). Larger is slower but noticeably better."
+      >
+        <Select
+          value={settings.meetingModel}
+          onChange={(e) => save({ meetingModel: e.target.value as AppSettings['meetingModel'] })}
+        >
+          {MEETING_MODELS.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
+      <Row
+        label="model status"
+        hint={
+          error ??
+          (ready
+            ? 'Model and voice-activity filter are downloaded.'
+            : 'Downloads once, then everything is offline.')
+        }
+      >
+        {ready ? (
+          <Chip tone="ok">downloaded</Chip>
+        ) : progress !== null || status?.downloading ? (
+          <Chip tone="muted">{progress !== null ? `downloading ${progress}%` : 'downloading…'}</Chip>
+        ) : (
+          <Button
+            variant="accent"
+            className="!py-1 text-[12px]"
+            disabled={!status}
+            onClick={() => {
+              setError(null)
+              void api.invoke('meetings:downloadModel').then(refresh)
+            }}
+          >
+            Download
+          </Button>
+        )}
+      </Row>
+      <Row label="language" hint="Force a transcription language, or leave blank to autodetect.">
+        <Input
+          className="w-24 font-mono text-[11px]"
+          placeholder="auto"
+          defaultValue={settings.meetingLanguage ?? ''}
+          onBlur={(e) => save({ meetingLanguage: e.target.value.trim() || null })}
+        />
+      </Row>
+      <Row
+        label="keep audio"
+        hint="Recordings live in ~/Kairos/recordings. Transcripts always survive audio deletion."
+      >
+        <Select
+          value={settings.meetingAudioRetentionDays == null ? '' : String(settings.meetingAudioRetentionDays)}
+          onChange={(e) =>
+            save({ meetingAudioRetentionDays: e.target.value ? Number(e.target.value) : null })
+          }
+        >
+          {RETENTION.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
     </>
   )
 }

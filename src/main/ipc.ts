@@ -33,6 +33,7 @@ import * as calendarRepo from '../core/repo/calendar'
 import * as meetingsRepo from '../core/repo/meetings'
 import { MeetingManager } from './meetings'
 import { resolveDisplayMedia } from './display-media'
+import { ensureModelFile, isModelPresent, VAD_MODEL, WHISPER_MODELS } from './models'
 import { localDate } from '../core/ids'
 import { CommsSyncManager } from './comms/manager'
 import { CommsNotifier } from './comms/notifier'
@@ -492,6 +493,42 @@ export function registerIpc(): void {
   )
   handle('meetings:delete', (id) => meetMgr.delete(id))
   handle('meetings:active', () => meetMgr.activeMeetingId)
+  let modelDownloading = false
+  handle('meetings:modelStatus', async () => {
+    const modelsDir = join(DATA_DIR, 'models')
+    const model = getSettings().meetingModel
+    return {
+      model,
+      modelPresent: await isModelPresent(modelsDir, WHISPER_MODELS[model]),
+      vadPresent: await isModelPresent(modelsDir, VAD_MODEL),
+      downloading: modelDownloading
+    }
+  })
+  handle('meetings:downloadModel', async () => {
+    if (modelDownloading) return { ok: true as const }
+    modelDownloading = true
+    try {
+      const modelsDir = join(DATA_DIR, 'models')
+      const info = WHISPER_MODELS[getSettings().meetingModel]
+      let lastPct = -1
+      await ensureModelFile(modelsDir, info, (received, total) => {
+        const pct = Math.floor((received / total) * 100)
+        if (pct !== lastPct) {
+          lastPct = pct
+          broadcast('meetings:event', { kind: 'model-progress', file: info.file, received, total })
+        }
+      })
+      await ensureModelFile(modelsDir, VAD_MODEL)
+      broadcast('meetings:event', { kind: 'model-ready' })
+      return { ok: true as const }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      broadcast('meetings:event', { kind: 'model-error', message })
+      return { ok: false as const, message }
+    } finally {
+      modelDownloading = false
+    }
+  })
   handle('meetings:audioData', async (id, channel) => {
     const m = meetingsRepo.getMeeting(db, id)
     const path = channel === 'mic' ? m?.mic_path : m?.system_path

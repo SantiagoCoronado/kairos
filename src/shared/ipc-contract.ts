@@ -235,6 +235,15 @@ export interface IpcApi {
   ) => Promise<{ ok: true; dataUrl: string } | { ok: false; message: string }>
   /** id of the meeting currently recording, if any (window reload recovery) */
   'meetings:active': () => string | null
+  /** whisper model availability for the Settings section */
+  'meetings:modelStatus': () => Promise<{
+    model: AppSettings['meetingModel']
+    modelPresent: boolean
+    vadPresent: boolean
+    downloading: boolean
+  }>
+  /** pull the configured model + VAD model; progress via meetings:event */
+  'meetings:downloadModel': () => Promise<{ ok: true } | { ok: false; message: string }>
 
   'capture:submit': (raw: string) => CaptureSubmitResult
   /** voice capture: NL → task/note/event/interaction via a one-shot haiku
@@ -433,6 +442,13 @@ export interface AppSettings {
   /** native notifications for new messages: DMs + action-needed email
    *  ('important'), everything ('all'), or never ('off') */
   notifyInbox: 'off' | 'important' | 'all'
+  /** whisper model for the post-meeting transcription pass */
+  meetingModel: 'large-v3-turbo' | 'base' | 'tiny'
+  /** ISO 639-1 code forced on transcription; null = autodetect */
+  meetingLanguage: string | null
+  /** delete recording audio N days after the meeting (transcript stays);
+   *  null = keep forever */
+  meetingAudioRetentionDays: number | null
   /** system-audio loopback path for meeting capture. 'sck' (default)
    *  forces Chromium's ScreenCaptureKit path — the Core Audio tap path
    *  ('catap') captures silence on this setup because Chromium never
@@ -608,8 +624,17 @@ export type NavView =
   | 'chat'
   | 'terminal'
 
+export type MeetingEvent =
+  | { kind: 'model-progress'; file: string; received: number; total: number }
+  | { kind: 'model-ready' }
+  | { kind: 'model-error'; message: string }
+  | { kind: 'processing'; meetingId: string }
+  | { kind: 'transcribed'; meetingId: string }
+  | { kind: 'transcribe-error'; meetingId: string; message: string }
+
 export interface IpcEvents {
   'db:changed': { entity: import('../core/types').DbEntity }
+  'meetings:event': MeetingEvent
   /** main → renderer: focus a view (e.g. a clicked reminder notification) */
   'nav:goto': { view: NavView; id?: string }
   'capture:reset': Record<string, never>

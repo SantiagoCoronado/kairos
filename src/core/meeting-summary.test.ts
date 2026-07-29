@@ -1,8 +1,16 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import type { DbDriver } from './driver'
+import { openNodeSqliteDb } from './drivers/node-sqlite'
+import { migrate } from './migrations'
+import * as meetingsRepo from './repo/meetings'
+import * as peopleRepo from './repo/people'
+import * as tasksRepo from './repo/tasks'
 import {
+  applySummaryFanOut,
   buildSummaryPrompt,
   parseSummaryResponse,
-  MAX_TRANSCRIPT_CHARS
+  MAX_TRANSCRIPT_CHARS,
+  type ParsedSummary
 } from './meeting-summary'
 
 const base = {
@@ -72,5 +80,98 @@ describe('parseSummaryResponse', () => {
     expect(parseSummaryResponse('no json here')).toBeNull()
     expect(parseSummaryResponse('{"summary_md": ""}')).toBeNull()
     expect(parseSummaryResponse('{"summary_md": 42}')).toBeNull()
+  })
+})
+
+describe('applySummaryFanOut', () => {
+  const T0 = new Date('2026-07-28T12:00:00Z')
+  let db: DbDriver
+
+  const PARSED: ParsedSummary = {
+    summary_md: 'Shipping Friday. Ana reviews the PR first.',
+    decisions: ['ship friday'],
+    action_items: [
+      { text: 'Review the pull request', person: 'Ana Torres' },
+      { text: 'Prepare release notes', person: null },
+      { text: 'Ping the vendor', person: 'Zed Unknown' }
+    ],
+    participants: ['Me', 'Ana']
+  }
+
+  beforeEach(() => {
+    db = openNodeSqliteDb(':memory:')
+    migrate(db)
+  })
+
+  afterEach(() => db.close())
+
+  it('first run creates linked tasks, logs interactions, persists the summary', () => {
+    const ana = peopleRepo.upsertPerson(db, { name: 'Ana Torres', email: 'ana@x.com' }, T0)
+    const m = meetingsRepo.createMeeting(db, { title: 'Standup' }, T0)
+
+    const res = applySummaryFanOut(
+      db,
+      m.id,
+      PARSED,
+      {
+        model: 'sonnet',
+        attendees: [
+          { email: 'me@x.com', self: true },
+          { email: 'ana@x.com', displayName: 'Ana Torres' },
+          { email: 'stranger@x.com' } // no matching person — skipped
+        ]
+      },
+      T0
+    )
+
+    expect(res.taskIds).toHaveLength(3)
+    const created = res.taskIds.map((id) => tasksRepo.getTask(db, id)!)
+    expect(created.every((t) => t.meeting_id === m.id)).toBe(true)
+    expect(created.find((t) => t.title === 'Review the pull request')!.person_id).toBe(ana.id)
+    expect(created.find((t) => t.title === 'Prepare release notes')!.person_id).toBeNull()
+    expect(created.find((t) => t.title === 'Ping the vendor')!.person_id).toBeNull() // unknown name
+
+    expect(res.interactionCount).toBe(1) // self + stranger skipped
+    const detail = peopleRepo.getPersonDetail(db, ana.id)!
+    expect(detail.interactions[0].kind).toBe('meeting')
+    expect(detail.interactions[0].summary).toContain('Standup')
+
+    expect(res.meeting.summary_md).toContain('Shipping Friday')
+    expect(res.meeting.summarized_at).toBe(T0.toISOString())
+    expect(res.meeting.summary.action_items.map((a) => a.task_id)).toEqual(res.taskIds)
+  })
+
+  it('re-run updates the summary text only — the fan-out never repeats', () => {
+    peopleRepo.upsertPerson(db, { name: 'Ana Torres', email: 'ana@x.com' }, T0)
+    const m = meetingsRepo.createMeeting(db, { title: 'Standup' }, T0)
+    const attendees = [{ email: 'ana@x.com' }]
+    applySummaryFanOut(db, m.id, PARSED, { model: 'sonnet', attendees }, T0)
+
+    const rerun = applySummaryFanOut(
+      db,
+      m.id,
+      { ...PARSED, summary_md: 'Revised summary.' },
+      { model: 'sonnet', attendees },
+      new Date(T0.getTime() + 60_000)
+    )
+
+    expect(rerun.taskIds).toEqual([])
+    expect(rerun.interactionCount).toBe(0)
+    expect(rerun.meeting.summary_md).toBe('Revised summary.')
+    expect(tasksRepo.listTasks(db, {})).toHaveLength(3) // no duplicates
+  })
+
+  it('ambiguous owner names stay unmatched instead of guessing', () => {
+    peopleRepo.upsertPerson(db, { name: 'Ana Torres', email: 'a1@x.com' }, T0)
+    peopleRepo.upsertPerson(db, { name: 'Ana Ruiz', email: 'a2@x.com' }, T0)
+    const m = meetingsRepo.createMeeting(db, {}, T0)
+    const res = applySummaryFanOut(
+      db,
+      m.id,
+      { ...PARSED, action_items: [{ text: 'Follow up', person: 'Ana' }] },
+      { model: 'sonnet', attendees: [] },
+      T0
+    )
+    expect(tasksRepo.getTask(db, res.taskIds[0])!.person_id).toBeNull()
   })
 })

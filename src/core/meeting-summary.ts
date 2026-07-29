@@ -4,7 +4,12 @@
 // the reduce step needs no second parse pass (schema-constrained output,
 // per the Anarlog/Meetily research).
 
-import type { CalendarAttendee } from './types'
+import type { DbDriver } from './driver'
+import type { CalendarAttendee, Meeting } from './types'
+import * as meetings from './repo/meetings'
+import * as tasks from './repo/tasks'
+import * as people from './repo/people'
+import * as interactions from './repo/interactions'
 
 export interface SummaryInput {
   transcriptText: string
@@ -66,6 +71,103 @@ Rules:
 - Write in the transcript's language.
 - Action items assigned to the user ("I will…" said by Me) get person null.
 - Never invent action items or decisions that were not said.`
+}
+
+export interface FanOutResult {
+  meeting: Meeting
+  taskIds: string[]
+  interactionCount: number
+}
+
+/** case-insensitive exact name, else a unique substring match — anything
+ *  ambiguous stays unmatched rather than guessing wrong */
+function matchPersonByName(
+  candidates: { id: string; name: string }[],
+  name: string | null
+): string | null {
+  if (!name) return null
+  const q = name.trim().toLowerCase()
+  if (!q) return null
+  const exact = candidates.filter((p) => p.name.toLowerCase() === q)
+  if (exact.length === 1) return exact[0].id
+  const partial = candidates.filter(
+    (p) => p.name.toLowerCase().includes(q) || q.includes(p.name.toLowerCase())
+  )
+  return partial.length === 1 ? partial[0].id : null
+}
+
+/**
+ * Persist a parsed summary and — on the FIRST summarize only — fan out into
+ * Kairos primitives in one transaction: action items become tasks (linked
+ * back via tasks.meeting_id, owners matched by name) and matched attendees
+ * get an interactions row (kind 'meeting'). A forced re-summarize updates
+ * the summary text only; the fan-out never runs twice.
+ */
+export function applySummaryFanOut(
+  db: DbDriver,
+  meetingId: string,
+  parsed: ParsedSummary,
+  opts: { model: string; attendees: CalendarAttendee[] },
+  now: Date = new Date()
+): FanOutResult {
+  const meeting = meetings.getMeeting(db, meetingId)
+  if (!meeting) throw new Error(`meeting not found: ${meetingId}`)
+  const firstRun = !meeting.summarized_at
+  const taskIds: string[] = []
+  let interactionCount = 0
+
+  const updated = db.transaction(() => {
+    const candidates = people.listPeople(db, {}).map((p) => ({ id: p.id, name: p.name }))
+    const actionItems = parsed.action_items.map((it) => {
+      const personId = matchPersonByName(candidates, it.person)
+      if (!firstRun) return { text: it.text, person_id: personId, task_id: null }
+      const task = tasks.createTask(
+        db,
+        { title: it.text, person_id: personId, meeting_id: meeting.id },
+        now
+      )
+      taskIds.push(task.id)
+      return { text: it.text, person_id: personId, task_id: task.id }
+    })
+
+    if (firstRun) {
+      const snippet = parsed.summary_md.split('\n')[0].slice(0, 140)
+      for (const attendee of opts.attendees) {
+        if (attendee.self || !attendee.email) continue
+        const person = people.findPersonByContact(db, [attendee.email], [])
+        if (!person) continue
+        interactions.logInteraction(
+          db,
+          {
+            person_id: person.id,
+            kind: 'meeting',
+            occurred_at: meeting.started_at,
+            summary: meeting.title ? `${meeting.title} — ${snippet}` : snippet
+          },
+          now
+        )
+        interactionCount++
+      }
+    }
+
+    return meetings.updateMeeting(
+      db,
+      meeting.id,
+      {
+        summary_md: parsed.summary_md,
+        summary: {
+          action_items: actionItems,
+          decisions: parsed.decisions,
+          participants: parsed.participants
+        },
+        summary_model: opts.model,
+        summarized_at: now.toISOString()
+      },
+      now
+    )
+  })
+
+  return { meeting: updated, taskIds, interactionCount }
 }
 
 /** tolerant parse of the model's JSON — null when unusable */

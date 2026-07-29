@@ -9,7 +9,11 @@ import type { Meeting } from '../../core/types'
 import * as meetings from '../../core/repo/meetings'
 import * as calendarRepo from '../../core/repo/calendar'
 import * as people from '../../core/repo/people'
-import { buildSummaryPrompt, parseSummaryResponse } from '../../core/meeting-summary'
+import {
+  applySummaryFanOut,
+  buildSummaryPrompt,
+  parseSummaryResponse
+} from '../../core/meeting-summary'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
 import { buildChildEnv, resolveClaudeBinary } from './agent'
@@ -17,7 +21,7 @@ import { buildChildEnv, resolveClaudeBinary } from './agent'
 const SUMMARY_MODEL = 'sonnet'
 
 export type SummarizeResult =
-  | { ok: true; meeting: Meeting }
+  | { ok: true; meeting: Meeting; taskIds: string[]; interactionCount: number }
   | { ok: false; message: string }
 
 export async function summarizeMeeting(
@@ -27,7 +31,8 @@ export async function summarizeMeeting(
 ): Promise<SummarizeResult> {
   const meeting = meetings.getMeeting(db, meetingId)
   if (!meeting) return { ok: false, message: `meeting not found: ${meetingId}` }
-  if (meeting.summarized_at && !opts.force) return { ok: true, meeting }
+  if (meeting.summarized_at && !opts.force)
+    return { ok: true, meeting, taskIds: [], interactionCount: 0 }
   const transcript = meetings.getTranscript(db, meetingId)
   if (!transcript || !transcript.text.trim())
     return { ok: false, message: 'No transcript to summarize.' }
@@ -58,21 +63,18 @@ export async function summarizeMeeting(
     return { ok: false, message: 'Model returned no usable summary.' }
   }
 
-  const updated = meetings.updateMeeting(db, meetingId, {
-    summary_md: parsed.summary_md,
-    summary: {
-      action_items: parsed.action_items.map((it) => ({
-        text: it.text,
-        person_id: null,
-        task_id: null
-      })),
-      decisions: parsed.decisions,
-      participants: parsed.participants
-    },
-    summary_model: SUMMARY_MODEL,
-    summarized_at: new Date().toISOString()
-  })
-  return { ok: true, meeting: updated }
+  const { meeting: updated, taskIds, interactionCount } = applySummaryFanOut(
+    db,
+    meetingId,
+    parsed,
+    { model: SUMMARY_MODEL, attendees: event?.attendees ?? [] }
+  )
+  logLine(
+    'info',
+    'meetings',
+    `summarized ${meetingId}: ${taskIds.length} task(s), ${interactionCount} interaction(s)`
+  )
+  return { ok: true, meeting: updated, taskIds, interactionCount }
 }
 
 async function runOneShot(prompt: string): Promise<string> {

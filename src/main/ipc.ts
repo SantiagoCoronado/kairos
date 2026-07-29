@@ -543,11 +543,13 @@ export function registerIpc(): void {
     const res = await summarizeMeeting(db, id, { force })
     if (!res.ok) return res
     broadcast('db:changed', { entity: 'meetings' })
+    if (res.taskIds.length) broadcast('db:changed', { entity: 'tasks' })
+    if (res.interactionCount) broadcast('db:changed', { entity: 'interactions' })
     broadcast('meetings:event', {
       kind: 'summarized',
       meetingId: id,
-      taskIds: [],
-      interactionCount: 0
+      taskIds: res.taskIds,
+      interactionCount: res.interactionCount
     })
     return { ok: true }
   }

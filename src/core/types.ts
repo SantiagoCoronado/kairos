@@ -505,6 +505,8 @@ export interface TaskFilter {
 }
 
 export interface NewTask {
+  /** action item extracted from a recorded meeting */
+  meeting_id?: string | null
   title: string
   notes?: string
   status?: TaskStatus

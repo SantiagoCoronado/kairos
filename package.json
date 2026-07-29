@@ -15,8 +15,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "helper:build": "bash scripts/build-calendar-helper.sh && bash scripts/build-contacts-helper.sh",
+    "whisper:build": "bash scripts/build-whisper-server.sh",
     "rebuild": "electron-rebuild -f -w better-sqlite3,node-pty",
-    "dist": "npm run helper:build && electron-vite build && electron-builder --mac",
+    "dist": "npm run helper:build && npm run whisper:build && electron-vite build && electron-builder --mac",
     "ship": "bash scripts/ship.sh"
   },
   "dependencies": {

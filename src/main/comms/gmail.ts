@@ -12,12 +12,12 @@ const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
 // modify (a superset of readonly) lets Kairos mark read / archive remotely
 const SCOPES = 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send openid email'
-const BACKFILL_QUERY = 'newer_than:30d -in:spam -in:trash'
+const BACKFILL_QUERY = 'newer_than:30d -in:spam -in:trash -in:drafts'
 const BACKFILL_CAP = 500
 // progressive deep backfill: after the initial window is in, keep extending
 // history one page per sync tick (15 s apart) until a year is covered or the
 // message cap is hit — search over archived mail needs the bodies local
-const DEEP_BACKFILL_QUERY = 'older_than:30d newer_than:1y -in:spam -in:trash'
+const DEEP_BACKFILL_QUERY = 'older_than:30d newer_than:1y -in:spam -in:trash -in:drafts'
 const DEEP_BACKFILL_PAGE = 100
 const DEEP_BACKFILL_CAP = 5000
 const FETCH_CONCURRENCY = 4
@@ -349,6 +349,13 @@ const stripReplyPrefix = (subject: string): string =>
 
 /** Ingest one full-format Gmail message; returns true if it was new. */
 export function ingestGmailMessage(db: DbDriver, account: CommsAccount, msg: GmailMessage): boolean {
+  // Gmail's autosave rewrites a draft as a *new* message id on every save, and
+  // each of those fires its own messageAdded history event. Ingesting them turns
+  // one unsent email into a pile of half-written bubbles in the thread — and
+  // leaves a draft as the newest message, which sendGmail then reads for reply
+  // headers. The list queries filter drafts out; this covers the history path,
+  // which takes ids with no query attached.
+  if ((msg.labelIds ?? []).includes('DRAFT')) return false
   const from = parseAddress(header(msg, 'From'))
   const isMe = from.email === account.external_id
   const subject = header(msg, 'Subject')

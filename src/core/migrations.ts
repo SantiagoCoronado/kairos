@@ -554,6 +554,38 @@ ALTER TABLE tasks ADD COLUMN meeting_id TEXT REFERENCES meetings(id) ON DELETE S
 CREATE INDEX idx_meetings_event ON meetings(calendar_event_id);
 CREATE INDEX idx_meetings_started ON meetings(started_at DESC);
 CREATE INDEX idx_tasks_meeting ON tasks(meeting_id);
+`,
+  // 021 — purge ingested Gmail drafts. Every autosave of an unsent mail landed
+  // as its own message row (gmail gives each save a new message id), so one
+  // draft showed up as a stack of half-written bubbles. The ingest guard stops
+  // new ones; this clears what's already stored. Only threads that actually
+  // held a draft get their aggregates recomputed, so correct snippets elsewhere
+  // keep the exact whitespace collapsing that upsertMessage wrote.
+  `
+CREATE TEMP TABLE _draft_threads AS
+  SELECT DISTINCT thread_id FROM comms_messages m
+  WHERE m.provider = 'gmail' AND m.raw_json IS NOT NULL AND json_valid(m.raw_json)
+    AND EXISTS (SELECT 1 FROM json_each(m.raw_json, '$.labelIds') WHERE value = 'DRAFT');
+
+DELETE FROM comms_messages
+WHERE provider = 'gmail' AND raw_json IS NOT NULL AND json_valid(raw_json)
+  AND EXISTS (SELECT 1 FROM json_each(comms_messages.raw_json, '$.labelIds') WHERE value = 'DRAFT');
+
+-- a never-sent draft is a whole thread of nothing once its revisions are gone
+DELETE FROM comms_threads
+WHERE id IN (SELECT thread_id FROM _draft_threads)
+  AND NOT EXISTS (SELECT 1 FROM comms_messages WHERE thread_id = comms_threads.id);
+
+UPDATE comms_threads SET
+  unread_count = (SELECT COUNT(*) FROM comms_messages WHERE thread_id = comms_threads.id AND is_read = 0),
+  last_message_at = (SELECT MAX(sent_at) FROM comms_messages WHERE thread_id = comms_threads.id),
+  snippet = COALESCE((
+    SELECT substr(trim(replace(replace(replace(body_text, char(13), ' '), char(10), ' '), char(9), ' ')), 1, 120)
+    FROM comms_messages WHERE thread_id = comms_threads.id ORDER BY sent_at DESC LIMIT 1
+  ), '')
+WHERE id IN (SELECT thread_id FROM _draft_threads);
+
+DROP TABLE _draft_threads;
 `
 ]
 

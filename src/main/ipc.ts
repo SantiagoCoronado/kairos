@@ -34,6 +34,11 @@ import * as meetingsRepo from '../core/repo/meetings'
 import { MeetingManager } from './meetings'
 import { resolveDisplayMedia } from './display-media'
 import { ensureModelFile, isModelPresent, VAD_MODEL, WHISPER_MODELS } from './models'
+import { WhisperServer } from './whisper'
+import { MeetingProcessor, type Transcriber } from './meeting-processor'
+import { spawn as childSpawn } from 'node:child_process'
+import { rmSync, statSync } from 'node:fs'
+import { app, Notification } from 'electron'
 import { localDate } from '../core/ids'
 import { CommsSyncManager } from './comms/manager'
 import { CommsNotifier } from './comms/notifier'
@@ -108,6 +113,54 @@ let meetingManager: MeetingManager | null = null
 
 export function getMeetingManager(): MeetingManager | null {
   return meetingManager
+}
+
+let meetingProcessor: MeetingProcessor | null = null
+let whisperServer: WhisperServer | null = null
+let whisperKey: string | null = null
+
+/** quit-time: stop the retention timer and kill the sidecar */
+export function shutdownMeetings(): void {
+  meetingProcessor?.stopMaintenance()
+  whisperServer?.stop()
+}
+
+function whisperBinaryPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'whisper', 'whisper-server')
+    : join(app.getAppPath(), 'resources', 'whisper', 'whisper-server')
+}
+
+/** per-job transcriber: models ensured (downloading if needed), sidecar
+ *  recreated when the model or language setting changed since last job */
+async function getTranscriber(onProgress: (received: number, total: number) => void): Promise<Transcriber> {
+  const s = getSettings()
+  const modelsDir = join(DATA_DIR, 'models')
+  const info = WHISPER_MODELS[s.meetingModel]
+  const modelPath = await ensureModelFile(modelsDir, info, onProgress)
+  const vadModelPath = await ensureModelFile(modelsDir, VAD_MODEL)
+  const key = `${modelPath}|${s.meetingLanguage ?? 'auto'}`
+  if (whisperServer && whisperKey !== key) {
+    whisperServer.stop()
+    whisperServer = null
+  }
+  if (!whisperServer) {
+    whisperServer = new WhisperServer(
+      { binaryPath: whisperBinaryPath(), modelPath, vadModelPath, language: s.meetingLanguage },
+      {
+        spawn: (file, args) => childSpawn(file, args, { stdio: 'ignore' }),
+        fetchFn: fetch,
+        readFile,
+        log: (level, message) => logLine(level, 'whisper', message)
+      }
+    )
+    whisperKey = key
+  }
+  const server = whisperServer
+  return {
+    modelName: s.meetingModel,
+    transcribe: (wavPath) => server.transcribe(wavPath)
+  }
 }
 
 export function registerIpc(): void {
@@ -480,6 +533,40 @@ export function registerIpc(): void {
   meetingManager = meetMgr
   meetMgr.recoverOrphans()
 
+  const processor = new MeetingProcessor(db, join(DATA_DIR, 'recordings'), {
+    getTranscriber: () =>
+      getTranscriber((received, total) => {
+        broadcast('meetings:event', {
+          kind: 'model-progress',
+          file: WHISPER_MODELS[getSettings().meetingModel].file,
+          received,
+          total
+        })
+      }),
+    fs: {
+      size: (path) => {
+        try {
+          return statSync(path).size
+        } catch {
+          return null
+        }
+      },
+      rm: (path) => rmSync(path, { force: true })
+    },
+    onEvent: (ev) => broadcast('meetings:event', ev),
+    onChange: () => broadcast('db:changed', { entity: 'meetings' }),
+    notify: (title, body) => {
+      if (!Notification.isSupported()) return
+      const n = new Notification({ title, body, silent: true })
+      n.on('click', () => broadcast('nav:goto', { view: 'calendar' }))
+      n.show()
+    },
+    log: (level, message) => logLine(level, 'meetings', message)
+  })
+  meetingProcessor = processor
+  processor.sweepIncomplete()
+  processor.startMaintenance(() => getSettings().meetingAudioRetentionDays)
+
   handle('meetings:list', (f) => meetingsRepo.listMeetings(db, f))
   handle('meetings:get', (id) => {
     const meeting = meetingsRepo.getMeeting(db, id)
@@ -487,7 +574,12 @@ export function registerIpc(): void {
     return { meeting, transcript: meetingsRepo.getTranscript(db, id) ?? null }
   })
   handle('meetings:start', (input) => meetMgr.start(input))
-  handle('meetings:stop', (id) => meetMgr.stop(id))
+  handle('meetings:stop', (id) => {
+    meetMgr.stop(id)
+    // finalized on disk — hand straight to the transcription queue
+    processor.enqueue(id)
+    return meetingsRepo.getMeeting(db, id)!
+  })
   handle('meetings:chunk', (id, channel, kind, dataBase64) =>
     meetMgr.appendChunk(id, channel, kind, Buffer.from(dataBase64, 'base64'))
   )

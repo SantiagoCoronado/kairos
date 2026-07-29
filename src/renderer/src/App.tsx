@@ -56,8 +56,21 @@ export default function App(): React.JSX.Element {
     void api.invoke('settings:get').then((s) => applyTranslucency(s.translucency))
   }, [])
 
-  // deep links from main-process notifications (reminder clicks)
-  useEffect(() => api.on('nav:goto', ({ view: v }) => setView(v)), [])
+  // deep links from main-process notifications (reminder clicks). A
+  // calendar goto carrying a meeting id also focuses that meeting's day.
+  useEffect(
+    () =>
+      api.on('nav:goto', ({ view: v, id }) => {
+        if (v === 'calendar' && id) {
+          void api
+            .invoke('meetings:get', id)
+            .then(({ meeting }) => setCalendarFocus(new Date(meeting.started_at)))
+            .catch(() => {})
+        }
+        setView(v)
+      }),
+    []
+  )
 
   const toggleSidebar = (): void => {
     setSidebarHidden((h) => {

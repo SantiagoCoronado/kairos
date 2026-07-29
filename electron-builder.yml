@@ -14,6 +14,8 @@ extraResources:
     to: calendar-helper
   - from: resources/contacts-helper
     to: contacts-helper
+  - from: resources/whisper/whisper-server
+    to: whisper/whisper-server
 npmRebuild: true
 mac:
   identity: null # ad-hoc signing; personal app

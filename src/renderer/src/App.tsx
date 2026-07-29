@@ -4,6 +4,9 @@ import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
 import { useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
 import { pushUndo } from './lib/undo'
+import { dismissToast, toast } from './lib/toast'
+import { getSnapshot as meetingSnapshot, startRecording } from './lib/meeting-store'
+import { RECORD_PROMPT_TOAST_MS, recordPromptToast } from './lib/meeting-ui'
 import { TodayView } from './views/Today'
 import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
@@ -17,6 +20,10 @@ import { TerminalView } from './views/Terminal'
 import { api } from './lib/api'
 import { applyTranslucency } from './lib/translucency'
 import { undoLast } from './lib/undo'
+
+// one visible prompt toast per event: a notification-click reprompt while the
+// original toast is still up replaces it instead of stacking a duplicate
+const promptToasts = new Map<string, number>()
 
 const SIDEBAR_KEY = 'kairos.sidebarHidden'
 const VIEW_ORDER: ViewId[] = [
@@ -62,6 +69,38 @@ export default function App(): React.JSX.Element {
   useEffect(
     () =>
       api.on('meetings:event', (ev) => {
+        // opt-in nudge from the calendar watcher: countdown toast whose Record
+        // button is the trusted click getDisplayMedia needs — never auto-start
+        if (ev.kind === 'record-prompt') {
+          const prev = promptToasts.get(ev.eventId)
+          if (prev != null) dismissToast(prev) // no-op if already gone
+          const { text, detail } = recordPromptToast(ev, new Date())
+          const id = toast({
+            variant: 'success', // icon slot shows the countdown ring
+            text,
+            detail,
+            timeoutMs: RECORD_PROMPT_TOAST_MS,
+            countdownMs: RECORD_PROMPT_TOAST_MS,
+            action: {
+              label: 'Record',
+              run: () => {
+                dismissToast(id)
+                promptToasts.delete(ev.eventId)
+                void startRecording({ calendarEventId: ev.eventId, title: ev.title }).then(
+                  (started) => {
+                    // null = already recording (chip shows it) or failure —
+                    // only the failure needs surfacing here
+                    const snap = meetingSnapshot()
+                    if (!started && snap.phase === 'error')
+                      toast({ variant: 'error', text: 'Recording failed', detail: snap.message, timeoutMs: 8000 })
+                  }
+                )
+              }
+            }
+          })
+          promptToasts.set(ev.eventId, id)
+          return
+        }
         if (ev.kind !== 'summarized' || ev.taskIds.length === 0) return
         const n = ev.taskIds.length
         pushUndo({

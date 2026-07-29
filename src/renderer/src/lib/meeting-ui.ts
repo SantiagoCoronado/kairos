@@ -31,6 +31,25 @@ export function fmtMeetingDuration(seconds: number | null | undefined): string {
   return `${h}h ${String(m).padStart(2, '0')}m`
 }
 
+/** how long the "record this call?" toast lingers (with countdown ring) */
+export const RECORD_PROMPT_TOAST_MS = 60_000
+
+/** toast copy for a record-prompt event: headline names the meeting when it
+ *  has a title; detail says where we are relative to the start time */
+export function recordPromptToast(
+  prompt: { title: string; startAt: string },
+  now: Date
+): { text: string; detail: string } {
+  const title = prompt.title.trim()
+  const lateMs = now.getTime() - Date.parse(prompt.startAt)
+  // floor: 31s in is still "now", not "1 min ago"
+  const lateMin = Math.floor(lateMs / 60_000)
+  return {
+    text: title ? `Record “${title}”?` : 'Record this meeting?',
+    detail: lateMin >= 1 ? `Started ${lateMin} min ago` : 'Starting now'
+  }
+}
+
 /** live elapsed clock for the recording chip: m:ss, h:mm:ss past the hour */
 export function fmtElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))

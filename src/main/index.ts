@@ -1,11 +1,12 @@
-import { app, globalShortcut, powerMonitor } from 'electron'
+import { app, globalShortcut, powerMonitor, Notification } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createMainWindow } from './windows/main-window'
 import { createCaptureWindow } from './windows/capture-window'
 import { registerCaptureHotkey } from './hotkey'
-import { registerIpc, getCommsManager, getTaskRunner, getTerminalManager, getCalendarManager, getMeetingManager, shutdownMeetings } from './ipc'
+import { registerIpc, getCommsManager, getTaskRunner, getTerminalManager, getCalendarManager, getMeetingManager, shutdownMeetings, broadcast } from './ipc'
 import { Scheduler } from './scheduler'
+import { MeetingPromptWatcher } from './meeting-prompts'
 import { closeDb, getDb } from './db'
 import { logLine } from './logger'
 import { pruneChatUploads } from './chat/uploads'
@@ -84,7 +85,34 @@ if (!gotLock) {
       getCalendarManager()?.pokePull()
       getCommsManager()?.pokeSync()
     })
-    scheduler = new Scheduler(getDb(), getTaskRunner())
+    // opt-in "record this call?" nudge — the toast needs the window visible to
+    // be useful, so the notification click brings the app forward; the actual
+    // recording start stays a trusted in-renderer click
+    const promptWatcher = new MeetingPromptWatcher({
+      db: getDb(),
+      enabled: () => getSettings().meetingPromptsEnabled,
+      recordingActive: () => getMeetingManager()?.activeMeetingId != null,
+      emit: (ev) => broadcast('meetings:event', ev),
+      notify: (prompt) => {
+        if (!Notification.isSupported()) return
+        const n = new Notification({
+          title: 'Meeting starting — record it?',
+          body: prompt.title
+        })
+        n.on('click', () => {
+          const win = createMainWindow()
+          if (win.isMinimized()) win.restore()
+          win.show()
+          win.focus()
+          app.focus({ steal: true })
+          // the toast only lives 60s of the 5min window — a late click must
+          // not land in an app with nothing to act on
+          promptWatcher.reprompt(prompt)
+        })
+        n.show()
+      }
+    })
+    scheduler = new Scheduler(getDb(), getTaskRunner(), promptWatcher)
     scheduler.start()
     const win = createMainWindow()
 

@@ -37,7 +37,8 @@ export class Scheduler {
 
   constructor(
     private db: DbDriver,
-    private runner: AgentTaskRunner | null = null
+    private runner: AgentTaskRunner | null = null,
+    private meetingPrompts: { tick(): void } | null = null
   ) {}
 
   start(): void {
@@ -79,6 +80,11 @@ export class Scheduler {
       }
     } catch (err) {
       logLine('error', 'scheduler', `agent-task tick failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
+    }
+    try {
+      this.meetingPrompts?.tick()
+    } catch (err) {
+      logLine('error', 'scheduler', `meeting-prompt tick failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
     }
   }
 

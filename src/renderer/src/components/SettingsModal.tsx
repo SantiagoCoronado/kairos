@@ -519,6 +519,17 @@ function MeetingsSection({ settings, save }: SectionProps): React.JSX.Element {
           </Button>
         )}
       </Row>
+      <Row
+        label="ask to record calls"
+        hint="When a calendar event with a meeting link starts, offer a one-tap recording prompt. Nothing ever records without your click."
+      >
+        <input
+          type="checkbox"
+          checked={settings.meetingPromptsEnabled}
+          onChange={(e) => save({ meetingPromptsEnabled: e.target.checked })}
+          className="accent-accent w-4 h-4 shrink-0"
+        />
+      </Row>
       <Row label="language" hint="Force a transcription language when autodetect guesses wrong.">
         <Select
           value={settings.meetingLanguage ?? ''}

@@ -2,9 +2,15 @@ import type { DbDriver } from './driver'
 import type { Logger } from './logger'
 import { noopLogger } from './logger'
 
+/** A migration is SQL, or a function for data repairs SQL can't express
+ *  faithfully. A function runs inside the same transaction as the version
+ *  bump, so it must use db.run/db.all directly — driver transactions don't
+ *  nest, which also rules out calling repo helpers that open their own. */
+export type Migration = string | ((db: DbDriver) => void)
+
 // Append-only list. Each entry runs once, in order, inside a transaction.
 // Never edit a shipped migration — add a new one.
-export const migrations: string[] = [
+export const migrations: Migration[] = [
   // 001 — initial schema
   `
 CREATE TABLE people (
@@ -554,8 +560,72 @@ ALTER TABLE tasks ADD COLUMN meeting_id TEXT REFERENCES meetings(id) ON DELETE S
 CREATE INDEX idx_meetings_event ON meetings(calendar_event_id);
 CREATE INDEX idx_meetings_started ON meetings(started_at DESC);
 CREATE INDEX idx_tasks_meeting ON tasks(meeting_id);
-`
+`,
+  // 021 — purge ingested Gmail drafts. Every autosave of an unsent mail landed
+  // as its own message row (gmail gives each save a new message id), so one
+  // draft showed up as a stack of half-written bubbles. The ingest guard stops
+  // new ones; this clears what's already stored. Only threads that actually
+  // held a draft are recomputed, so snippets elsewhere keep the exact bytes
+  // upsertMessage wrote.
+  //
+  // A function migration, not SQL: the snippet has to collapse *any* run of
+  // whitespace the way upsertMessage's /\s+/g does, and SQL's single-character
+  // replace() can't (it would leave blank lines and double spaces intact, so an
+  // upgraded DB would disagree with a fresh resync). The collapse is copied in
+  // rather than imported — a shipped migration must not change behaviour when
+  // the repo layer's helper or SNIPPET_LEN later does.
+  (db) => {
+    const snippetOf = (bodyText: string): string =>
+      bodyText.replace(/\s+/g, ' ').trim().slice(0, 120)
+
+    const isDraft = `raw_json IS NOT NULL AND json_valid(raw_json)
+      AND EXISTS (SELECT 1 FROM json_each(raw_json, '$.labelIds') WHERE value = 'DRAFT')`
+
+    const threadIds = db
+      .all<{ thread_id: string }>(
+        `SELECT DISTINCT thread_id FROM comms_messages WHERE provider = 'gmail' AND ${isDraft}`
+      )
+      .map((r) => r.thread_id)
+
+    db.run(`DELETE FROM comms_messages WHERE provider = 'gmail' AND ${isDraft}`)
+
+    for (const threadId of threadIds) {
+      // ties on sent_at are common (autosaves land in the same second), so the
+      // id breaks them — without it the snippet source is implementation-defined
+      const newest = db.get<{ body_text: string }>(
+        'SELECT body_text FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT 1',
+        threadId
+      )
+      // a never-sent draft is a whole thread of nothing once its revisions go
+      if (!newest) {
+        db.run('DELETE FROM comms_threads WHERE id = ?', threadId)
+        continue
+      }
+      db.run(
+        `UPDATE comms_threads SET
+           unread_count = (SELECT COUNT(*) FROM comms_messages WHERE thread_id = ? AND is_read = 0),
+           last_message_at = (SELECT MAX(sent_at) FROM comms_messages WHERE thread_id = ?),
+           snippet = ?,
+           is_archived = NOT EXISTS (SELECT 1 FROM comms_messages WHERE thread_id = ? AND is_inbox = 1)
+         WHERE id = ?`,
+        threadId,
+        threadId,
+        snippetOf(newest.body_text),
+        threadId,
+        threadId
+      )
+    }
+  }
 ]
+
+/** Run one migration by 0-based index without recording its version. Lets tests
+ *  build a DB frozen at an older schema without caring whether an entry is SQL
+ *  or a function. */
+export function applyMigration(db: DbDriver, index: number): void {
+  const migration = migrations[index]
+  if (typeof migration === 'string') db.exec(migration)
+  else migration(db)
+}
 
 export function migrate(db: DbDriver, log: Logger = noopLogger): void {
   db.exec(`
@@ -568,11 +638,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     db.all<{ version: number }>('SELECT version FROM schema_migrations').map((r) => r.version)
   )
 
-  migrations.forEach((sql, i) => {
+  migrations.forEach((_migration, i) => {
     const version = i + 1
     if (applied.has(version)) return
     db.transaction(() => {
-      db.exec(sql)
+      applyMigration(db, i)
       db.run('INSERT INTO schema_migrations (version) VALUES (?)', version)
     })
     log.info(`migration ${version} applied`)

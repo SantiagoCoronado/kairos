@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import type { CommsAccount, CommsThread } from './comms-types'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate, migrations } from './migrations'
+import { migrate, applyMigration } from './migrations'
 import * as comms from './repo/comms'
 import * as people from './repo/people'
 
@@ -376,7 +376,7 @@ describe('migration 005', () => {
       version INTEGER PRIMARY KEY,
       applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );`)
-    for (let i = 0; i < 4; i++) old.exec(migrations[i])
+    for (let i = 0; i < 4; i++) applyMigration(old, i)
     old.run('INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4)')
     const ts = T0.toISOString()
     old.run(
@@ -415,6 +415,155 @@ describe('migration 005', () => {
     expect(old.get<{ is_archived: number }>("SELECT is_archived FROM comms_threads WHERE id = 't-in'")!.is_archived).toBe(0)
     expect(old.get<{ is_archived: number }>("SELECT is_archived FROM comms_threads WHERE id = 't-arch'")!.is_archived).toBe(1)
     expect(old.get<{ sort_order: number }>('SELECT sort_order FROM comms_accounts')!.sort_order).toBe(1)
+    old.close()
+  })
+})
+
+describe('migration 021', () => {
+  /** a DB that stopped at migration 020, with gmail mail already synced */
+  function dbAt020(): DbDriver {
+    const old = openNodeSqliteDb(':memory:')
+    old.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );`)
+    for (let i = 0; i < 20; i++) applyMigration(old, i)
+    old.run(
+      `INSERT INTO schema_migrations (version)
+       VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),
+              (11),(12),(13),(14),(15),(16),(17),(18),(19),(20)`
+    )
+    const ts = T0.toISOString()
+    old.run(
+      `INSERT INTO comms_accounts (id, provider, external_id, display_name, created_at, updated_at)
+       VALUES ('a1', 'gmail', 'me@example.com', 'me', ?, ?)`,
+      ts, ts
+    )
+    return old
+  }
+
+  const ts = (mins: number): string => later(mins).toISOString()
+  const labels = (...ids: string[]): string => JSON.stringify({ headers: {}, labelIds: ids })
+
+  function mkThread(db2: DbDriver, id: string, lastAt: string, snippet: string, unread = 0): void {
+    db2.run(
+      `INSERT INTO comms_threads
+         (id, account_id, provider, external_id, kind, title, snippet, last_message_at, unread_count, created_at, updated_at)
+       VALUES (?, 'a1', 'gmail', ?, 'email', 'Evaluación', ?, ?, ?, ?, ?)`,
+      id, `ext-${id}`, snippet, lastAt, unread, T0.toISOString(), T0.toISOString()
+    )
+  }
+
+  function mkMsg(
+    db2: DbDriver,
+    id: string,
+    threadId: string,
+    sentAt: string,
+    body: string,
+    rawJson: string | null,
+    isRead = 1
+  ): void {
+    db2.run(
+      `INSERT INTO comms_messages
+         (id, thread_id, account_id, provider, external_id, sender_name, sender_handle,
+          is_me, sent_at, body_text, is_read, is_inbox, raw_json, created_at)
+       VALUES (?, ?, 'a1', 'gmail', ?, 'me', 'me@example.com', 1, ?, ?, ?, 0, ?, ?)`,
+      id, threadId, `ext-${id}`, sentAt, body, isRead, rawJson, T0.toISOString()
+    )
+  }
+
+  it('deletes autosaved draft revisions and repairs the thread aggregates', () => {
+    const old = dbAt020()
+    mkThread(old, 't-mixed', ts(22), 'Hola a todos, Les comparto el link', 3)
+    // the real sent mail, then the autosave snapshots the poller caught after it
+    mkMsg(old, 'm-sent', 't-mixed', ts(10), 'Sent for real', labels('SENT'))
+    mkMsg(old, 'd-1', 't-mixed', ts(15), '', labels('DRAFT'), 0)
+    mkMsg(old, 'd-2', 't-mixed', ts(18), 'Hola a todos,', labels('DRAFT'), 0)
+    mkMsg(old, 'd-3', 't-mixed', ts(22), 'Hola a todos,\n\nLes  comparto el link', labels('DRAFT'), 0)
+
+    migrate(old)
+
+    expect(old.all<{ id: string }>('SELECT id FROM comms_messages').map((r) => r.id)).toEqual(['m-sent'])
+    const t = old.get<{ last_message_at: string; snippet: string; unread_count: number }>(
+      "SELECT last_message_at, snippet, unread_count FROM comms_threads WHERE id = 't-mixed'"
+    )!
+    expect(t.last_message_at).toBe(ts(10))
+    expect(t.snippet).toBe('Sent for real')
+    expect(t.unread_count).toBe(0)
+    old.close()
+  })
+
+  it('collapses whitespace in the rebuilt snippet exactly as upsertMessage does', () => {
+    const old = dbAt020()
+    // real mail bodies are full of blank lines, CRLFs and double spaces — a
+    // per-character SQL replace() leaves those intact, /\s+/g does not
+    const body = 'Hola a todos,\r\n\r\nLes  comparto\tel link\n\n\nSaludos.'
+    mkThread(old, 't-ws', ts(20), 'draft fragment', 0)
+    mkMsg(old, 'm-sent', 't-ws', ts(10), body, labels('SENT'))
+    mkMsg(old, 'd-1', 't-ws', ts(20), 'half written', labels('DRAFT'), 0)
+
+    migrate(old)
+
+    const snippet = old.get<{ snippet: string }>("SELECT snippet FROM comms_threads WHERE id = 't-ws'")!.snippet
+    expect(snippet).toBe('Hola a todos, Les comparto el link Saludos.')
+    // and it is byte-identical to what a fresh ingest of the same body writes
+    const fresh = comms.upsertThread(db, {
+      account_id: gmailAccount().id, provider: 'gmail', external_id: 'thr-ws', kind: 'email', title: 'x'
+    }, T0)
+    comms.upsertMessage(db, {
+      thread_id: fresh.id, account_id: fresh.account_id, provider: 'gmail',
+      external_id: 'm-fresh', sent_at: T0.toISOString(), body_text: body
+    }, T0)
+    expect(snippet).toBe(comms.getThread(db, fresh.id)!.snippet)
+    old.close()
+  })
+
+  it('breaks sent_at ties on id so the snippet source is deterministic', () => {
+    const old = dbAt020()
+    // autosaves land in the same second constantly; the surviving pair here
+    // shares a timestamp, so ORDER BY sent_at alone leaves the winner to SQLite
+    mkThread(old, 't-tie', ts(20), 'draft fragment', 0)
+    mkMsg(old, 'm-a', 't-tie', ts(10), 'first by id', labels('SENT'))
+    mkMsg(old, 'm-z', 't-tie', ts(10), 'last by id', labels('SENT'))
+    mkMsg(old, 'd-1', 't-tie', ts(20), 'half written', labels('DRAFT'), 0)
+
+    migrate(old)
+
+    expect(old.get<{ snippet: string }>("SELECT snippet FROM comms_threads WHERE id = 't-tie'")!.snippet)
+      .toBe('last by id')
+    old.close()
+  })
+
+  it('drops a thread that was nothing but a never-sent draft', () => {
+    const old = dbAt020()
+    mkThread(old, 't-draft-only', ts(5), 'Hola', 0)
+    mkMsg(old, 'd-1', 't-draft-only', ts(3), 'Hol', labels('DRAFT'), 0)
+    mkMsg(old, 'd-2', 't-draft-only', ts(5), 'Hola', labels('DRAFT'), 0)
+
+    migrate(old)
+
+    expect(old.all('SELECT id FROM comms_threads')).toEqual([])
+    expect(old.all('SELECT id FROM comms_messages')).toEqual([])
+    old.close()
+  })
+
+  it('leaves draft-free threads and unparsable raw_json untouched', () => {
+    const old = dbAt020()
+    // snippet deliberately not what a recompute would write — proves it is not rewritten
+    mkThread(old, 't-clean', ts(9), 'stale-but-untouched', 7)
+    mkMsg(old, 'm1', 't-clean', ts(9), 'A normal reply', labels('INBOX', 'UNREAD'), 0)
+    mkMsg(old, 'm2', 't-clean', ts(8), 'no labels at all', null)
+    mkMsg(old, 'm3', 't-clean', ts(7), 'the word DRAFT in a body changes nothing', 'not json {')
+
+    migrate(old)
+
+    expect(old.all<{ id: string }>('SELECT id FROM comms_messages ORDER BY id').map((r) => r.id))
+      .toEqual(['m1', 'm2', 'm3'])
+    const t = old.get<{ snippet: string; unread_count: number }>(
+      "SELECT snippet, unread_count FROM comms_threads WHERE id = 't-clean'"
+    )!
+    expect(t.snippet).toBe('stale-but-untouched')
+    expect(t.unread_count).toBe(7)
     old.close()
   })
 })

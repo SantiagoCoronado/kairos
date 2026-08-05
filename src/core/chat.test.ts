@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate } from './migrations'
+import { migrate, applyMigration } from './migrations'
 import { appendChatMessage, listChatMessages } from './repo/chat'
 
 let db: DbDriver
@@ -44,14 +44,13 @@ describe('chat message repo', () => {
 
 describe('migration 016 — session origin', () => {
   it('backfills automation origin from agent_task_runs linkage', async () => {
-    const { migrations } = await import('./migrations')
     // simulate a DB that stopped at migration 015 with a chat + an automation session
     const old = openNodeSqliteDb(':memory:')
     old.exec(`CREATE TABLE schema_migrations (
       version INTEGER PRIMARY KEY,
       applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );`)
-    for (let i = 0; i < 15; i++) old.exec(migrations[i])
+    for (let i = 0; i < 15; i++) applyMigration(old, i)
     old.run(`INSERT INTO schema_migrations (version) VALUES ${Array.from({ length: 15 }, (_, i) => `(${i + 1})`).join(', ')}`)
     old.run("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES ('plain', 'Chat', '2026-01-01', '2026-01-01')")
     old.run("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES ('run-sess', '⚙ Daily brief', '2026-01-01', '2026-01-01')")

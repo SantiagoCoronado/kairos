@@ -10,7 +10,7 @@ import {
   useMeetingRecording
 } from '../../lib/meeting-store'
 import { fmtMeetingDuration } from '../../lib/meeting-ui'
-import { useMeetingPlayback } from '../../lib/meeting-playback'
+import { useMeetingPlayback, type MeetingPlayback } from '../../lib/meeting-playback'
 import { Button, Chip, cn } from '../ui'
 
 /** Recording block inside EventEditor (saved events only): start/stop a
@@ -80,6 +80,9 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [transcript, setTranscript] = useState<MeetingTranscript | null>(null)
   const [showSummary, setShowSummary] = useState(false)
+  // one playback per row, shared with the transcript modal — a second hook
+  // instance would start a second copy of the same audio
+  const playback = useMeetingPlayback(m)
   const started = new Date(m.started_at)
 
   const openTranscript = async (): Promise<void> => {
@@ -94,7 +97,7 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
   })
 
   return (
-    <div className="flex items-center gap-2 rounded-md bg-panel px-2.5 py-1.5">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-panel px-2.5 py-1.5">
       <span className="shrink-0 whitespace-nowrap text-[12px] text-text tabular-nums">
         {dateLabel}
       </span>
@@ -138,10 +141,15 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
         </button>
       )}
       {m.status === 'ready' && !m.audio_deleted_at && (m.mic_path || m.system_path) && (
-        <PlayButton meeting={m} />
+        <PlayButton playback={playback} />
       )}
       {transcript && (
-        <TranscriptModal meeting={m} transcript={transcript} onClose={() => setTranscript(null)} />
+        <TranscriptModal
+          meeting={m}
+          transcript={transcript}
+          playback={playback}
+          onClose={() => setTranscript(null)}
+        />
       )}
       {showSummary && <SummaryModal meeting={m} onClose={() => setShowSummary(false)} />}
       <button
@@ -166,8 +174,8 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
 }
 
 /** plays the mic + system archives together as one recording */
-function PlayButton({ meeting }: { meeting: Meeting }): React.JSX.Element {
-  const { playing, loading, error, toggle } = useMeetingPlayback(meeting)
+function PlayButton({ playback }: { playback: MeetingPlayback }): React.JSX.Element {
+  const { playing, loading, error, toggle } = playback
 
   return (
     <button

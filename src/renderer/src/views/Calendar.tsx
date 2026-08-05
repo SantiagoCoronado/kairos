@@ -152,11 +152,12 @@ export function CalendarView({
   return (
     <div className="h-full flex flex-col">
       {/* toolbar — title takes its own row on phones so the controls wrap under it.
-          pt-6 clears the invisible 24px titlebar drag strip that overlays the top
-          of the main column (App.tsx) — clicks there never reach the controls.
+          md:pt-6 clears the invisible 24px titlebar drag strip that overlays the
+          top of the main column on the desktop shell (App.tsx) — clicks there
+          never reach the controls. Phones have no drag strip, so pt-3 stands.
           Every control gets h-7 (+ transparent border on ghosts) so the boxes
           match the bordered Segmented/accent controls and center on one line. */}
-      <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 pt-6 pb-2.5">
+      <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 pt-3 md:pt-6 pb-2.5">
         <h1 className="text-[15px] font-medium text-text leading-none basis-full md:basis-auto md:min-w-44">
           {mode === 'month' ? fmtMonthTitle(anchor) : mode === 'day' ? fmtDayTitle(days[0]) : fmtWeekTitle(days)}
         </h1>
@@ -184,7 +185,7 @@ export function CalendarView({
         >
           Today
         </Button>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <Segmented
             value={mode}
             options={[

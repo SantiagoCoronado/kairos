@@ -2,20 +2,24 @@ import { useEffect } from 'react'
 import { Copy, Pause, Play, X } from 'lucide-react'
 import type { Meeting, MeetingTranscript } from '../../../../core/types'
 import { fmtMeetingDuration, fmtElapsed } from '../../lib/meeting-ui'
-import { useMeetingPlayback } from '../../lib/meeting-playback'
+import type { MeetingPlayback } from '../../lib/meeting-playback'
 import { Button, cn } from '../ui'
 
-/** Full transcript with timestamps; clicking a segment seeks the recording. */
+/** Full transcript with timestamps; clicking a segment seeks the recording.
+ *  Playback is owned by MeetingRow and shared with the row's play button —
+ *  an instance here would start a second copy of the same audio. */
 export function TranscriptModal({
   meeting,
   transcript,
+  playback,
   onClose
 }: {
   meeting: Meeting
   transcript: MeetingTranscript
+  playback: MeetingPlayback
   onClose: () => void
 }): React.JSX.Element {
-  const { playing, loading, error: audioError, t, toggle, seekTo } = useMeetingPlayback(meeting)
+  const { playing, loading, error: audioError, t, toggle, seekTo } = playback
   const audioGone = Boolean(meeting.audio_deleted_at) || (!meeting.mic_path && !meeting.system_path)
 
   useEffect(() => {
@@ -98,6 +102,7 @@ export function TranscriptModal({
                 'w-full text-left flex gap-2.5 rounded-md px-2 py-1 hover:bg-panel',
                 playing && t >= s.t0 && t < s.t1 && 'bg-panel'
               )}
+              disabled={loading}
               title={audioGone ? undefined : 'Play from here'}
               onClick={() => !audioGone && void seekTo(s.t0)}
             >

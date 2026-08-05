@@ -1860,7 +1860,7 @@ function ThreadPane({
             title="Open in Gmail"
             className={cn('shrink-0 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised', actionBtn)}
           >
-            <ExternalLink size={onBack ? 16 : 14} />
+            <ExternalLink size={14} />
           </button>
         )}
         {thread.provider === 'gmail' && (
@@ -2149,8 +2149,9 @@ function fmtClock(seconds: number): string {
 }
 
 /** Inline player for voice notes / audio attachments. Bytes come over IPC as
- *  a data URL — fetched eagerly so the duration shows before first play
- *  (then cached on disk main-side). */
+ *  a data URL — fetched eagerly (desktop only, and only once the file is
+ *  already cached on disk main-side) so the duration shows before first
+ *  play; otherwise on first click. */
 function VoiceNoteChip({
   attachment: a,
   mine
@@ -2222,7 +2223,7 @@ function VoiceNoteChip({
   // Leaving the thread must stop playback either way.
   useEffect(() => {
     aliveRef.current = true
-    if (!IS_REMOTE && a.local_path && (a.size_bytes ?? 0) <= MAX_IMG_PREVIEW_BYTES) {
+    if (!IS_REMOTE && a.local_path && (a.size_bytes ?? 0) <= MAX_PREVIEW_BYTES) {
       void ensureAudio(true)
     }
     return () => {
@@ -2314,7 +2315,7 @@ function VoiceNoteChip({
 
 /** Preview-sized cap mirrors MAX_PREVIEW_BYTES main-side — anything bigger
  *  would be refused there anyway, so don't even request the bytes. */
-const MAX_IMG_PREVIEW_BYTES = 10 * 1024 * 1024
+const MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
 /** Inline thumbnail for image attachments: bytes arrive as a data URL over
  *  IPC (cached on disk main-side), click opens the full-size file. Falls back
@@ -2323,7 +2324,7 @@ function ImageThumb({ attachment: a }: { attachment: CommsAttachment }): React.J
   const [dataUrl, setDataUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [opening, setOpening] = useState(false)
-  const tooBig = a.size_bytes != null && a.size_bytes > MAX_IMG_PREVIEW_BYTES
+  const tooBig = a.size_bytes != null && a.size_bytes > MAX_PREVIEW_BYTES
 
   useEffect(() => {
     if (tooBig) return undefined

@@ -2659,7 +2659,12 @@ function ForwardModal({
         // modal already closed (or unmounted by a thread change): the
         // failure still has to reach the user somewhere
         if (aliveRef.current) setError(res.message)
-        else toast({ variant: 'error', text: 'Forward failed', detail: res.message })
+        else
+          toast({
+            variant: 'error',
+            text: 'Forward failed',
+            detail: `to ${destLabel} — ${res.message}`
+          })
         return
       }
       toast({ variant: 'success', text: 'Forwarded', detail: `to ${destLabel}` })
@@ -2667,7 +2672,8 @@ function ForwardModal({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (aliveRef.current) setError(message)
-      else toast({ variant: 'error', text: 'Forward failed', detail: message })
+      else
+        toast({ variant: 'error', text: 'Forward failed', detail: `to ${destLabel} — ${message}` })
     } finally {
       sendingRef.current = null
       if (aliveRef.current) setSending(null)

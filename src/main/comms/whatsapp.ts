@@ -565,17 +565,22 @@ export class WhatsAppConnection {
     let jid = to.jid
     if (!jid && item.thread_id) jid = repo.getThread(this.db, item.thread_id)?.external_id
     if (!jid) throw new Error('no WhatsApp chat to send to')
+    // Capture socket + destination for the whole batch: the sock field is
+    // nulled mid-flight by the watchdog recycle / stop() / sleep-pause, and
+    // a multi-second media upload must not straddle a reconnect onto a null
+    // read (const copies also keep TS narrowing across the closure).
+    const sock = this.sock
+    const dest = jid
     // Read every file BEFORE the first send — an unreadable file must fail
     // the item while nothing has shipped yet, not midway through.
     const files = attachments.map((f) => ({ ...f, bytes: readFileSync(f.path) }))
     // text first, then each file as its own message (matching how phones
-    // forward media). ptt only for opus/ogg — WhatsApp won't play an mp3
-    // or webm presented as a voice note, and Baileys doesn't transcode.
+    // forward media)
     let lastId = ''
     let delivered = 0
     const sendOne = async (content: AnyMessageContent, what: string): Promise<void> => {
       try {
-        const sent = await this.sock!.sendMessage(jid!, content)
+        const sent = await sock.sendMessage(dest, content)
         lastId = sent?.key.id ?? lastId
         delivered++
       } catch (err) {
@@ -591,8 +596,10 @@ export class WhatsAppConnection {
     }
     if (item.body_text.trim()) await sendOne({ text: item.body_text }, 'text')
     for (const f of files) {
+      // ptt only for the ogg container WhatsApp records itself — opus in
+      // WebM (or any other audio) plays as a regular audio message
       const content: AnyMessageContent = f.mimeType.startsWith('audio/')
-        ? { audio: f.bytes, mimetype: f.mimeType, ptt: /ogg|opus/i.test(f.mimeType) }
+        ? { audio: f.bytes, mimetype: f.mimeType, ptt: /audio\/ogg/i.test(f.mimeType) }
         : f.mimeType.startsWith('image/')
           ? { image: f.bytes, mimetype: f.mimeType }
           : f.mimeType.startsWith('video/')

@@ -72,13 +72,23 @@ describe('buildMime', () => {
     expect(raw).toContain('Content-Type: application/octet-stream; name="a.ogg"')
   })
 
-  it('non-ascii filenames are RFC 2047 encoded in headers', () => {
+  it('non-ascii filenames get RFC 2231 filename* plus an ascii fallback', () => {
     const raw = buildMime({
       ...base,
       attachments: [{ filename: 'canción.mp3', mimeType: 'audio/mpeg', contentBase64: png }]
     })
-    expect(raw).toContain('=?UTF-8?B?')
+    expect(raw).toContain('filename="canci_n.mp3"')
+    expect(raw).toContain("filename*=UTF-8''canci%C3%B3n.mp3")
     expect(raw).not.toMatch(/name="[^"]*canción/)
+  })
+
+  it('ascii filenames skip the filename* parameter', () => {
+    const raw = buildMime({
+      ...base,
+      attachments: [{ filename: 'plain.pdf', mimeType: 'application/pdf', contentBase64: png }]
+    })
+    expect(raw).toContain('filename="plain.pdf"')
+    expect(raw).not.toContain('filename*=')
   })
 })
 

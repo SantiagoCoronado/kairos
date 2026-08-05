@@ -2737,8 +2737,13 @@ function ForwardModal({
           </button>
         </div>
         <div className="px-4 pt-3 space-y-2 shrink-0">
+          {/* preview what will actually ship: textBody, not the raw
+              placeholder — media shows as its filename list */}
           <p className="text-[11.5px] text-faint line-clamp-2 whitespace-pre-wrap break-words">
-            {m.body_text || '(no text)'}
+            {textBody.trim() ||
+              (attachments.length
+                ? attachments.map((a) => a.filename || 'attachment').join(', ')
+                : '(no text)')}
           </p>
           {attachments.length > 0 && (
             <label className="flex items-center gap-1.5 text-[11.5px] text-muted cursor-pointer select-none">

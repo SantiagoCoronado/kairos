@@ -93,11 +93,16 @@ export function buildMime(input: MimeInput): string {
     `--${mixed}`,
     ...bodyPart(),
     ...input.attachments.flatMap((a) => {
-      const name = encodeHeader(sanitizeFilename(a.filename))
+      const clean = sanitizeFilename(a.filename)
+      // RFC 2047 inside filename="…" is nonstandard; the conformant form is
+      // an RFC 2231 filename* parameter with an ASCII-degraded fallback for
+      // clients that don't decode it
+      const ascii = clean.replace(/[^\x20-\x7e]/g, '_')
+      const ext = ascii === clean ? '' : `; filename*=UTF-8''${encodeRFC2231(clean)}`
       return [
         `--${mixed}`,
-        `Content-Type: ${sanitizeMimeType(a.mimeType)}; name="${name}"`,
-        `Content-Disposition: attachment; filename="${name}"`,
+        `Content-Type: ${sanitizeMimeType(a.mimeType)}; name="${ascii}"`,
+        `Content-Disposition: attachment; filename="${ascii}"${ext}`,
         'Content-Transfer-Encoding: base64',
         '',
         wrap76(a.contentBase64)
@@ -112,6 +117,11 @@ export function sanitizeFilename(name: string): string {
   const cleaned = name.replace(/[\r\n"\\]/g, '_').trim()
   return cleaned || 'attachment'
 }
+
+/** RFC 2231 extended-value encoding for filename* — percent-encode, plus
+ *  the chars encodeURIComponent leaves that 2231 forbids in a value. */
+const encodeRFC2231 = (s: string): string =>
+  encodeURIComponent(s).replace(/['*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
 
 /** Header-safe media type: strip parameters, validate bare type/subtype.
  *  The value is remote-controlled (a WhatsApp sender's protobuf, a Gmail

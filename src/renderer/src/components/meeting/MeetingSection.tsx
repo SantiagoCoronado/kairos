@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { Circle, FileText, Pause, Play, Sparkles, Square, Trash2 } from 'lucide-react'
 import type { Meeting, MeetingTranscript } from '../../../../core/types'
 import { api, useInvoke } from '../../lib/api'
@@ -10,6 +10,7 @@ import {
   useMeetingRecording
 } from '../../lib/meeting-store'
 import { fmtMeetingDuration } from '../../lib/meeting-ui'
+import { useMeetingPlayback } from '../../lib/meeting-playback'
 import { Button, Chip, cn } from '../ui'
 
 /** Recording block inside EventEditor (saved events only): start/stop a
@@ -94,9 +95,11 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
 
   return (
     <div className="flex items-center gap-2 rounded-md bg-panel px-2.5 py-1.5">
-      <span className="text-[12px] text-text">{dateLabel}</span>
+      <span className="shrink-0 whitespace-nowrap text-[12px] text-text tabular-nums">
+        {dateLabel}
+      </span>
       {m.duration_seconds != null && (
-        <span className="text-[11.5px] text-muted tabular-nums">
+        <span className="shrink-0 whitespace-nowrap text-[11.5px] text-muted tabular-nums">
           {fmtMeetingDuration(m.duration_seconds)}
         </span>
       )}
@@ -109,7 +112,7 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
       <div className="flex-1" />
       {m.status === 'ready' && m.summary_md && (
         <button
-          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-accent hover:bg-raised"
+          className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-accent hover:bg-raised"
           title="View summary and action items"
           onClick={() => setShowSummary(true)}
         >
@@ -118,7 +121,7 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
       )}
       {m.status === 'ready' && !m.summary_md && (
         <button
-          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
+          className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
           title="Generate summary and action items"
           onClick={() => void api.invoke('meetings:summarize', m.id)}
         >
@@ -127,18 +130,15 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
       )}
       {m.status === 'ready' && (
         <button
-          className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
+          className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
           title="View transcript"
           onClick={() => void openTranscript()}
         >
           <FileText size={10} /> transcript
         </button>
       )}
-      {m.status === 'ready' && !m.audio_deleted_at && (
-        <>
-          {m.mic_path && <AudioButton meetingId={m.id} channel="mic" label="me" />}
-          {m.system_path && <AudioButton meetingId={m.id} channel="system" label="them" />}
-        </>
+      {m.status === 'ready' && !m.audio_deleted_at && (m.mic_path || m.system_path) && (
+        <PlayButton meeting={m} />
       )}
       {transcript && (
         <TranscriptModal meeting={m} transcript={transcript} onClose={() => setTranscript(null)} />
@@ -146,7 +146,7 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
       {showSummary && <SummaryModal meeting={m} onClose={() => setShowSummary(false)} />}
       <button
         className={cn(
-          'p-1 rounded hover:bg-raised',
+          'shrink-0 p-1 rounded hover:bg-raised',
           confirmDelete ? 'text-danger' : 'text-faint hover:text-text'
         )}
         title={confirmDelete ? 'Confirm delete (audio + row)' : 'Delete recording'}
@@ -165,52 +165,22 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
   )
 }
 
-/** per-channel play/pause; bytes arrive once as a data URL (VoiceNoteChip pattern) */
-function AudioButton({
-  meetingId,
-  channel,
-  label
-}: {
-  meetingId: string
-  channel: 'mic' | 'system'
-  label: string
-}): React.JSX.Element {
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-  const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'error'>('idle')
-
-  const toggle = async (): Promise<void> => {
-    if (state === 'playing') {
-      audioRef.current?.pause()
-      setState('idle')
-      return
-    }
-    if (state === 'loading') return
-    if (!audioRef.current) {
-      setState('loading')
-      const res = await api.invoke('meetings:audioData', meetingId, channel)
-      if (!res.ok) {
-        setState('error')
-        return
-      }
-      const audio = new Audio(res.dataUrl)
-      audio.addEventListener('ended', () => setState('idle'))
-      audioRef.current = audio
-    }
-    void audioRef.current.play()
-    setState('playing')
-  }
+/** plays the mic + system archives together as one recording */
+function PlayButton({ meeting }: { meeting: Meeting }): React.JSX.Element {
+  const { playing, loading, error, toggle } = useMeetingPlayback(meeting)
 
   return (
     <button
       className={cn(
-        'inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded hover:bg-raised',
-        state === 'error' ? 'text-danger' : state === 'playing' ? 'text-accent' : 'text-muted'
+        'shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded hover:bg-raised',
+        error ? 'text-danger' : playing ? 'text-accent' : 'text-muted'
       )}
-      title={state === 'error' ? 'Playback failed' : `Play ${label} channel`}
+      title={error ?? (playing ? 'Pause' : 'Play recording')}
+      disabled={loading}
       onClick={() => void toggle()}
     >
-      {state === 'playing' ? <Pause size={10} /> : <Play size={10} />}
-      {label}
+      {playing ? <Pause size={10} /> : <Play size={10} />}
+      {playing ? 'pause' : 'play'}
     </button>
   )
 }

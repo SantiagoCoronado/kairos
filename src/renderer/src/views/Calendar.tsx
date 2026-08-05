@@ -151,60 +151,85 @@ export function CalendarView({
 
   return (
     <div className="h-full flex flex-col">
-      {/* toolbar — title takes its own row on phones so the controls wrap under it */}
-      <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 pt-3 pb-2.5">
-        <h1 className="text-[15px] font-medium text-text basis-full md:basis-auto md:min-w-44">
+      {/* toolbar — title takes its own row on phones so the controls wrap under it.
+          pt-6 clears the invisible 24px titlebar drag strip that overlays the top
+          of the main column (App.tsx) — clicks there never reach the controls.
+          Every control gets h-7 (+ transparent border on ghosts) so the boxes
+          match the bordered Segmented/accent controls and center on one line. */}
+      <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 pt-6 pb-2.5">
+        <h1 className="text-[15px] font-medium text-text leading-none basis-full md:basis-auto md:min-w-44">
           {mode === 'month' ? fmtMonthTitle(anchor) : mode === 'day' ? fmtDayTitle(days[0]) : fmtWeekTitle(days)}
         </h1>
-        <Button variant="ghost" className="!px-1.5 !py-1" onClick={() => step(-1)} title="Previous (←)">
+        <Button
+          variant="ghost"
+          className="h-7 w-7 !p-0 inline-flex items-center justify-center border border-transparent"
+          onClick={() => step(-1)}
+          title="Previous (←)"
+        >
           <ChevronLeft size={15} />
         </Button>
-        <Button variant="ghost" className="!px-1.5 !py-1" onClick={() => step(1)} title="Next (→)">
+        <Button
+          variant="ghost"
+          className="h-7 w-7 !p-0 inline-flex items-center justify-center border border-transparent"
+          onClick={() => step(1)}
+          title="Next (→)"
+        >
           <ChevronRight size={15} />
         </Button>
-        <Button variant="ghost" className="!py-1 text-[12px]" onClick={() => setAnchor(new Date())} title="Today (t)">
+        <Button
+          variant="ghost"
+          className="h-7 !py-0 inline-flex items-center border border-transparent text-[12px]"
+          onClick={() => setAnchor(new Date())}
+          title="Today (t)"
+        >
           Today
         </Button>
-        <div className="flex-1" />
-        <Segmented
-          value={mode}
-          options={[
-            { value: 'month', label: 'Month' },
-            { value: 'week', label: 'Week' },
-            { value: 'day', label: 'Day' }
-          ]}
-          onChange={setModePersist}
-        />
-        <div className="relative">
-          <Button
-            variant="ghost"
-            className="!px-1.5 !py-1"
-            title="Calendars"
-            onClick={() => setShowCalendars((s) => !s)}
-          >
-            <SlidersHorizontal size={14} />
-          </Button>
-          {showCalendars && (
-            <CalendarsPopover onClose={() => setShowCalendars(false)} />
+        <div className="ml-auto flex items-center gap-2">
+          <Segmented
+            value={mode}
+            options={[
+              { value: 'month', label: 'Month' },
+              { value: 'week', label: 'Week' },
+              { value: 'day', label: 'Day' }
+            ]}
+            onChange={setModePersist}
+          />
+          <div className="relative">
+            <Button
+              variant="ghost"
+              className="h-7 w-7 !p-0 inline-flex items-center justify-center border border-transparent"
+              title="Calendars"
+              onClick={() => setShowCalendars((s) => !s)}
+            >
+              <SlidersHorizontal size={14} />
+            </Button>
+            {showCalendars && (
+              <CalendarsPopover onClose={() => setShowCalendars(false)} />
+            )}
+          </div>
+          {window.api && recPhase === 'idle' && (
+            <Button
+              variant="ghost"
+              className="h-7 !py-0 inline-flex items-center border border-transparent text-[12px]"
+              title="Record now (mic + system audio, stored locally) — link to an event later"
+              onClick={() => void startRecording()}
+            >
+              <span className="inline-flex items-center gap-1 text-danger">
+                <CircleDot size={12} /> Record
+              </span>
+            </Button>
           )}
-        </div>
-        {window.api && recPhase === 'idle' && (
           <Button
-            variant="ghost"
-            className="!py-1 text-[12px]"
-            title="Record now (mic + system audio, stored locally) — link to an event later"
-            onClick={() => void startRecording()}
+            variant="accent"
+            className="h-7 !py-0 inline-flex items-center text-[12px]"
+            onClick={openNewEvent}
+            title="New event (n)"
           >
-            <span className="inline-flex items-center gap-1 text-danger">
-              <CircleDot size={12} /> Record
+            <span className="inline-flex items-center gap-1">
+              <Plus size={13} /> Event
             </span>
           </Button>
-        )}
-        <Button variant="accent" className="!py-1 text-[12px]" onClick={openNewEvent} title="New event (n)">
-          <span className="inline-flex items-center gap-1">
-            <Plus size={13} /> Event
-          </span>
-        </Button>
+        </div>
       </div>
 
       {/* grid */}

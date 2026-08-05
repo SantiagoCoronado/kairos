@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { Copy, Pause, Play, X } from 'lucide-react'
 import type { Meeting, MeetingTranscript } from '../../../../core/types'
-import { api } from '../../lib/api'
 import { fmtMeetingDuration, fmtElapsed } from '../../lib/meeting-ui'
+import { useMeetingPlayback } from '../../lib/meeting-playback'
 import { Button, cn } from '../ui'
 
-/** Full transcript: Me/Them attribution with timestamps; clicking a
- *  segment seeks the recording. Playback keeps the two channel archives
- *  (mic + system) in sync — they were recorded simultaneously. */
+/** Full transcript with timestamps; clicking a segment seeks the recording. */
 export function TranscriptModal({
   meeting,
   transcript,
@@ -17,12 +15,7 @@ export function TranscriptModal({
   transcript: MeetingTranscript
   onClose: () => void
 }): React.JSX.Element {
-  const micRef = useRef<HTMLAudioElement | null>(null)
-  const sysRef = useRef<HTMLAudioElement | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [playing, setPlaying] = useState(false)
-  const [t, setT] = useState(0)
-  const [audioError, setAudioError] = useState<string | null>(null)
+  const { playing, loading, error: audioError, t, toggle, seekTo } = useMeetingPlayback(meeting)
   const audioGone = Boolean(meeting.audio_deleted_at) || (!meeting.mic_path && !meeting.system_path)
 
   useEffect(() => {
@@ -30,66 +23,8 @@ export function TranscriptModal({
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      micRef.current?.pause()
-      sysRef.current?.pause()
-    }
+    return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
-
-  const ensureAudio = async (): Promise<HTMLAudioElement | null> => {
-    if (micRef.current || sysRef.current) return micRef.current ?? sysRef.current
-    setLoading(true)
-    try {
-      const load = async (channel: 'mic' | 'system'): Promise<HTMLAudioElement | null> => {
-        const res = await api.invoke('meetings:audioData', meeting.id, channel)
-        return res.ok ? new Audio(res.dataUrl) : null
-      }
-      const [mic, sys] = await Promise.all([
-        meeting.mic_path ? load('mic') : null,
-        meeting.system_path ? load('system') : null
-      ])
-      if (!mic && !sys) {
-        setAudioError('Audio unavailable.')
-        return null
-      }
-      micRef.current = mic
-      sysRef.current = sys
-      const master = mic ?? sys!
-      master.addEventListener('timeupdate', () => setT(master.currentTime))
-      master.addEventListener('ended', () => setPlaying(false))
-      return master
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const each = (fn: (a: HTMLAudioElement) => void): void => {
-    for (const a of [micRef.current, sysRef.current]) if (a) fn(a)
-  }
-
-  const toggle = async (): Promise<void> => {
-    if (playing) {
-      each((a) => a.pause())
-      setPlaying(false)
-      return
-    }
-    const master = await ensureAudio()
-    if (!master) return
-    each((a) => void a.play())
-    setPlaying(true)
-  }
-
-  const seekTo = async (seconds: number): Promise<void> => {
-    const master = await ensureAudio()
-    if (!master) return
-    each((a) => {
-      a.currentTime = seconds
-    })
-    setT(seconds)
-    each((a) => void a.play())
-    setPlaying(true)
-  }
 
   const started = new Date(meeting.started_at)
 
@@ -168,14 +103,6 @@ export function TranscriptModal({
             >
               <span className="shrink-0 w-10 text-[10.5px] text-faint tabular-nums pt-0.5">
                 {fmtElapsed(s.t0 * 1000)}
-              </span>
-              <span
-                className={cn(
-                  'shrink-0 w-10 text-[10.5px] font-mono uppercase tracking-wide pt-0.5',
-                  s.channel === 'me' ? 'text-accent' : 'text-muted'
-                )}
-              >
-                {s.channel === 'me' ? 'me' : 'them'}
               </span>
               <span className="text-[12.5px] text-text leading-5">{s.text}</span>
             </button>

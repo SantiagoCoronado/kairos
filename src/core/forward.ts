@@ -18,7 +18,9 @@ export interface ForwardInput {
 
 export function buildForwardBody(input: ForwardInput): string {
   const comment = input.comment?.trim()
-  const text = input.text.trim() || '(no text)'
+  const text = input.text.trim()
+  // empty text happens when only attachments travel (voice note, bare
+  // photo) — the header/prefix still says where the media came from
   const quoted =
     input.style === 'email'
       ? [
@@ -26,10 +28,11 @@ export function buildForwardBody(input: ForwardInput): string {
           `From: ${input.senderName}`,
           `Date: ${input.sentAtLabel}`,
           ...(input.subjectLabel ? [`Subject: ${input.subjectLabel}`] : []),
-          '',
-          text
+          ...(text ? ['', text] : [])
         ].join('\n')
-      : `Forwarded from ${input.senderName}:\n${text}`
+      : text
+        ? `Forwarded from ${input.senderName}:\n${text}`
+        : `Forwarded from ${input.senderName}`
   return comment ? `${comment}\n\n${quoted}` : quoted
 }
 

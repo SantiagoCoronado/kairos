@@ -1,7 +1,13 @@
 // Gmail provider: raw fetch against the Gmail REST API (no googleapis).
 // OAuth is the installed-app loopback flow with the user's own client id/secret.
+import { readFileSync } from 'node:fs'
 import type { DbDriver } from '../../core/driver'
-import type { AttachmentUpsert, CommsAccount, OutboxItem } from '../../core/comms-types'
+import type {
+  AttachmentUpsert,
+  CommsAccount,
+  OutboundAttachment,
+  OutboxItem
+} from '../../core/comms-types'
 import * as repo from '../../core/repo/comms'
 import { getSettings } from '../settings'
 import { runLoopbackFlow } from './oauth'
@@ -587,7 +593,12 @@ interface GmailToJson {
  * Send an outbox item. For replies (thread_id set) the recipients/subject are
  * derived from the newest inbound message when not given explicitly.
  */
-export async function sendGmail(db: DbDriver, account: CommsAccount, item: OutboxItem): Promise<string> {
+export async function sendGmail(
+  db: DbDriver,
+  account: CommsAccount,
+  item: OutboxItem,
+  attachments: OutboundAttachment[] = []
+): Promise<string> {
   const to = JSON.parse(item.to_json) as GmailToJson
   let recipients = to.to ?? []
   let subject = to.subject ?? ''
@@ -631,7 +642,12 @@ export async function sendGmail(db: DbDriver, account: CommsAccount, item: Outbo
     subject,
     bodyText: item.body_text,
     bodyHtml: textToHtml(item.body_text),
-    inReplyTo
+    inReplyTo,
+    attachments: attachments.map((f) => ({
+      filename: f.filename,
+      mimeType: f.mimeType,
+      contentBase64: readFileSync(f.path).toString('base64')
+    }))
   })
   const body: Record<string, string> = { raw: toBase64Url(raw) }
   if (threadExternalId) body['threadId'] = threadExternalId

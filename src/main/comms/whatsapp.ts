@@ -2,7 +2,7 @@
 // protocol as WhatsApp Web, linked by QR). This violates WhatsApp's ToS and
 // carries a small account-ban risk; the user opted in knowingly.
 import { join } from 'node:path'
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import {
   makeWASocket,
   useMultiFileAuthState,
@@ -11,13 +11,14 @@ import {
   proto,
   DisconnectReason,
   Browsers,
+  type AnyMessageContent,
   type WASocket,
   type WAMessage,
   type WAMessageKey
 } from 'baileys'
 import { toDataURL } from 'qrcode'
 import type { DbDriver } from '../../core/driver'
-import type { OutboxItem } from '../../core/comms-types'
+import type { OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
 import { DATA_DIR } from '../db'
@@ -558,15 +559,36 @@ export class WhatsAppConnection {
     if (learned) this.applyNames()
   }
 
-  async send(item: OutboxItem): Promise<string> {
+  async send(item: OutboxItem, attachments: OutboundAttachment[] = []): Promise<string> {
     if (!this.sock) throw new Error('WhatsApp is not connected')
     const to = JSON.parse(item.to_json) as { jid?: string }
     let jid = to.jid
     if (!jid && item.thread_id) jid = repo.getThread(this.db, item.thread_id)?.external_id
     if (!jid) throw new Error('no WhatsApp chat to send to')
-    const sent = await this.sock.sendMessage(jid, { text: item.body_text })
+    // text first, then each file as its own message (matching how phones
+    // forward media); a forwarded voice note goes out as a push-to-talk clip
+    let lastId = ''
+    if (item.body_text.trim()) {
+      const sent = await this.sock.sendMessage(jid, { text: item.body_text })
+      lastId = sent?.key.id ?? ''
+    }
+    for (const f of attachments) {
+      const bytes = readFileSync(f.path)
+      const content: AnyMessageContent = f.mimeType.startsWith('audio/')
+        ? { audio: bytes, mimetype: f.mimeType, ptt: true }
+        : f.mimeType.startsWith('image/')
+          ? { image: bytes, mimetype: f.mimeType }
+          : f.mimeType.startsWith('video/')
+            ? { video: bytes, mimetype: f.mimeType }
+            : { document: bytes, mimetype: f.mimeType, fileName: f.filename }
+      const sent = await this.sock.sendMessage(jid, content)
+      lastId = sent?.key.id ?? lastId
+    }
+    if (!lastId && !item.body_text.trim() && !attachments.length) {
+      throw new Error('nothing to send')
+    }
     // our own copy comes back through messages.upsert (fromMe) and is ingested there
-    return sent?.key.id ?? ''
+    return lastId
   }
 
   stop(): void {

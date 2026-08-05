@@ -377,6 +377,9 @@ export interface CommsSendInput {
   to?: string[]
   subject?: string
   body: string
+  /** existing comms_attachments rows to re-send (forwarding). Bytes are
+   *  resolved main-side at dispatch. gmail + whatsapp only. */
+  attachmentIds?: string[]
 }
 
 export type CommsSendResult = { ok: true; outboxId: string } | { ok: false; message: string }

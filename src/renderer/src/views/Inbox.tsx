@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import type {
   CommsAccount,
+  CommsAccountStatus,
   CommsAttachment,
   CommsThread,
   CommsThreadListItem,
@@ -2585,6 +2586,7 @@ function ForwardModal({
   // destination key while a send is in flight — one forward at a time
   const [sending, setSending] = useState<string | null>(null)
   const sendingRef = useRef<string | null>(null)
+  const aliveRef = useRef(true)
   const [error, setError] = useState<string | null>(null)
   const { data: threads } = useInvoke(
     'comms:threads',
@@ -2592,15 +2594,17 @@ function ForwardModal({
     ['comms']
   )
   const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
+  // 'error' is a transient sync state (a flaky poll) and never blocks
+  // sending — only needs_auth/disabled are hard-stopped
+  const canSend = (s: CommsAccountStatus): boolean => s !== 'needs_auth' && s !== 'disabled'
   const gmailAccounts = (accounts ?? []).filter(
-    (a) => a.provider === 'gmail' && a.status === 'connected'
+    (a) => a.provider === 'gmail' && canSend(a.status)
   )
-  // don't offer destinations whose account can't send right now
-  const connectedIds = accounts
-    ? new Set(accounts.filter((a) => a.status === 'connected').map((a) => a.id))
+  const sendableIds = accounts
+    ? new Set(accounts.filter((a) => canSend(a.status)).map((a) => a.id))
     : null
   const destThreads = (threads ?? []).filter(
-    (t) => t.id !== sourceThread.id && (!connectedIds || connectedIds.has(t.account_id))
+    (t) => t.id !== sourceThread.id && (!sendableIds || sendableIds.has(t.account_id))
   )
 
   useEffect(() => {
@@ -2608,23 +2612,27 @@ function ForwardModal({
     return () => window.clearTimeout(timer)
   }, [search])
 
-  // a mid-flight close would swallow the send's outcome (sendNow can take
-  // up to 30s) — the modal stays up until the toast/error lands
-  const safeClose = (): void => {
-    if (!sendingRef.current) onClose()
-  }
+  // closing mid-send is fine: the in-flight send's outcome still lands as a
+  // toast (a hung provider must never hold the modal hostage)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // the picker owns the keyboard while open: without this, Escape also
-      // closes the thread and Backspace deletes the Gmail conversation via
-      // the window-level shortcut handlers behind the overlay
+      // App-level chords (⌘Z undo, ⌘1-N nav) stay live; everything else is
+      // the picker's while open — without this, Escape also closes the
+      // thread and Backspace deletes the Gmail conversation via the
+      // window-level shortcut handlers behind the overlay.
+      if (e.metaKey || e.ctrlKey) return
       e.stopPropagation()
-      if (e.key === 'Escape') safeClose()
+      if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose])
 
   const senderName = m.is_me === 1 ? 'me' : m.sender_name || m.sender_handle || 'unknown'
@@ -2648,17 +2656,21 @@ function ForwardModal({
     try {
       const res = await api.invoke('comms:send', input)
       if (!res.ok) {
-        setError(res.message)
+        // modal already closed (or unmounted by a thread change): the
+        // failure still has to reach the user somewhere
+        if (aliveRef.current) setError(res.message)
+        else toast({ variant: 'error', text: 'Forward failed', detail: res.message })
         return
       }
       toast({ variant: 'success', text: 'Forwarded', detail: `to ${destLabel}` })
-      sendingRef.current = null
-      onClose()
+      if (aliveRef.current) onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      if (aliveRef.current) setError(message)
+      else toast({ variant: 'error', text: 'Forward failed', detail: message })
     } finally {
       sendingRef.current = null
-      setSending(null)
+      if (aliveRef.current) setSending(null)
     }
   }
 
@@ -2679,7 +2691,7 @@ function ForwardModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
-      onMouseDown={safeClose}
+      onMouseDown={onClose}
     >
       <div
         className="w-[440px] max-w-[95vw] max-h-[80vh] bg-overlay border border-border-strong rounded-xl shadow-2xl flex flex-col overflow-hidden"
@@ -2689,7 +2701,7 @@ function ForwardModal({
           <h2 className="text-[13.5px] font-medium text-text">
             {sending ? 'Forwarding…' : 'Forward message'}
           </h2>
-          <button onClick={safeClose} className="text-faint hover:text-text">
+          <button onClick={onClose} className="text-faint hover:text-text">
             <X size={15} />
           </button>
         </div>
@@ -2697,6 +2709,11 @@ function ForwardModal({
           <p className="text-[11.5px] text-faint line-clamp-2 whitespace-pre-wrap break-words">
             {m.body_text || '(no text)'}
           </p>
+          {m.has_attachments === 1 && (
+            <p className="text-[10.5px] text-faint italic">
+              attachments aren't included — text only
+            </p>
+          )}
           <Input
             className="w-full"
             placeholder="Add a comment (optional)"

@@ -24,7 +24,9 @@ import {
   Mic,
   ChevronLeft,
   Filter,
-  UserPlus
+  Forward,
+  UserPlus,
+  X
 } from 'lucide-react'
 import type {
   CommsAccount,
@@ -36,6 +38,7 @@ import type {
   MessageSearchHit
 } from '../../../core/comms-types'
 import { COMMS_LABELS } from '../../../core/labels'
+import { buildForwardBody, looksLikeEmail } from '../../../core/forward'
 import { api, useInvoke } from '../lib/api'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { pushUndo } from '../lib/undo'
@@ -1705,6 +1708,7 @@ function ThreadPane({
   const bottomRef = useRef<HTMLDivElement>(null)
   const archived = thread.is_archived === 1
   const { name, title } = threadLabel(thread)
+  const [forwardMsg, setForwardMsg] = useState<CommsMessage | null>(null)
 
   // optimistic echo of a queued reply: visible immediately so a mistake can
   // be caught inside the undo window. queued (⌘Z live) → committed (window
@@ -1860,6 +1864,7 @@ function ThreadPane({
             attachments={attachmentsByMessage.get(m.id)}
             onOpenPerson={onOpenPerson}
             onOpenCalendar={onOpenCalendar}
+            onForward={setForwardMsg}
           />
         ))}
         {pendingSends.map((p) => (
@@ -1890,6 +1895,13 @@ function ThreadPane({
         markPendingSent={markPendingSent}
         removePending={removePending}
       />
+      {forwardMsg && (
+        <ForwardModal
+          message={forwardMsg}
+          sourceThread={thread}
+          onClose={() => setForwardMsg(null)}
+        />
+      )}
     </>
   )
 }
@@ -2006,12 +2018,14 @@ function MessageBubble({
   message: m,
   attachments,
   onOpenPerson,
-  onOpenCalendar
+  onOpenCalendar,
+  onForward
 }: {
   message: CommsMessage
   attachments?: CommsAttachment[]
   onOpenPerson?: (id: string) => void
   onOpenCalendar?: (day: Date) => void
+  onForward?: (m: CommsMessage) => void
 }): React.JSX.Element {
   const [linking, setLinking] = useState(false)
   const when = new Date(m.sent_at).toLocaleString(undefined, {
@@ -2080,6 +2094,15 @@ function MessageBubble({
               <LinkSenderPopover message={m} onDone={() => setLinking(false)} />
             )}
           </>
+        )}
+        {onForward && (
+          <button
+            className="text-faint hover:text-accent md:opacity-0 md:group-hover/sender:opacity-100"
+            title="Forward message"
+            onClick={() => onForward(m)}
+          >
+            <Forward size={12} />
+          </button>
         )}
       </div>
       {html ? (
@@ -2536,6 +2559,184 @@ function restoreReply(threadId: string, text: string): void {
   const live = replyRestorers.get(threadId)
   if (live) live(text)
   else replyRestoreStash.set(threadId, text)
+}
+
+/** Destination picker for forwarding one message's text: any existing
+ *  conversation (any provider), or a typed email address via a Gmail
+ *  account. Text-only for now — attachments don't survive a forward until
+ *  the send pipeline learns about them. */
+function ForwardModal({
+  message: m,
+  sourceThread,
+  onClose
+}: {
+  message: CommsMessage
+  sourceThread: CommsThreadListItem
+  onClose: () => void
+}): React.JSX.Element {
+  const [search, setSearch] = useState('')
+  const [comment, setComment] = useState('')
+  // destination key while a send is in flight — one forward at a time
+  const [sending, setSending] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const { data: threads } = useInvoke(
+    'comms:threads',
+    [{ box: 'all' as const, search: search.trim() || undefined, limit: 30 }],
+    ['comms']
+  )
+  const { data: accounts } = useInvoke('comms:accounts', [], ['comms'])
+  const gmailAccounts = (accounts ?? []).filter(
+    (a) => a.provider === 'gmail' && a.status === 'connected'
+  )
+  const destThreads = (threads ?? []).filter((t) => t.id !== sourceThread.id)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const senderName = m.is_me === 1 ? 'me' : m.sender_name || m.sender_handle || 'unknown'
+  const sentAtLabel = new Date(m.sent_at).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+
+  const doSend = async (
+    key: string,
+    input: { accountId: string; threadId?: string; to?: string[]; subject?: string; body: string },
+    destLabel: string
+  ): Promise<void> => {
+    if (sending) return
+    setSending(key)
+    setError(null)
+    try {
+      const res = await api.invoke('comms:send', input)
+      if (!res.ok) {
+        setError(res.message)
+        setSending(null)
+        return
+      }
+      toast({ variant: 'success', text: 'Forwarded', detail: `to ${destLabel}` })
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setSending(null)
+    }
+  }
+
+  const forwardBody = (style: 'email' | 'chat'): string =>
+    buildForwardBody({ senderName, sentAtLabel, text: m.body_text, comment, style })
+
+  const rowClass =
+    'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-[12.5px] text-text hover:bg-raised disabled:opacity-50'
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center"
+      onMouseDown={onClose}
+    >
+      <div
+        className="w-[440px] max-w-[95vw] max-h-[80vh] bg-overlay border border-border-strong rounded-xl shadow-2xl flex flex-col overflow-hidden"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 pt-3.5 pb-2.5 border-b border-border shrink-0">
+          <h2 className="text-[13.5px] font-medium text-text">Forward message</h2>
+          <button onClick={onClose} className="text-faint hover:text-text">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="px-4 pt-3 space-y-2 shrink-0">
+          <p className="text-[11.5px] text-faint line-clamp-2 whitespace-pre-wrap break-words">
+            {m.body_text || '(no text)'}
+          </p>
+          <Input
+            className="w-full"
+            placeholder="Add a comment (optional)"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+          />
+          <Input
+            autoFocus
+            className="w-full"
+            placeholder="Search conversations, or type an email address"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {error && <p className="text-[11.5px] text-danger">{error}</p>}
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2 space-y-0.5">
+          {looksLikeEmail(search) &&
+            gmailAccounts.map((acc) => (
+              <button
+                key={`email-${acc.id}`}
+                className={rowClass}
+                disabled={sending !== null}
+                onClick={() =>
+                  void doSend(
+                    `email-${acc.id}`,
+                    {
+                      accountId: acc.id,
+                      to: [search.trim()],
+                      subject: `Fwd: ${sourceThread.title || 'message'}`,
+                      body: forwardBody('email')
+                    },
+                    search.trim()
+                  )
+                }
+              >
+                <Mail size={13} className="shrink-0 text-accent" />
+                <span className="truncate">
+                  Email <span className="text-accent">{search.trim()}</span>
+                </span>
+                <span className="ml-auto shrink-0 text-[11px] text-faint">
+                  {acc.display_name}
+                </span>
+              </button>
+            ))}
+          {destThreads.map((t) => {
+            const Icon = PROVIDER_ICON[t.provider]
+            const { name: tName, title: tTitle } = threadLabel(t)
+            const label = tName ? `${tName} · ${tTitle}` : tTitle
+            return (
+              <button
+                key={t.id}
+                className={rowClass}
+                disabled={sending !== null}
+                onClick={() =>
+                  void doSend(
+                    t.id,
+                    {
+                      accountId: t.account_id,
+                      threadId: t.id,
+                      body: forwardBody(t.provider === 'gmail' ? 'email' : 'chat')
+                    },
+                    label
+                  )
+                }
+              >
+                <Icon size={13} className="shrink-0" />
+                <span className="truncate">{label}</span>
+                {sending === t.id && (
+                  <RefreshCw size={11} className="ml-auto shrink-0 animate-spin text-faint" />
+                )}
+              </button>
+            )
+          })}
+          {destThreads.length === 0 && !looksLikeEmail(search) && (
+            <p className="px-2 py-3 text-[12px] text-faint">
+              No conversations match — type an email address to forward by mail.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function Composer({

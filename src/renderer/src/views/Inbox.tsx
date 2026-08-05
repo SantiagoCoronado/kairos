@@ -2841,12 +2841,7 @@ function ForwardModal({
               <input
                 type="checkbox"
                 checked={includeAtts}
-                onChange={(e) => {
-                  setIncludeAtts(e.target.checked)
-                  // the failed row snapshotted the old inputs — retrying it
-                  // would silently ignore this edit
-                  setFailed(null)
-                }}
+                onChange={(e) => setIncludeAtts(e.target.checked)}
               />
               <Paperclip size={11} />
               Include{' '}
@@ -2857,11 +2852,7 @@ function ForwardModal({
             className="w-full"
             placeholder="Add a comment (optional)"
             value={comment}
-            onChange={(e) => {
-              setComment(e.target.value)
-              // same: an edited comment is not in the failed row
-              setFailed(null)
-            }}
+            onChange={(e) => setComment(e.target.value)}
           />
           <Input
             autoFocus
@@ -2877,6 +2868,11 @@ function ForwardModal({
                 <button
                   className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-md border border-border-strong text-[11.5px] text-text hover:bg-raised disabled:opacity-50"
                   disabled={sending !== null}
+                  // the retry offer survives edits on purpose: it resumes the
+                  // partially delivered row (skipping what already shipped),
+                  // and losing the button would push the user into a fresh
+                  // forward — the exact duplicate this exists to prevent
+                  title="Resends the failed forward as it was — edits made since don't apply"
                   onClick={() => void doRetry()}
                 >
                   {sending === `retry-${failed.outboxId}` && (

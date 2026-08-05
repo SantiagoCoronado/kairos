@@ -266,6 +266,11 @@ export class WhatsAppConnection {
             repo.setAccountStatus(this.db, this.accountId, 'needs_auth', 'logged out from phone')
             this.opts.emit({ kind: 'sync', accountId: this.accountId, status: 'needs_auth' })
             this.opts.onChanged()
+            // stop for real, like the invalid-session QR branch above: nothing
+            // reconnects until a re-link, and a half-alive connection would
+            // keep willReconnect() true — making the outbox drain defer this
+            // account's rows forever instead of failing them honestly
+            this.stop()
             return
           }
           this.scheduleReconnect(`close ${statusCode ?? '?'}`)

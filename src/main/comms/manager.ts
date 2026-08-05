@@ -49,6 +49,8 @@ export class CommsSyncManager {
   private wa = new Map<string, WhatsAppConnection>()
   private drainTimer: NodeJS.Timeout | null = null
   private draining = false
+  /** outbox ids already logged as drain-deferred — one line per row, not one per 3s tick */
+  private deferLogged = new Set<string>()
   private contactsTimer: NodeJS.Timeout | null = null
   private changedTimer: NodeJS.Timeout | null = null
   private lastPokeAt = 0
@@ -597,6 +599,16 @@ export class CommsSyncManager {
    *  composer restores drafts on failure, and a background retry behind that
    *  UX double-sends when the user re-sends the restored draft. */
   async retryOutbox(outboxId: string): Promise<CommsSendResult> {
+    const row = repo.getOutboxItem(this.db, outboxId)
+    if (row?.provider === 'whatsapp' && this.wa.get(row.account_id)?.willReconnect()) {
+      // don't flip the row just to fail it against a closed socket — keep
+      // the Retry button alive (outboxId) and say why it didn't go
+      return {
+        ok: false,
+        message: 'WhatsApp is reconnecting — try again in a moment',
+        outboxId
+      }
+    }
     if (!repo.requeueFailed(this.db, outboxId)) {
       // unknown, still in flight, or already sent — nothing to re-dispatch
       return { ok: false, message: 'nothing to retry — the message may have already sent' }
@@ -614,9 +626,23 @@ export class CommsSyncManager {
         // terminally 'failed' — possibly a partially-delivered row whose
         // resume ledger then has no caller. Hold it for a later tick; a
         // genuinely dead connection (stopped, or none) still fails honestly.
+        // The account-status guard is belt and braces: a needs_auth/disabled
+        // account will never reconnect, so deferring behind it would turn
+        // into silent forever-queueing.
         if (item.provider === 'whatsapp' && this.wa.get(item.account_id)?.willReconnect()) {
-          repo.unclaimOutbox(this.db, item.id)
-          continue
+          const status = repo.getAccount(this.db, item.account_id)?.status
+          if (status === 'connected' || status === 'error') {
+            if (!this.deferLogged.has(item.id)) {
+              this.deferLogged.add(item.id)
+              logLine(
+                'info',
+                'comms',
+                `outbox: holding ${item.id} — whatsapp socket reconnecting`
+              )
+            }
+            repo.unclaimOutbox(this.db, item.id)
+            continue
+          }
         }
         await this.dispatch(item.id)
       }

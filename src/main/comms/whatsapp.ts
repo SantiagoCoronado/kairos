@@ -565,28 +565,42 @@ export class WhatsAppConnection {
     let jid = to.jid
     if (!jid && item.thread_id) jid = repo.getThread(this.db, item.thread_id)?.external_id
     if (!jid) throw new Error('no WhatsApp chat to send to')
+    // Read every file BEFORE the first send — an unreadable file must fail
+    // the item while nothing has shipped yet, not midway through.
+    const files = attachments.map((f) => ({ ...f, bytes: readFileSync(f.path) }))
     // text first, then each file as its own message (matching how phones
-    // forward media); a forwarded voice note goes out as a push-to-talk clip
+    // forward media). ptt only for opus/ogg — WhatsApp won't play an mp3
+    // or webm presented as a voice note, and Baileys doesn't transcode.
     let lastId = ''
-    if (item.body_text.trim()) {
-      const sent = await this.sock.sendMessage(jid, { text: item.body_text })
-      lastId = sent?.key.id ?? ''
+    let delivered = 0
+    const sendOne = async (content: AnyMessageContent, what: string): Promise<void> => {
+      try {
+        const sent = await this.sock!.sendMessage(jid!, content)
+        lastId = sent?.key.id ?? lastId
+        delivered++
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // a multi-message send has no transaction: be explicit about what
+        // already shipped so a manual retry doesn't silently duplicate it
+        throw new Error(
+          delivered > 0
+            ? `${what} failed after ${delivered} message(s) were already delivered — retrying resends those too: ${msg}`
+            : `${what} failed: ${msg}`
+        )
+      }
     }
-    for (const f of attachments) {
-      const bytes = readFileSync(f.path)
+    if (item.body_text.trim()) await sendOne({ text: item.body_text }, 'text')
+    for (const f of files) {
       const content: AnyMessageContent = f.mimeType.startsWith('audio/')
-        ? { audio: bytes, mimetype: f.mimeType, ptt: true }
+        ? { audio: f.bytes, mimetype: f.mimeType, ptt: /ogg|opus/i.test(f.mimeType) }
         : f.mimeType.startsWith('image/')
-          ? { image: bytes, mimetype: f.mimeType }
+          ? { image: f.bytes, mimetype: f.mimeType }
           : f.mimeType.startsWith('video/')
-            ? { video: bytes, mimetype: f.mimeType }
-            : { document: bytes, mimetype: f.mimeType, fileName: f.filename }
-      const sent = await this.sock.sendMessage(jid, content)
-      lastId = sent?.key.id ?? lastId
+            ? { video: f.bytes, mimetype: f.mimeType }
+            : { document: f.bytes, mimetype: f.mimeType, fileName: f.filename }
+      await sendOne(content, `"${f.filename}"`)
     }
-    if (!lastId && !item.body_text.trim() && !attachments.length) {
-      throw new Error('nothing to send')
-    }
+    if (delivered === 0) throw new Error('nothing to send')
     // our own copy comes back through messages.upsert (fromMe) and is ingested there
     return lastId
   }

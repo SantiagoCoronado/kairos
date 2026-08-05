@@ -29,10 +29,12 @@ import { logLine } from '../logger'
 const GMAIL_INTERVAL_MS = 15_000 // incremental history.list is ~free; poll tight so mail feels live
 /** in-app preview (data URL) size ceiling — bigger files use download+open */
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024
-/** outbound attachment ceilings: WhatsApp media tops out ~16MB, Gmail's raw
- *  message limit is ~25MB — cap the total safely under both */
+/** outbound attachment ceilings. Per file: WhatsApp media tops out ~16MB.
+ *  Gmail's 25MB cap applies to the ENCODED RFC 822 message — base64 plus
+ *  CRLF wrapping is ~1.37x, so 15MiB raw ≈ 20.5MiB encoded, safely under. */
 const MAX_SEND_FILE_BYTES = 16 * 1024 * 1024
-const MAX_SEND_TOTAL_BYTES = 20 * 1024 * 1024
+const MAX_GMAIL_TOTAL_BYTES = 15 * 1024 * 1024
+const MAX_SEND_TOTAL_BYTES = 32 * 1024 * 1024
 const SLACK_INTERVAL_MS = 90_000
 const DRAIN_INTERVAL_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
@@ -364,6 +366,7 @@ export class CommsSyncManager {
     const ids = (JSON.parse(item.to_json) as { attachments?: string[] }).attachments ?? []
     if (!ids.length) return []
     const files: OutboundAttachment[] = []
+    const maxTotal = item.provider === 'gmail' ? MAX_GMAIL_TOTAL_BYTES : MAX_SEND_TOTAL_BYTES
     let total = 0
     for (const id of ids) {
       const att = repo.getAttachment(this.db, id)
@@ -376,7 +379,7 @@ export class CommsSyncManager {
         throw new Error(`"${name}" is too large to send (${Math.round(size / 1024 / 1024)}MB)`)
       }
       total += size
-      if (total > MAX_SEND_TOTAL_BYTES) {
+      if (total > maxTotal) {
         throw new Error('attachments exceed the send size limit')
       }
       files.push({
@@ -526,11 +529,21 @@ export class CommsSyncManager {
       if (account.provider === 'slack') {
         return { ok: false, message: 'attachments to Slack are not supported yet' }
       }
-      // fail fast on unknown ids — dispatch would only discover it later,
-      // after the composer already reported the send as queued
+      // fail fast on unknown ids and known-oversized files — dispatch would
+      // only discover them after the composer reported the send as queued
+      // (and possibly after a full media download)
+      let knownTotal = 0
+      const maxTotal =
+        account.provider === 'gmail' ? MAX_GMAIL_TOTAL_BYTES : MAX_SEND_TOTAL_BYTES
       for (const id of attachmentIds) {
-        if (!repo.getAttachment(this.db, id)) {
-          return { ok: false, message: 'attachment no longer exists' }
+        const att = repo.getAttachment(this.db, id)
+        if (!att) return { ok: false, message: 'attachment no longer exists' }
+        if ((att.size_bytes ?? 0) > MAX_SEND_FILE_BYTES) {
+          return { ok: false, message: `"${att.filename ?? 'attachment'}" is too large to send` }
+        }
+        knownTotal += att.size_bytes ?? 0
+        if (knownTotal > maxTotal) {
+          return { ok: false, message: 'attachments exceed the send size limit' }
         }
       }
     }

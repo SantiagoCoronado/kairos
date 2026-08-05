@@ -2587,8 +2587,12 @@ function ForwardModal({
   const [query, setQuery] = useState('')
   const [comment, setComment] = useState('')
   const [includeAtts, setIncludeAtts] = useState(true)
-  // a voice note / bare photo has a placeholder body — never forward that text
-  const placeholderBody = m.body_text === '[voice message]' || m.body_text === '[image]'
+  // uncaptioned media carries a placeholder body (whatsapp.ts extractText:
+  // '[image]', '[video]', '[voice message]', '[sticker]', '[file] name') —
+  // never forward that literal text
+  const placeholderBody =
+    /^\[(voice message|image|video|sticker)\]$/.test(m.body_text) ||
+    m.body_text.startsWith('[file]')
   const textBody = placeholderBody ? '' : m.body_text
   const sendingAtts = includeAtts && attachments.length > 0
   /** ids for providers that take attachments; slack stays text-only */

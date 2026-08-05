@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMime, sanitizeFilename, toBase64Url } from './mime'
+import { buildMime, sanitizeFilename, sanitizeMimeType, toBase64Url } from './mime'
 
 const base = {
   from: 'me@example.com',
@@ -55,6 +55,40 @@ describe('buildMime', () => {
       attachments: [{ filename: 'x', mimeType: '', contentBase64: png }]
     })
     expect(raw).toContain('Content-Type: application/octet-stream; name="x"')
+  })
+
+  it('a CRLF-bearing remote mime type cannot smuggle headers', () => {
+    const raw = buildMime({
+      ...base,
+      attachments: [
+        {
+          filename: 'a.ogg',
+          mimeType: 'audio/ogg\r\nX-Injected: evil',
+          contentBase64: png
+        }
+      ]
+    })
+    expect(raw).not.toContain('X-Injected')
+    expect(raw).toContain('Content-Type: application/octet-stream; name="a.ogg"')
+  })
+
+  it('non-ascii filenames are RFC 2047 encoded in headers', () => {
+    const raw = buildMime({
+      ...base,
+      attachments: [{ filename: 'canción.mp3', mimeType: 'audio/mpeg', contentBase64: png }]
+    })
+    expect(raw).toContain('=?UTF-8?B?')
+    expect(raw).not.toMatch(/name="[^"]*canción/)
+  })
+})
+
+describe('sanitizeMimeType', () => {
+  it('strips parameters and keeps a valid type', () => {
+    expect(sanitizeMimeType('audio/ogg; codecs=opus')).toBe('audio/ogg')
+  })
+  it('rejects malformed values', () => {
+    expect(sanitizeMimeType('audio/ogg\r\nX-Evil: 1')).toBe('application/octet-stream')
+    expect(sanitizeMimeType('not a mime')).toBe('application/octet-stream')
   })
 })
 

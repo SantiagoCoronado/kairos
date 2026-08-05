@@ -92,14 +92,17 @@ export function buildMime(input: MimeInput): string {
     '',
     `--${mixed}`,
     ...bodyPart(),
-    ...input.attachments.flatMap((a) => [
-      `--${mixed}`,
-      `Content-Type: ${a.mimeType || 'application/octet-stream'}; name="${sanitizeFilename(a.filename)}"`,
-      `Content-Disposition: attachment; filename="${sanitizeFilename(a.filename)}"`,
-      'Content-Transfer-Encoding: base64',
-      '',
-      wrap76(a.contentBase64)
-    ]),
+    ...input.attachments.flatMap((a) => {
+      const name = encodeHeader(sanitizeFilename(a.filename))
+      return [
+        `--${mixed}`,
+        `Content-Type: ${sanitizeMimeType(a.mimeType)}; name="${name}"`,
+        `Content-Disposition: attachment; filename="${name}"`,
+        'Content-Transfer-Encoding: base64',
+        '',
+        wrap76(a.contentBase64)
+      ]
+    }),
     `--${mixed}--`
   ].join('\r\n')
 }
@@ -108,6 +111,14 @@ export function buildMime(input: MimeInput): string {
 export function sanitizeFilename(name: string): string {
   const cleaned = name.replace(/[\r\n"\\]/g, '_').trim()
   return cleaned || 'attachment'
+}
+
+/** Header-safe media type: strip parameters, validate bare type/subtype.
+ *  The value is remote-controlled (a WhatsApp sender's protobuf, a Gmail
+ *  part) — it must not be able to smuggle CRLF into the part headers. */
+export function sanitizeMimeType(mime: string): string {
+  const bare = mime.split(';')[0].trim()
+  return /^[\w.+-]+\/[\w.+-]+$/.test(bare) ? bare : 'application/octet-stream'
 }
 
 /** Gmail's messages.send wants base64url of the raw RFC 2822 message. */

@@ -18,6 +18,18 @@ describe('buildForwardBody', () => {
     )
   })
 
+  it('email style includes the subject when provided', () => {
+    const body = buildForwardBody({
+      senderName: 'AC',
+      sentAtLabel: 'Jul 27',
+      subjectLabel: 'Impuestos',
+      text: 'hola',
+      style: 'email'
+    })
+    expect(body).toContain('Subject: Impuestos\n')
+    expect(body.indexOf('Subject:')).toBeGreaterThan(body.indexOf('Date:'))
+  })
+
   it('chat style is a one-line prefix', () => {
     const body = buildForwardBody({
       senderName: 'Alejandro Cordoba',

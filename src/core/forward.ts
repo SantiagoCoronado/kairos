@@ -6,6 +6,8 @@ export interface ForwardInput {
   senderName: string
   /** preformatted timestamp label — callers own locale/timezone concerns */
   sentAtLabel: string
+  /** original subject, when the source is an email thread */
+  subjectLabel?: string
   /** original message text */
   text: string
   /** optional note the forwarder typed above the quoted content */
@@ -23,6 +25,7 @@ export function buildForwardBody(input: ForwardInput): string {
           '---------- Forwarded message ----------',
           `From: ${input.senderName}`,
           `Date: ${input.sentAtLabel}`,
+          ...(input.subjectLabel ? [`Subject: ${input.subjectLabel}`] : []),
           '',
           text
         ].join('\n')

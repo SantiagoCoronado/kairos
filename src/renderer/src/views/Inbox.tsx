@@ -42,7 +42,7 @@ import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { pushUndo } from '../lib/undo'
 import { pendingEchoLanded } from '../lib/pending-echo'
 import { toast } from '../lib/toast'
-import { useIsMobile } from '../lib/mobile'
+import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
 import { MicButton } from '../components/MicButton'
 import { InviteCard } from '../components/InviteCard'
@@ -1848,7 +1848,8 @@ function ThreadPane({
         >
           {archived ? <ArchiveRestore size={onBack ? 16 : 14} /> : <Archive size={onBack ? 16 : 14} />}
         </button>
-        {thread.provider === 'gmail' && accountEmail && (
+        {/* not on the phone header — five actions already leave the title ~60px */}
+        {!onBack && thread.provider === 'gmail' && accountEmail && (
           <button
             onClick={() =>
               // routed to the system browser by the main-process window-open handler
@@ -2169,7 +2170,7 @@ function VoiceNoteChip({
   const [clock, setClock] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const ensureAudio = (): Promise<HTMLAudioElement | null> => {
+  const ensureAudio = (silent = false): Promise<HTMLAudioElement | null> => {
     if (audioRef.current) return Promise.resolve(audioRef.current)
     if (pendingRef.current) return pendingRef.current
     const job = (async (): Promise<HTMLAudioElement | null> => {
@@ -2177,7 +2178,9 @@ function VoiceNoteChip({
         const res = await api.invoke('comms:attachmentData', a.id)
         if (!aliveRef.current) return null
         if (!res.ok) {
-          setError(res.message)
+          // the eager pass stays quiet — a disconnected account must not
+          // paint an error under every voice note on thread open
+          if (!silent) setError(res.message)
           return null
         }
         const audio = new Audio(res.dataUrl)
@@ -2212,11 +2215,16 @@ function VoiceNoteChip({
     return job
   }
 
-  // eager metadata fetch (quiet — no spinner unless the user is waiting on a
-  // click), and leaving the thread must stop playback
+  // Eager metadata fetch so the duration shows before first play — but only
+  // when the bytes are already on disk and inside the preview cap: an
+  // undownloaded WhatsApp note would trigger a full media download (and a
+  // remote PWA session would pay the transfer) for something never played.
+  // Leaving the thread must stop playback either way.
   useEffect(() => {
     aliveRef.current = true
-    void ensureAudio()
+    if (!IS_REMOTE && a.local_path && (a.size_bytes ?? 0) <= MAX_IMG_PREVIEW_BYTES) {
+      void ensureAudio(true)
+    }
     return () => {
       aliveRef.current = false
       audioRef.current?.pause()
@@ -2227,11 +2235,10 @@ function VoiceNoteChip({
 
   const toggle = async (): Promise<void> => {
     setError(null)
-    setBusy(true)
+    if (!audioRef.current) setBusy(true)
     const audio = await ensureAudio()
-    if (!aliveRef.current) return
-    setBusy(false)
-    if (!audio) return
+    if (aliveRef.current) setBusy(false)
+    if (!audio || !aliveRef.current) return
     if (audio.paused) {
       void audio.play().catch((e) => {
         if ((e as DOMException)?.name === 'AbortError') return
@@ -2285,9 +2292,10 @@ function VoiceNoteChip({
           <div className="h-1.5 w-full rounded-full bg-border overflow-hidden">
             <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
           </div>
+          {/* centered on the same linear mapping seek uses */}
           <div
-            className="absolute top-1/2 -mt-[5px] h-2.5 w-2.5 rounded-full bg-accent shadow"
-            style={{ left: `calc(${pct}% - ${pct / 10}px)` }}
+            className="absolute top-1/2 -mt-[5px] h-2.5 w-2.5 rounded-full bg-accent shadow -translate-x-1/2"
+            style={{ left: `${pct}%` }}
           />
         </div>
         <span className="shrink-0 font-mono text-[10px] text-muted inline-flex items-center gap-1">
@@ -2725,7 +2733,7 @@ function Composer({
             size={14}
             className="h-8 w-8 rounded-md border border-border flex items-center justify-center hover:bg-raised"
             onTranscript={(t) => {
-              setBody((prev) => (prev.trim() ? `${prev} ${t}` : t))
+              setBody((prev) => (prev.trim() ? `${prev.trimEnd()} ${t}` : t))
               document.getElementById('inbox-reply')?.focus()
             }}
             onError={(message) => setError(message)}
@@ -2827,7 +2835,7 @@ function ComposePane({
           <MicButton
             size={14}
             className="h-8 w-8 rounded-md border border-border flex items-center justify-center hover:bg-raised"
-            onTranscript={(t) => setBody((prev) => (prev.trim() ? `${prev} ${t}` : t))}
+            onTranscript={(t) => setBody((prev) => (prev.trim() ? `${prev.trimEnd()} ${t}` : t))}
             onError={(message) => toast({ variant: 'error', text: 'Dictation failed', detail: message })}
           />
         )}

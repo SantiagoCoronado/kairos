@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { powerMonitor, shell } from 'electron'
 import type { DbDriver } from '../../core/driver'
-import type { CommsAccount } from '../../core/comms-types'
+import type { CommsAccount, OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent, CommsSendInput, CommsSendResult } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
 import { DATA_DIR } from '../db'
@@ -29,6 +29,12 @@ import { logLine } from '../logger'
 const GMAIL_INTERVAL_MS = 15_000 // incremental history.list is ~free; poll tight so mail feels live
 /** in-app preview (data URL) size ceiling — bigger files use download+open */
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024
+/** outbound attachment ceilings. Per file: WhatsApp media tops out ~16MB.
+ *  Gmail's 25MB cap applies to the ENCODED RFC 822 message — base64 plus
+ *  CRLF wrapping is ~1.37x, so 15MiB raw ≈ 20.5MiB encoded, safely under. */
+const MAX_SEND_FILE_BYTES = 16 * 1024 * 1024
+const MAX_GMAIL_TOTAL_BYTES = 15 * 1024 * 1024
+const MAX_SEND_TOTAL_BYTES = 32 * 1024 * 1024
 const SLACK_INTERVAL_MS = 90_000
 const DRAIN_INTERVAL_MS = 3_000
 const MAX_BACKOFF_MS = 5 * 60_000
@@ -353,6 +359,38 @@ export class CommsSyncManager {
     }
   }
 
+  /** Resolve an outbox item's forwarded attachments to files on disk.
+   *  Throws with a user-readable message — dispatch turns that into a
+   *  failed outbox row. */
+  private async resolveOutboxAttachments(item: OutboxItem): Promise<OutboundAttachment[]> {
+    const ids = (JSON.parse(item.to_json) as { attachments?: string[] }).attachments ?? []
+    if (!ids.length) return []
+    const files: OutboundAttachment[] = []
+    const maxTotal = item.provider === 'gmail' ? MAX_GMAIL_TOTAL_BYTES : MAX_SEND_TOTAL_BYTES
+    let total = 0
+    for (const id of ids) {
+      const att = repo.getAttachment(this.db, id)
+      if (!att) throw new Error('a forwarded attachment no longer exists')
+      const name = att.filename || 'attachment'
+      const local = await this.ensureAttachmentLocal(id)
+      if (!local.ok) throw new Error(`couldn't fetch "${name}": ${local.message}`)
+      const size = statSync(local.path).size
+      if (size > MAX_SEND_FILE_BYTES) {
+        throw new Error(`"${name}" is too large to send (${Math.round(size / 1024 / 1024)}MB)`)
+      }
+      total += size
+      if (total > maxTotal) {
+        throw new Error('attachments exceed the send size limit')
+      }
+      files.push({
+        filename: name,
+        mimeType: att.mime_type || 'application/octet-stream',
+        path: local.path
+      })
+    }
+    return files
+  }
+
   /** Ensure the attachment's bytes exist on disk (cached via local_path). */
   private async ensureAttachmentLocal(
     attachmentId: string
@@ -486,13 +524,37 @@ export class CommsSyncManager {
     if (account.provider !== 'gmail' && !input.threadId) {
       return { ok: false, message: 'pick a conversation to send into' }
     }
+    const attachmentIds = input.attachmentIds ?? []
+    if (attachmentIds.length) {
+      if (account.provider === 'slack') {
+        return { ok: false, message: 'attachments to Slack are not supported yet' }
+      }
+      // fail fast on unknown ids and known-oversized files — dispatch would
+      // only discover them after the composer reported the send as queued
+      // (and possibly after a full media download)
+      let knownTotal = 0
+      const maxTotal =
+        account.provider === 'gmail' ? MAX_GMAIL_TOTAL_BYTES : MAX_SEND_TOTAL_BYTES
+      for (const id of attachmentIds) {
+        const att = repo.getAttachment(this.db, id)
+        if (!att) return { ok: false, message: 'attachment no longer exists' }
+        if ((att.size_bytes ?? 0) > MAX_SEND_FILE_BYTES) {
+          return { ok: false, message: `"${att.filename ?? 'attachment'}" is too large to send` }
+        }
+        knownTotal += att.size_bytes ?? 0
+        if (knownTotal > maxTotal) {
+          return { ok: false, message: 'attachments exceed the send size limit' }
+        }
+      }
+    }
+    const toJson: Record<string, unknown> =
+      account.provider === 'gmail' ? { to: input.to, subject: input.subject } : {}
+    if (attachmentIds.length) toJson['attachments'] = attachmentIds
     const item = repo.enqueueOutbox(this.db, {
       account_id: account.id,
       thread_id: input.threadId ?? null,
       provider: account.provider,
-      to_json: JSON.stringify(
-        account.provider === 'gmail' ? { to: input.to, subject: input.subject } : {}
-      ),
+      to_json: JSON.stringify(toJson),
       body_text: input.body,
       source: 'app'
     })
@@ -539,15 +601,17 @@ export class CommsSyncManager {
       return 'account was disconnected'
     }
     try {
+      const files = await this.resolveOutboxAttachments(item)
       let externalId: string
       if (account.provider === 'gmail') {
-        externalId = await sendGmail(this.db, account, item)
+        externalId = await sendGmail(this.db, account, item, files)
       } else if (account.provider === 'slack') {
+        if (files.length) throw new Error('attachments to Slack are not supported yet')
         externalId = await sendSlack(this.db, account, item)
       } else {
         const conn = this.wa.get(account.id)
         if (!conn) throw new Error('WhatsApp is not connected')
-        externalId = await conn.send(item)
+        externalId = await conn.send(item, files)
       }
       repo.finishOutbox(this.db, item.id, { ok: true, external_id: externalId })
       this.notifyChanged()

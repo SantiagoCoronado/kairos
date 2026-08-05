@@ -2,7 +2,7 @@
 // protocol as WhatsApp Web, linked by QR). This violates WhatsApp's ToS and
 // carries a small account-ban risk; the user opted in knowingly.
 import { join } from 'node:path'
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import {
   makeWASocket,
   useMultiFileAuthState,
@@ -11,13 +11,14 @@ import {
   proto,
   DisconnectReason,
   Browsers,
+  type AnyMessageContent,
   type WASocket,
   type WAMessage,
   type WAMessageKey
 } from 'baileys'
 import { toDataURL } from 'qrcode'
 import type { DbDriver } from '../../core/driver'
-import type { OutboxItem } from '../../core/comms-types'
+import type { OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
 import { DATA_DIR } from '../db'
@@ -558,15 +559,57 @@ export class WhatsAppConnection {
     if (learned) this.applyNames()
   }
 
-  async send(item: OutboxItem): Promise<string> {
+  async send(item: OutboxItem, attachments: OutboundAttachment[] = []): Promise<string> {
     if (!this.sock) throw new Error('WhatsApp is not connected')
     const to = JSON.parse(item.to_json) as { jid?: string }
     let jid = to.jid
     if (!jid && item.thread_id) jid = repo.getThread(this.db, item.thread_id)?.external_id
     if (!jid) throw new Error('no WhatsApp chat to send to')
-    const sent = await this.sock.sendMessage(jid, { text: item.body_text })
+    // Capture socket + destination for the whole batch: the sock field is
+    // nulled mid-flight by the watchdog recycle / stop() / sleep-pause, and
+    // a multi-second media upload must not straddle a reconnect onto a null
+    // read (const copies also keep TS narrowing across the closure).
+    const sock = this.sock
+    const dest = jid
+    // Read every file BEFORE the first send — an unreadable file must fail
+    // the item while nothing has shipped yet, not midway through.
+    const files = attachments.map((f) => ({ ...f, bytes: readFileSync(f.path) }))
+    // text first, then each file as its own message (matching how phones
+    // forward media)
+    let lastId = ''
+    let delivered = 0
+    const sendOne = async (content: AnyMessageContent, what: string): Promise<void> => {
+      try {
+        const sent = await sock.sendMessage(dest, content)
+        lastId = sent?.key.id ?? lastId
+        delivered++
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // a multi-message send has no transaction: be explicit about what
+        // already shipped so a manual retry doesn't silently duplicate it
+        throw new Error(
+          delivered > 0
+            ? `${what} failed after ${delivered} message(s) were already delivered — retrying resends those too: ${msg}`
+            : `${what} failed: ${msg}`
+        )
+      }
+    }
+    if (item.body_text.trim()) await sendOne({ text: item.body_text }, 'text')
+    for (const f of files) {
+      // ptt only for the ogg container WhatsApp records itself — opus in
+      // WebM (or any other audio) plays as a regular audio message
+      const content: AnyMessageContent = f.mimeType.startsWith('audio/')
+        ? { audio: f.bytes, mimetype: f.mimeType, ptt: /audio\/ogg/i.test(f.mimeType) }
+        : f.mimeType.startsWith('image/')
+          ? { image: f.bytes, mimetype: f.mimeType }
+          : f.mimeType.startsWith('video/')
+            ? { video: f.bytes, mimetype: f.mimeType }
+            : { document: f.bytes, mimetype: f.mimeType, fileName: f.filename }
+      await sendOne(content, `"${f.filename}"`)
+    }
+    if (delivered === 0) throw new Error('nothing to send')
     // our own copy comes back through messages.upsert (fromMe) and is ingested there
-    return sent?.key.id ?? ''
+    return lastId
   }
 
   stop(): void {

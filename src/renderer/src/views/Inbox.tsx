@@ -1921,6 +1921,7 @@ function ThreadPane({
       {forwardMsg && (
         <ForwardModal
           message={forwardMsg}
+          attachments={attachmentsByMessage.get(forwardMsg.id) ?? []}
           sourceThread={thread}
           onClose={() => setForwardMsg(null)}
         />
@@ -2118,11 +2119,12 @@ function MessageBubble({
             )}
           </>
         )}
-        {/* only real text forwards — a voice note or bare photo would send
-            its '[voice message]'/'[image]' placeholder (media waits for
-            outbound attachment support). p-1.5/-m-1.5 grows the touch
-            target without shifting the row. */}
-        {onForward && !voiceOnly && !imageOnly && m.body_text.trim() && (
+        {/* real text or attachments — either forwards now; a bare '[voice
+            message]'/'[image]' placeholder alone doesn't. p-1.5/-m-1.5
+            grows the touch target without shifting the row. */}
+        {onForward &&
+          ((!voiceOnly && !imageOnly && m.body_text.trim()) ||
+            (attachments?.length ?? 0) > 0) && (
           <button
             className="rounded p-1.5 -m-1.5 md:p-0 md:m-0 text-faint hover:text-accent md:opacity-0 md:group-hover/sender:opacity-100"
             title="Forward message"
@@ -2621,16 +2623,17 @@ function restoreReply(threadId: string, text: string): void {
   else replyRestoreStash.set(threadId, text)
 }
 
-/** Destination picker for forwarding one message's text: any existing
- *  conversation (any provider), or a typed email address via a Gmail
- *  account. Text-only for now — attachments don't survive a forward until
- *  the send pipeline learns about them. */
+/** Destination picker for forwarding one message: any existing conversation
+ *  (any provider), or a typed email address via a Gmail account. Attachments
+ *  ride along to Gmail/WhatsApp destinations; Slack gets text only. */
 function ForwardModal({
   message: m,
+  attachments,
   sourceThread,
   onClose
 }: {
   message: CommsMessage
+  attachments: CommsAttachment[]
   sourceThread: CommsThreadListItem
   onClose: () => void
 }): React.JSX.Element {
@@ -2638,6 +2641,21 @@ function ForwardModal({
   // debounced copy drives the IPC search, mirroring the thread list's 250ms
   const [query, setQuery] = useState('')
   const [comment, setComment] = useState('')
+  const [includeAtts, setIncludeAtts] = useState(true)
+  // uncaptioned media carries a placeholder body (whatsapp.ts extractText:
+  // '[image]', '[video]', '[voice message]', '[sticker]', '[file] name') —
+  // never forward that literal text
+  const placeholderBody =
+    /^\[(voice message|image|video|sticker)\]$/.test(m.body_text) ||
+    m.body_text.startsWith('[file]')
+  const textBody = placeholderBody ? '' : m.body_text
+  const sendingAtts = includeAtts && attachments.length > 0
+  /** ids for providers that take attachments; slack stays text-only */
+  const attachmentIdsFor = (provider: CommsProvider): string[] | undefined =>
+    sendingAtts && provider !== 'slack' ? attachments.map((a) => a.id) : undefined
+  /** a row is pointless when neither text nor attachments would travel */
+  const nothingToSend = (provider: CommsProvider): boolean =>
+    !textBody.trim() && !comment.trim() && !attachmentIdsFor(provider)?.length
   // destination key while a send is in flight — one forward at a time
   const [sending, setSending] = useState<string | null>(null)
   const sendingRef = useRef<string | null>(null)
@@ -2701,7 +2719,14 @@ function ForwardModal({
 
   const doSend = async (
     key: string,
-    input: { accountId: string; threadId?: string; to?: string[]; subject?: string; body: string },
+    input: {
+      accountId: string
+      threadId?: string
+      to?: string[]
+      subject?: string
+      body: string
+      attachmentIds?: string[]
+    },
     destLabel: string
   ): Promise<void> => {
     if (sendingRef.current) return
@@ -2741,7 +2766,7 @@ function ForwardModal({
       sentAtLabel,
       // chats title threads by contact name, not subject — email only
       subjectLabel: sourceThread.provider === 'gmail' ? sourceThread.title : undefined,
-      text: m.body_text,
+      text: textBody,
       comment,
       style
     })
@@ -2767,13 +2792,25 @@ function ForwardModal({
           </button>
         </div>
         <div className="px-4 pt-3 space-y-2 shrink-0">
+          {/* preview what will actually ship: textBody, not the raw
+              placeholder — media shows as its filename list */}
           <p className="text-[11.5px] text-faint line-clamp-2 whitespace-pre-wrap break-words">
-            {m.body_text || '(no text)'}
+            {textBody.trim() ||
+              (attachments.length
+                ? attachments.map((a) => a.filename || 'attachment').join(', ')
+                : '(no text)')}
           </p>
-          {m.has_attachments === 1 && (
-            <p className="text-[10.5px] text-faint italic">
-              attachments aren't included — text only
-            </p>
+          {attachments.length > 0 && (
+            <label className="flex items-center gap-1.5 text-[11.5px] text-muted cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeAtts}
+                onChange={(e) => setIncludeAtts(e.target.checked)}
+              />
+              <Paperclip size={11} />
+              Include{' '}
+              {attachments.length === 1 ? 'the attachment' : `${attachments.length} attachments`}
+            </label>
           )}
           <Input
             className="w-full"
@@ -2796,7 +2833,7 @@ function ForwardModal({
               <button
                 key={`email-${acc.id}`}
                 className={rowClass}
-                disabled={sending !== null}
+                disabled={sending !== null || nothingToSend('gmail')}
                 onClick={() =>
                   void doSend(
                     `email-${acc.id}`,
@@ -2804,7 +2841,8 @@ function ForwardModal({
                       accountId: acc.id,
                       to: [search.trim()],
                       subject: `Fwd: ${sourceThread.title || 'message'}`,
-                      body: forwardBody('email')
+                      body: forwardBody('email'),
+                      attachmentIds: attachmentIdsFor('gmail')
                     },
                     search.trim()
                   )
@@ -2830,14 +2868,20 @@ function ForwardModal({
               <button
                 key={t.id}
                 className={rowClass}
-                disabled={sending !== null}
+                disabled={sending !== null || nothingToSend(t.provider)}
+                title={
+                  sendingAtts && t.provider === 'slack'
+                    ? 'Slack attachments not supported yet — text only'
+                    : undefined
+                }
                 onClick={() =>
                   void doSend(
                     t.id,
                     {
                       accountId: t.account_id,
                       threadId: t.id,
-                      body: forwardBody(t.provider === 'gmail' ? 'email' : 'chat')
+                      body: forwardBody(t.provider === 'gmail' ? 'email' : 'chat'),
+                      attachmentIds: attachmentIdsFor(t.provider)
                     },
                     label
                   )
@@ -2845,6 +2889,9 @@ function ForwardModal({
               >
                 <Icon size={13} className="shrink-0" />
                 <span className="truncate">{label}</span>
+                {sendingAtts && t.provider === 'slack' && (
+                  <span className="ml-auto shrink-0 text-[10.5px] text-faint">text only</span>
+                )}
                 {sending === t.id && (
                   <RefreshCw size={11} className="ml-auto shrink-0 animate-spin text-faint" />
                 )}

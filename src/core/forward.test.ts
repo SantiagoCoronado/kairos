@@ -62,14 +62,24 @@ describe('buildForwardBody', () => {
     expect(body).toBe('Forwarded from AC:\nhola')
   })
 
-  it('empty original text falls back to a placeholder', () => {
+  it('empty text (attachment-only forward) keeps the email header, drops the body', () => {
     const body = buildForwardBody({
       senderName: 'AC',
       sentAtLabel: 'today',
       text: '  ',
       style: 'email'
     })
-    expect(body).toContain('(no text)')
+    expect(body).toBe('---------- Forwarded message ----------\nFrom: AC\nDate: today')
+  })
+
+  it('empty text in chat style is just the attribution line', () => {
+    const body = buildForwardBody({
+      senderName: 'AC',
+      sentAtLabel: 'today',
+      text: '',
+      style: 'chat'
+    })
+    expect(body).toBe('Forwarded from AC')
   })
 })
 

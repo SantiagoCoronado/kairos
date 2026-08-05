@@ -113,7 +113,8 @@ export interface OutboxItem {
   account_id: string
   thread_id: string | null
   provider: CommsProvider
-  /** JSON: {to:[…],subject?} | {channel} | {jid} */
+  /** JSON: {to:[…],subject?} | {channel} | {jid} — plus an optional
+   *  attachments:[…attachment row ids] key on any shape */
   to_json: string
   body_text: string
   /** gmail Message-ID header for In-Reply-To/References */
@@ -125,6 +126,14 @@ export interface OutboxItem {
   external_id: string | null
   created_at: string
   sent_at: string | null
+}
+
+/** an attachment resolved to bytes on disk, ready for a provider send */
+export interface OutboundAttachment {
+  filename: string
+  mimeType: string
+  /** absolute path of the cached bytes */
+  path: string
 }
 
 // ---------- input shapes ----------

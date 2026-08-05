@@ -83,8 +83,12 @@ export function useMeetingPlayback(meeting: Meeting): MeetingPlayback {
   }
 
   const startAll = (): void => {
+    setError(null)
     each((a) =>
-      void a.play().catch(() => {
+      void a.play().catch((err) => {
+        // pausing while play() is still pending rejects with AbortError —
+        // that's the user's own pause, not a failure
+        if ((err as DOMException)?.name === 'AbortError') return
         // a decode/play failure on either channel stops the pair — one
         // channel alone would silently drop half the conversation
         each((b) => b.pause())

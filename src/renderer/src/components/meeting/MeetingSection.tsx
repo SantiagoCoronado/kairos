@@ -112,37 +112,57 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
         </span>
       )}
       {m.status === 'processing' && <Chip tone="muted">transcribing…</Chip>}
-      <div className="flex-1" />
-      {m.status === 'ready' && m.summary_md && (
+      {/* ml-auto (not a flex-1 spacer) so the actions track the right edge
+          even when the row wraps to a second line */}
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+        {m.status === 'ready' && m.summary_md && (
+          <button
+            className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-accent hover:bg-raised"
+            title="View summary and action items"
+            onClick={() => setShowSummary(true)}
+          >
+            <Sparkles size={10} /> summary
+          </button>
+        )}
+        {m.status === 'ready' && !m.summary_md && (
+          <button
+            className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
+            title="Generate summary and action items"
+            onClick={() => void api.invoke('meetings:summarize', m.id)}
+          >
+            <Sparkles size={10} /> summarize
+          </button>
+        )}
+        {m.status === 'ready' && (
+          <button
+            className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
+            title="View transcript"
+            onClick={() => void openTranscript()}
+          >
+            <FileText size={10} /> transcript
+          </button>
+        )}
+        {m.status === 'ready' && !m.audio_deleted_at && (m.mic_path || m.system_path) && (
+          <PlayButton playback={playback} />
+        )}
         <button
-          className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-accent hover:bg-raised"
-          title="View summary and action items"
-          onClick={() => setShowSummary(true)}
+          className={cn(
+            'shrink-0 p-1 rounded hover:bg-raised',
+            confirmDelete ? 'text-danger' : 'text-faint hover:text-text'
+          )}
+          title={confirmDelete ? 'Confirm delete (audio + row)' : 'Delete recording'}
+          onClick={() => {
+            if (!confirmDelete) {
+              setConfirmDelete(true)
+              setTimeout(() => setConfirmDelete(false), 2500)
+              return
+            }
+            void api.invoke('meetings:delete', m.id)
+          }}
         >
-          <Sparkles size={10} /> summary
+          <Trash2 size={12} />
         </button>
-      )}
-      {m.status === 'ready' && !m.summary_md && (
-        <button
-          className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
-          title="Generate summary and action items"
-          onClick={() => void api.invoke('meetings:summarize', m.id)}
-        >
-          <Sparkles size={10} /> summarize
-        </button>
-      )}
-      {m.status === 'ready' && (
-        <button
-          className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
-          title="View transcript"
-          onClick={() => void openTranscript()}
-        >
-          <FileText size={10} /> transcript
-        </button>
-      )}
-      {m.status === 'ready' && !m.audio_deleted_at && (m.mic_path || m.system_path) && (
-        <PlayButton playback={playback} />
-      )}
+      </div>
       {transcript && (
         <TranscriptModal
           meeting={m}
@@ -152,23 +172,6 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
         />
       )}
       {showSummary && <SummaryModal meeting={m} onClose={() => setShowSummary(false)} />}
-      <button
-        className={cn(
-          'shrink-0 p-1 rounded hover:bg-raised',
-          confirmDelete ? 'text-danger' : 'text-faint hover:text-text'
-        )}
-        title={confirmDelete ? 'Confirm delete (audio + row)' : 'Delete recording'}
-        onClick={() => {
-          if (!confirmDelete) {
-            setConfirmDelete(true)
-            setTimeout(() => setConfirmDelete(false), 2500)
-            return
-          }
-          void api.invoke('meetings:delete', m.id)
-        }}
-      >
-        <Trash2 size={12} />
-      </button>
     </div>
   )
 }

@@ -21,6 +21,7 @@ import type { DbDriver } from '../../core/driver'
 import type { OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
+import { deliveredMap, sendUnits } from '../../core/outbox-units'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
 
@@ -571,31 +572,57 @@ export class WhatsAppConnection {
     // read (const copies also keep TS narrowing across the closure).
     const sock = this.sock
     const dest = jid
+    const units = sendUnits(item)
+    if (units.length === 0) throw new Error('nothing to send')
+    // Resume, don't restart: skip units a previous attempt already delivered
+    // (crash requeue, manual retry) — delivered_json is the ledger, written
+    // after every provider accept below.
+    const done = deliveredMap(item)
+    const pending = units.filter((u) => !(u.key in done))
     // Read every file BEFORE the first send — an unreadable file must fail
-    // the item while nothing has shipped yet, not midway through.
-    const files = attachments.map((f) => ({ ...f, bytes: readFileSync(f.path) }))
+    // the item while nothing has shipped yet, not midway through. The list
+    // holds only still-pending attachments (delivered ones were skipped at
+    // resolve), keyed by their to_json position.
+    const files = new Map(
+      attachments.map((f) => [f.index, { ...f, bytes: readFileSync(f.path) }])
+    )
     // text first, then each file as its own message (matching how phones
     // forward media)
     let lastId = ''
-    let delivered = 0
-    const sendOne = async (content: AnyMessageContent, what: string): Promise<void> => {
+    let sentNow = 0
+    const sendOne = async (
+      unitKey: string,
+      content: AnyMessageContent,
+      what: string
+    ): Promise<void> => {
       try {
         const sent = await sock.sendMessage(dest, content)
         lastId = sent?.key.id ?? lastId
-        delivered++
+        sentNow++
+        // persist the accept immediately — a crash after this line resends
+        // nothing; a crash between the accept above and this write resends
+        // exactly this one unit (irreducible without provider idempotency)
+        repo.recordOutboxDelivery(this.db, item.id, unitKey, sent?.key.id ?? '')
+        done[unitKey] = sent?.key.id ?? ''
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        // a multi-message send has no transaction: be explicit about what
-        // already shipped so a manual retry doesn't silently duplicate it
+        // a multi-message send has no transaction: say what already shipped
+        // and that a retry of THIS row picks up where it left off
+        const deliveredCount = Object.keys(done).length
         throw new Error(
-          delivered > 0
-            ? `${what} failed after ${delivered} message(s) were already delivered — retrying resends those too: ${msg}`
+          deliveredCount > 0
+            ? `${what} failed — ${deliveredCount} of ${units.length} messages already delivered; Retry sends only what's left: ${msg}`
             : `${what} failed: ${msg}`
         )
       }
     }
-    if (item.body_text.trim()) await sendOne({ text: item.body_text }, 'text')
-    for (const f of files) {
+    for (const unit of pending) {
+      if (unit.kind === 'text') {
+        await sendOne(unit.key, { text: item.body_text }, 'text')
+        continue
+      }
+      const f = files.get(unit.index)
+      if (!f) throw new Error('a forwarded attachment no longer exists')
       // ptt only for the ogg container WhatsApp records itself — opus in
       // WebM (or any other audio) plays as a regular audio message
       const content: AnyMessageContent = f.mimeType.startsWith('audio/')
@@ -605,9 +632,14 @@ export class WhatsAppConnection {
           : f.mimeType.startsWith('video/')
             ? { video: f.bytes, mimetype: f.mimeType }
             : { document: f.bytes, mimetype: f.mimeType, fileName: f.filename }
-      await sendOne(content, `"${f.filename}"`)
+      await sendOne(unit.key, content, `"${f.filename}"`)
     }
-    if (delivered === 0) throw new Error('nothing to send')
+    // everything was already delivered by a prior attempt (crash after the
+    // last accept, before the row went 'sent') — report the last known id
+    if (sentNow === 0) {
+      const ids = Object.values(done)
+      return ids[ids.length - 1] ?? ''
+    }
     // our own copy comes back through messages.upsert (fromMe) and is ingested there
     return lastId
   }

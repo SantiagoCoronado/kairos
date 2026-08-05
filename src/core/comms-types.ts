@@ -124,6 +124,10 @@ export interface OutboxItem {
   source: 'app' | 'agent'
   /** provider id of the sent message */
   external_id: string | null
+  /** JSON map of delivery-unit key ("text" | "att:<i>") → provider message
+   *  id for units the provider already accepted — lets a requeue or retry
+   *  resume mid-batch (see core/outbox-units.ts). NULL = nothing delivered. */
+  delivered_json: string | null
   created_at: string
   sent_at: string | null
 }
@@ -134,6 +138,10 @@ export interface OutboundAttachment {
   mimeType: string
   /** absolute path of the cached bytes */
   path: string
+  /** position in the outbox row's to_json attachments array — the "att:<i>"
+   *  delivery-unit index. Resume skips delivered positions, so the array a
+   *  provider receives is not necessarily contiguous from 0. */
+  index: number
 }
 
 // ---------- input shapes ----------

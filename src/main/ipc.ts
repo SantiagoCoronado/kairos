@@ -856,6 +856,7 @@ export function registerIpc(): void {
     broadcast('db:changed', { entity: 'comms' })
   })
   handle('comms:send', (input) => manager.sendNow(input))
+  handle('comms:retryOutbox', (outboxId) => manager.retryOutbox(outboxId))
   handle('comms:syncNow', (accountId) => manager.syncNow(accountId))
   handle('comms:linkSender', (provider, handle_, personId) => {
     comms.linkHandleToPerson(db, provider, handle_.trim().toLowerCase(), personId)

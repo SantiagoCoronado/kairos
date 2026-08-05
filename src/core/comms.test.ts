@@ -5,6 +5,7 @@ import { openNodeSqliteDb } from './drivers/node-sqlite'
 import { migrate, applyMigration } from './migrations'
 import * as comms from './repo/comms'
 import * as people from './repo/people'
+import { pendingUnits } from './outbox-units'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
 const later = (mins: number): Date => new Date(T0.getTime() + mins * 60 * 1000)
@@ -1166,5 +1167,112 @@ describe('whatsapp notification triage queue', () => {
     msg(a, t, 'm4', 'tercero', later(4))
     expect(comms.recentInboundBodies(db, t.id, 2)).toEqual(['segundo', 'tercero'])
     expect(comms.recentInboundBodies(db, t.id, 10)).toEqual(['primero', 'segundo', 'tercero'])
+  })
+})
+
+describe('outbox delivery bookkeeping', () => {
+  const waAccount = () =>
+    comms.upsertAccount(db, {
+      provider: 'whatsapp',
+      external_id: '123@s.whatsapp.net',
+      display_name: '+1 555'
+    }, T0)
+
+  const enqueue = () =>
+    comms.enqueueOutbox(db, {
+      account_id: waAccount().id,
+      provider: 'whatsapp',
+      to_json: JSON.stringify({ jid: '456@s.whatsapp.net', attachments: ['a1', 'a2'] }),
+      body_text: 'hola'
+    }, T0)
+
+  it('rows start with nothing delivered', () => {
+    const item = enqueue()
+    expect(item.delivered_json).toBeNull()
+    expect(pendingUnits(item).map((u) => u.key)).toEqual(['text', 'att:0', 'att:1'])
+  })
+
+  it('recordOutboxDelivery merges keys in send order', () => {
+    const item = enqueue()
+    comms.recordOutboxDelivery(db, item.id, 'text', 'wa-1')
+    comms.recordOutboxDelivery(db, item.id, 'att:0', 'wa-2')
+    const row = comms.getOutboxItem(db, item.id)!
+    expect(JSON.parse(row.delivered_json!)).toEqual({ text: 'wa-1', 'att:0': 'wa-2' })
+    expect(pendingUnits(row).map((u) => u.key)).toEqual(['att:1'])
+  })
+
+  it('the delivered map survives a crash requeue', () => {
+    const item = enqueue()
+    expect(comms.claimOutboxItem(db, item.id)).toBe(true)
+    comms.recordOutboxDelivery(db, item.id, 'text', 'wa-1')
+    // app killed mid-send: startup flips sending → queued
+    expect(comms.requeueStuckSending(db)).toBe(1)
+    const row = comms.getOutboxItem(db, item.id)!
+    expect(row.status).toBe('queued')
+    expect(pendingUnits(row).map((u) => u.key)).toEqual(['att:0', 'att:1'])
+  })
+
+  it('finishOutbox keeps the map for audit', () => {
+    const item = enqueue()
+    comms.recordOutboxDelivery(db, item.id, 'text', 'wa-1')
+    comms.finishOutbox(db, item.id, { ok: false, error: 'boom' }, T0)
+    expect(comms.getOutboxItem(db, item.id)!.delivered_json).not.toBeNull()
+    comms.finishOutbox(db, item.id, { ok: true, external_id: 'wa-9' }, T0)
+    expect(comms.getOutboxItem(db, item.id)!.delivered_json).not.toBeNull()
+  })
+
+  it('recordOutboxDelivery on an unknown id is a no-op', () => {
+    expect(() => comms.recordOutboxDelivery(db, 'nope', 'text', 'wa-1')).not.toThrow()
+  })
+
+  it('requeueFailed flips only failed rows and clears the error', () => {
+    const item = enqueue()
+    expect(comms.requeueFailed(db, item.id)).toBe(false) // queued — refuse
+    comms.claimOutboxItem(db, item.id)
+    expect(comms.requeueFailed(db, item.id)).toBe(false) // sending — refuse
+    comms.finishOutbox(db, item.id, { ok: false, error: 'boom' }, T0)
+    comms.recordOutboxDelivery(db, item.id, 'text', 'wa-1')
+    expect(comms.requeueFailed(db, item.id)).toBe(true)
+    const row = comms.getOutboxItem(db, item.id)!
+    expect(row.status).toBe('queued')
+    expect(row.error).toBeNull()
+    expect(row.delivered_json).not.toBeNull() // resume data intact
+    comms.finishOutbox(db, item.id, { ok: true }, T0)
+    expect(comms.requeueFailed(db, item.id)).toBe(false) // sent — refuse
+    expect(comms.requeueFailed(db, 'nope')).toBe(false)
+  })
+})
+
+describe('migration 022', () => {
+  it('adds delivered_json as NULL on existing outbox rows', () => {
+    const old = openNodeSqliteDb(':memory:')
+    old.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );`)
+    for (let i = 0; i < 21; i++) applyMigration(old, i)
+    old.run(
+      `INSERT INTO schema_migrations (version) VALUES ${Array.from({ length: 21 }, (_, i) => `(${i + 1})`).join(', ')}`
+    )
+    const ts = T0.toISOString()
+    old.run(
+      `INSERT INTO comms_accounts (id, provider, external_id, display_name, created_at, updated_at)
+       VALUES ('a1', 'whatsapp', '123', '+1 555', ?, ?)`,
+      ts, ts
+    )
+    old.run(
+      `INSERT INTO comms_outbox (id, account_id, provider, to_json, body_text, created_at)
+       VALUES ('o1', 'a1', 'whatsapp', '{}', 'hola', ?)`,
+      ts
+    )
+
+    migrate(old)
+
+    expect(
+      old.get<{ delivered_json: string | null }>(
+        "SELECT delivered_json FROM comms_outbox WHERE id = 'o1'"
+      )!.delivered_json
+    ).toBeNull()
+    old.close()
   })
 })

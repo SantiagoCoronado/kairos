@@ -1074,6 +1074,13 @@ export function requeueStuckSending(db: DbDriver): number {
   return db.run("UPDATE comms_outbox SET status = 'queued' WHERE status = 'sending'").changes
 }
 
+/** Give a claimed item back to the queue untouched — drain deferral, e.g.
+ *  the provider socket is mid-reconnect. Not a failure: error and
+ *  delivered_json stay as they were. */
+export function unclaimOutbox(db: DbDriver, id: string): void {
+  db.run("UPDATE comms_outbox SET status = 'queued' WHERE id = ? AND status = 'sending'", id)
+}
+
 /** Flip one failed row back to queued for a user-driven retry — same row, so
  *  delivered_json keeps already-shipped units out of the re-send. Returns
  *  false when the row isn't in 'failed' (unknown, in flight, or already sent). */

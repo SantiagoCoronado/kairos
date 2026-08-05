@@ -21,7 +21,7 @@ import type { DbDriver } from '../../core/driver'
 import type { OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
-import { deliveredMap, sendUnits } from '../../core/outbox-units'
+import { deliveredMap, pendingUnits, sendUnits } from '../../core/outbox-units'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
 
@@ -560,6 +560,16 @@ export class WhatsAppConnection {
     if (learned) this.applyNames()
   }
 
+  /** The outbox drain should hold this account's rows for a later tick: the
+   *  socket is down but this connection is still trying (startup handshake,
+   *  watchdog recycle, sleep-pause). Dispatching now would terminally fail a
+   *  row — possibly one mid-resume with delivered units — that would deliver
+   *  seconds later. False once stop() ran: nothing will reconnect, so a
+   *  dispatch should fail honestly instead of queueing forever. */
+  willReconnect(): boolean {
+    return !this.stopped && !(this.open && this.sock?.ws.isOpen === true)
+  }
+
   async send(item: OutboxItem, attachments: OutboundAttachment[] = []): Promise<string> {
     if (!this.sock) throw new Error('WhatsApp is not connected')
     const to = JSON.parse(item.to_json) as { jid?: string }
@@ -578,7 +588,7 @@ export class WhatsAppConnection {
     // (crash requeue, manual retry) — delivered_json is the ledger, written
     // after every provider accept below.
     const done = deliveredMap(item)
-    const pending = units.filter((u) => !(u.key in done))
+    const pending = pendingUnits(item)
     // Read every file BEFORE the first send — an unreadable file must fail
     // the item while nothing has shipped yet, not midway through. The list
     // holds only still-pending attachments (delivered ones were skipped at
@@ -595,15 +605,9 @@ export class WhatsAppConnection {
       content: AnyMessageContent,
       what: string
     ): Promise<void> => {
+      let sent: Awaited<ReturnType<typeof sock.sendMessage>>
       try {
-        const sent = await sock.sendMessage(dest, content)
-        lastId = sent?.key.id ?? lastId
-        sentNow++
-        // persist the accept immediately — a crash after this line resends
-        // nothing; a crash between the accept above and this write resends
-        // exactly this one unit (irreducible without provider idempotency)
-        repo.recordOutboxDelivery(this.db, item.id, unitKey, sent?.key.id ?? '')
-        done[unitKey] = sent?.key.id ?? ''
+        sent = await sock.sendMessage(dest, content)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         // a multi-message send has no transaction: say what already shipped
@@ -613,6 +617,25 @@ export class WhatsAppConnection {
           deliveredCount > 0
             ? `${what} failed — ${deliveredCount} of ${units.length} messages already delivered; Retry sends only what's left: ${msg}`
             : `${what} failed: ${msg}`
+        )
+      }
+      lastId = sent?.key.id ?? lastId
+      sentNow++
+      done[unitKey] = sent?.key.id ?? ''
+      // The message IS delivered from here on — the ledger write lives
+      // outside the provider try/catch so a bookkeeping failure can't
+      // report an accepted message as a send failure (a retry would then
+      // duplicate it). Swallowed: a missing entry costs at worst the same
+      // one-unit re-send as the documented crash window.
+      try {
+        repo.recordOutboxDelivery(this.db, item.id, unitKey, sent?.key.id ?? '')
+      } catch (err) {
+        logLine(
+          'warn',
+          'comms',
+          `${this.tag()} outbox ledger write failed for ${item.id}/${unitKey}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
         )
       }
     }
@@ -635,9 +658,10 @@ export class WhatsAppConnection {
       await sendOne(unit.key, content, `"${f.filename}"`)
     }
     // everything was already delivered by a prior attempt (crash after the
-    // last accept, before the row went 'sent') — report the last known id
+    // last accept, before the row went 'sent') — report the last known id,
+    // skipping units whose provider id never came back
     if (sentNow === 0) {
-      const ids = Object.values(done)
+      const ids = Object.values(done).filter((id) => id !== '')
       return ids[ids.length - 1] ?? ''
     }
     // our own copy comes back through messages.upsert (fromMe) and is ingested there

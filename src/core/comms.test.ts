@@ -1201,6 +1201,30 @@ describe('outbox delivery bookkeeping', () => {
     expect(pendingUnits(row).map((u) => u.key)).toEqual(['att:1'])
   })
 
+  it('recording the same unit twice keeps the newest id', () => {
+    const item = enqueue()
+    comms.recordOutboxDelivery(db, item.id, 'text', 'wa-1')
+    comms.recordOutboxDelivery(db, item.id, 'text', 'wa-1b')
+    expect(JSON.parse(comms.getOutboxItem(db, item.id)!.delivered_json!)).toEqual({
+      text: 'wa-1b'
+    })
+  })
+
+  it('unclaimOutbox returns a sending row to the queue untouched', () => {
+    const item = enqueue()
+    comms.claimOutboxItem(db, item.id)
+    comms.recordOutboxDelivery(db, item.id, 'text', 'wa-1')
+    comms.unclaimOutbox(db, item.id)
+    const row = comms.getOutboxItem(db, item.id)!
+    expect(row.status).toBe('queued')
+    expect(row.delivered_json).not.toBeNull()
+    // only 'sending' rows are given back — a terminal state stays terminal
+    comms.claimOutboxItem(db, item.id)
+    comms.finishOutbox(db, item.id, { ok: false, error: 'boom' }, T0)
+    comms.unclaimOutbox(db, item.id)
+    expect(comms.getOutboxItem(db, item.id)!.status).toBe('failed')
+  })
+
   it('the delivered map survives a crash requeue', () => {
     const item = enqueue()
     expect(comms.claimOutboxItem(db, item.id)).toBe(true)

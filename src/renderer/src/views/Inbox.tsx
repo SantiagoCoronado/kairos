@@ -2725,13 +2725,16 @@ function ForwardModal({
   const runSend = async (
     key: string,
     destLabel: string,
+    resumable: boolean,
     invoke: () => Promise<CommsSendResult>
   ): Promise<void> => {
     if (sendingRef.current) return
     sendingRef.current = key
     setSending(key)
     setError(null)
-    setFailed(null)
+    // `failed` is deliberately NOT cleared here: a retry keeps it so the
+    // Retry button (and its spinner) stay mounted while in flight — doSend
+    // clears it for fresh sends
     try {
       const res = await invoke()
       if (!res.ok) {
@@ -2739,7 +2742,10 @@ function ForwardModal({
         // failure still has to reach the user somewhere
         if (aliveRef.current) {
           setError(res.message)
-          if (res.outboxId) setFailed({ outboxId: res.outboxId, destLabel })
+          // resume-retry only where it's actually duplicate-safe: a
+          // WhatsApp row skips delivered units; for gmail an ambiguous
+          // accept would make "Retry" a plain duplicate send
+          setFailed(resumable && res.outboxId ? { outboxId: res.outboxId, destLabel } : null)
         } else
           toast({
             variant: 'error',
@@ -2771,14 +2777,23 @@ function ForwardModal({
       body: string
       attachmentIds?: string[]
     },
-    destLabel: string
-  ): Promise<void> => runSend(key, destLabel, () => api.invoke('comms:send', input))
+    destLabel: string,
+    provider: CommsProvider
+  ): Promise<void> => {
+    if (sendingRef.current) return Promise.resolve()
+    setFailed(null)
+    return runSend(key, destLabel, provider === 'whatsapp', () =>
+      api.invoke('comms:send', input)
+    )
+  }
 
   /** resume the failed row instead of enqueueing a new one */
   const doRetry = (): Promise<void> => {
-    if (!failed) return Promise.resolve()
+    if (!failed || sendingRef.current) return Promise.resolve()
     const { outboxId, destLabel } = failed
-    return runSend(`retry-${outboxId}`, destLabel, () => api.invoke('comms:retryOutbox', outboxId))
+    return runSend(`retry-${outboxId}`, destLabel, true, () =>
+      api.invoke('comms:retryOutbox', outboxId)
+    )
   }
 
   const forwardBody = (style: 'email' | 'chat'): string =>
@@ -2826,7 +2841,12 @@ function ForwardModal({
               <input
                 type="checkbox"
                 checked={includeAtts}
-                onChange={(e) => setIncludeAtts(e.target.checked)}
+                onChange={(e) => {
+                  setIncludeAtts(e.target.checked)
+                  // the failed row snapshotted the old inputs — retrying it
+                  // would silently ignore this edit
+                  setFailed(null)
+                }}
               />
               <Paperclip size={11} />
               Include{' '}
@@ -2837,7 +2857,11 @@ function ForwardModal({
             className="w-full"
             placeholder="Add a comment (optional)"
             value={comment}
-            onChange={(e) => setComment(e.target.value)}
+            onChange={(e) => {
+              setComment(e.target.value)
+              // same: an edited comment is not in the failed row
+              setFailed(null)
+            }}
           />
           <Input
             autoFocus
@@ -2846,7 +2870,7 @@ function ForwardModal({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          {error && (
+          {(error || failed) && (
             <div className="flex items-center gap-2">
               <p className="min-w-0 flex-1 text-[11.5px] text-danger">{error}</p>
               {failed && (
@@ -2881,7 +2905,8 @@ function ForwardModal({
                       body: forwardBody('email'),
                       attachmentIds: attachmentIdsFor('gmail')
                     },
-                    search.trim()
+                    search.trim(),
+                    'gmail'
                   )
                 }
               >
@@ -2920,7 +2945,8 @@ function ForwardModal({
                       body: forwardBody(t.provider === 'gmail' ? 'email' : 'chat'),
                       attachmentIds: attachmentIdsFor(t.provider)
                     },
-                    label
+                    label,
+                    t.provider
                   )
                 }
               >

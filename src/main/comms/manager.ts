@@ -9,7 +9,7 @@ import type { DbDriver } from '../../core/driver'
 import type { CommsAccount, OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent, CommsSendInput, CommsSendResult } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
-import { deliveredMap } from '../../core/outbox-units'
+import { attKey, deliveredMap } from '../../core/outbox-units'
 import { DATA_DIR } from '../db'
 import {
   connectGmail,
@@ -374,7 +374,7 @@ export class CommsSyncManager {
       // a prior attempt already shipped this one — don't re-download bytes
       // that won't be sent (the size cap then covers remaining files only,
       // which is right: delivered bytes are gone)
-      if (`att:${index}` in done) continue
+      if (attKey(index) in done) continue
       const att = repo.getAttachment(this.db, id)
       if (!att) throw new Error('a forwarded attachment no longer exists')
       const name = att.filename || 'attachment'
@@ -599,7 +599,7 @@ export class CommsSyncManager {
   async retryOutbox(outboxId: string): Promise<CommsSendResult> {
     if (!repo.requeueFailed(this.db, outboxId)) {
       // unknown, still in flight, or already sent — nothing to re-dispatch
-      return { ok: false, message: 'nothing to retry' }
+      return { ok: false, message: 'nothing to retry — the message may have already sent' }
     }
     return this.claimAndDispatch(outboxId)
   }
@@ -609,6 +609,15 @@ export class CommsSyncManager {
     this.draining = true
     try {
       for (const item of repo.claimQueued(this.db)) {
+        // The startup requeue races Baileys' handshake: dispatching a
+        // WhatsApp row into a closed-but-reconnecting socket would turn it
+        // terminally 'failed' — possibly a partially-delivered row whose
+        // resume ledger then has no caller. Hold it for a later tick; a
+        // genuinely dead connection (stopped, or none) still fails honestly.
+        if (item.provider === 'whatsapp' && this.wa.get(item.account_id)?.willReconnect()) {
+          repo.unclaimOutbox(this.db, item.id)
+          continue
+        }
         await this.dispatch(item.id)
       }
     } finally {

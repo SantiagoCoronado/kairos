@@ -13,6 +13,9 @@ export type SendUnit =
   | { key: string; kind: 'text' }
   | { key: string; kind: 'att'; index: number }
 
+/** canonical unit key for the attachment at to_json position `index` */
+export const attKey = (index: number): string => `att:${index}`
+
 /** Parse delivered_json defensively — a corrupt or absent map counts as
  *  "nothing delivered" (worst case is a duplicate, never a lost send). */
 export function deliveredMap(item: Pick<OutboxItem, 'delivered_json'>): Record<string, string> {
@@ -43,7 +46,7 @@ export function sendUnits(item: Pick<OutboxItem, 'body_text' | 'to_json'>): Send
   }
   if (Array.isArray(attachments)) {
     for (let i = 0; i < attachments.length; i++) {
-      units.push({ key: `att:${i}`, kind: 'att', index: i })
+      units.push({ key: attKey(i), kind: 'att', index: i })
     }
   }
   return units

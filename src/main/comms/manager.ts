@@ -9,6 +9,7 @@ import type { DbDriver } from '../../core/driver'
 import type { CommsAccount, OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent, CommsSendInput, CommsSendResult } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
+import { attKey, deliveredMap } from '../../core/outbox-units'
 import { DATA_DIR } from '../db'
 import {
   connectGmail,
@@ -48,6 +49,8 @@ export class CommsSyncManager {
   private wa = new Map<string, WhatsAppConnection>()
   private drainTimer: NodeJS.Timeout | null = null
   private draining = false
+  /** outbox ids already logged as drain-deferred — one line per row, not one per 3s tick */
+  private deferLogged = new Set<string>()
   private contactsTimer: NodeJS.Timeout | null = null
   private changedTimer: NodeJS.Timeout | null = null
   private lastPokeAt = 0
@@ -365,10 +368,15 @@ export class CommsSyncManager {
   private async resolveOutboxAttachments(item: OutboxItem): Promise<OutboundAttachment[]> {
     const ids = (JSON.parse(item.to_json) as { attachments?: string[] }).attachments ?? []
     if (!ids.length) return []
+    const done = deliveredMap(item)
     const files: OutboundAttachment[] = []
     const maxTotal = item.provider === 'gmail' ? MAX_GMAIL_TOTAL_BYTES : MAX_SEND_TOTAL_BYTES
     let total = 0
-    for (const id of ids) {
+    for (const [index, id] of ids.entries()) {
+      // a prior attempt already shipped this one — don't re-download bytes
+      // that won't be sent (the size cap then covers remaining files only,
+      // which is right: delivered bytes are gone)
+      if (attKey(index) in done) continue
       const att = repo.getAttachment(this.db, id)
       if (!att) throw new Error('a forwarded attachment no longer exists')
       const name = att.filename || 'attachment'
@@ -385,7 +393,8 @@ export class CommsSyncManager {
       files.push({
         filename: name,
         mimeType: att.mime_type || 'application/octet-stream',
-        path: local.path
+        path: local.path,
+        index
       })
     }
     return files
@@ -558,25 +567,53 @@ export class CommsSyncManager {
       body_text: input.body,
       source: 'app'
     })
+    return this.claimAndDispatch(item.id)
+  }
+
+  /** Claim a queued row by id and dispatch it, reporting the row's real
+   *  outcome — shared tail of sendNow and retryOutbox. */
+  private async claimAndDispatch(itemId: string): Promise<CommsSendResult> {
     // claim our own item by id — claiming "oldest queued" here could grab an
     // agent-enqueued message and strand it in 'sending'
-    if (repo.claimOutboxItem(this.db, item.id)) {
-      const err = await this.dispatch(item.id)
-      if (err) return { ok: false, message: err }
-      return { ok: true, outboxId: item.id }
+    if (repo.claimOutboxItem(this.db, itemId)) {
+      const err = await this.dispatch(itemId)
+      if (err) return { ok: false, message: err, outboxId: itemId }
+      return { ok: true, outboxId: itemId }
     }
     // the 3 s drain grabbed it first — report its real outcome, not the
     // enqueue: callers (undo-send commit) surface failures to the user
     for (let i = 0; i < 120; i++) {
-      const row = repo.getOutboxItem(this.db, item.id)
-      if (!row || row.status === 'sent') return { ok: true, outboxId: item.id }
+      const row = repo.getOutboxItem(this.db, itemId)
+      if (!row || row.status === 'sent') return { ok: true, outboxId: itemId }
       if (row.status === 'failed') {
-        return { ok: false, message: row.error ?? 'send failed' }
+        return { ok: false, message: row.error ?? 'send failed', outboxId: itemId }
       }
       await new Promise((r) => setTimeout(r, 250))
     }
     // still in flight after 30 s — the drain/requeue machinery owns it now
-    return { ok: true, outboxId: item.id }
+    return { ok: true, outboxId: itemId }
+  }
+
+  /** User-driven retry of a failed row: SAME outbox row, so delivered_json
+   *  keeps already-shipped units out of the re-send. Never automatic — the
+   *  composer restores drafts on failure, and a background retry behind that
+   *  UX double-sends when the user re-sends the restored draft. */
+  async retryOutbox(outboxId: string): Promise<CommsSendResult> {
+    const row = repo.getOutboxItem(this.db, outboxId)
+    if (row?.provider === 'whatsapp' && this.wa.get(row.account_id)?.willReconnect()) {
+      // don't flip the row just to fail it against a closed socket — keep
+      // the Retry button alive (outboxId) and say why it didn't go
+      return {
+        ok: false,
+        message: 'WhatsApp is reconnecting — try again in a moment',
+        outboxId
+      }
+    }
+    if (!repo.requeueFailed(this.db, outboxId)) {
+      // unknown, still in flight, or already sent — nothing to re-dispatch
+      return { ok: false, message: 'nothing to retry — the message may have already sent' }
+    }
+    return this.claimAndDispatch(outboxId)
   }
 
   private async drainOutbox(): Promise<void> {
@@ -584,6 +621,29 @@ export class CommsSyncManager {
     this.draining = true
     try {
       for (const item of repo.claimQueued(this.db)) {
+        // The startup requeue races Baileys' handshake: dispatching a
+        // WhatsApp row into a closed-but-reconnecting socket would turn it
+        // terminally 'failed' — possibly a partially-delivered row whose
+        // resume ledger then has no caller. Hold it for a later tick; a
+        // genuinely dead connection (stopped, or none) still fails honestly.
+        // The account-status guard is belt and braces: a needs_auth/disabled
+        // account will never reconnect, so deferring behind it would turn
+        // into silent forever-queueing.
+        if (item.provider === 'whatsapp' && this.wa.get(item.account_id)?.willReconnect()) {
+          const status = repo.getAccount(this.db, item.account_id)?.status
+          if (status === 'connected' || status === 'error') {
+            if (!this.deferLogged.has(item.id)) {
+              this.deferLogged.add(item.id)
+              logLine(
+                'info',
+                'comms',
+                `outbox: holding ${item.id} — whatsapp socket reconnecting`
+              )
+            }
+            repo.unclaimOutbox(this.db, item.id)
+            continue
+          }
+        }
         await this.dispatch(item.id)
       }
     } finally {

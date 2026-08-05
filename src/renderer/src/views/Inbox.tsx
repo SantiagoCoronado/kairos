@@ -39,6 +39,7 @@ import type {
   CommsProvider,
   MessageSearchHit
 } from '../../../core/comms-types'
+import type { CommsSendResult } from '../../../shared/ipc-contract'
 import { COMMS_LABELS } from '../../../core/labels'
 import { buildForwardBody, looksLikeEmail } from '../../../core/forward'
 import { api, useInvoke } from '../lib/api'
@@ -2661,6 +2662,10 @@ function ForwardModal({
   const sendingRef = useRef<string | null>(null)
   const aliveRef = useRef(true)
   const [error, setError] = useState<string | null>(null)
+  // a failed send whose outbox row still exists can be retried in place —
+  // same row, so units already delivered (WhatsApp multi-message) are
+  // skipped. A fresh doSend would enqueue a NEW row and duplicate them.
+  const [failed, setFailed] = useState<{ outboxId: string; destLabel: string } | null>(null)
   const { data: threads } = useInvoke(
     'comms:threads',
     [{ box: 'all' as const, search: query.trim() || undefined, limit: 30 }],
@@ -2717,29 +2722,31 @@ function ForwardModal({
     minute: '2-digit'
   })
 
-  const doSend = async (
+  const runSend = async (
     key: string,
-    input: {
-      accountId: string
-      threadId?: string
-      to?: string[]
-      subject?: string
-      body: string
-      attachmentIds?: string[]
-    },
-    destLabel: string
+    destLabel: string,
+    resumable: boolean,
+    invoke: () => Promise<CommsSendResult>
   ): Promise<void> => {
     if (sendingRef.current) return
     sendingRef.current = key
     setSending(key)
     setError(null)
+    // `failed` is deliberately NOT cleared here: a retry keeps it so the
+    // Retry button (and its spinner) stay mounted while in flight — doSend
+    // clears it for fresh sends
     try {
-      const res = await api.invoke('comms:send', input)
+      const res = await invoke()
       if (!res.ok) {
         // modal already closed (or unmounted by a thread change): the
         // failure still has to reach the user somewhere
-        if (aliveRef.current) setError(res.message)
-        else
+        if (aliveRef.current) {
+          setError(res.message)
+          // resume-retry only where it's actually duplicate-safe: a
+          // WhatsApp row skips delivered units; for gmail an ambiguous
+          // accept would make "Retry" a plain duplicate send
+          setFailed(resumable && res.outboxId ? { outboxId: res.outboxId, destLabel } : null)
+        } else
           toast({
             variant: 'error',
             text: 'Forward failed',
@@ -2758,6 +2765,35 @@ function ForwardModal({
       sendingRef.current = null
       if (aliveRef.current) setSending(null)
     }
+  }
+
+  const doSend = (
+    key: string,
+    input: {
+      accountId: string
+      threadId?: string
+      to?: string[]
+      subject?: string
+      body: string
+      attachmentIds?: string[]
+    },
+    destLabel: string,
+    provider: CommsProvider
+  ): Promise<void> => {
+    if (sendingRef.current) return Promise.resolve()
+    setFailed(null)
+    return runSend(key, destLabel, provider === 'whatsapp', () =>
+      api.invoke('comms:send', input)
+    )
+  }
+
+  /** resume the failed row instead of enqueueing a new one */
+  const doRetry = (): Promise<void> => {
+    if (!failed || sendingRef.current) return Promise.resolve()
+    const { outboxId, destLabel } = failed
+    return runSend(`retry-${outboxId}`, destLabel, true, () =>
+      api.invoke('comms:retryOutbox', outboxId)
+    )
   }
 
   const forwardBody = (style: 'email' | 'chat'): string =>
@@ -2825,7 +2861,28 @@ function ForwardModal({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          {error && <p className="text-[11.5px] text-danger">{error}</p>}
+          {(error || failed) && (
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1 text-[11.5px] text-danger">{error}</p>
+              {failed && (
+                <button
+                  className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-md border border-border-strong text-[11.5px] text-text hover:bg-raised disabled:opacity-50"
+                  disabled={sending !== null}
+                  // the retry offer survives edits on purpose: it resumes the
+                  // partially delivered row (skipping what already shipped),
+                  // and losing the button would push the user into a fresh
+                  // forward — the exact duplicate this exists to prevent
+                  title="Resends the failed forward as it was — edits made since don't apply"
+                  onClick={() => void doRetry()}
+                >
+                  {sending === `retry-${failed.outboxId}` && (
+                    <RefreshCw size={10} className="animate-spin" />
+                  )}
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2 space-y-0.5">
           {looksLikeEmail(search) &&
@@ -2844,7 +2901,8 @@ function ForwardModal({
                       body: forwardBody('email'),
                       attachmentIds: attachmentIdsFor('gmail')
                     },
-                    search.trim()
+                    search.trim(),
+                    'gmail'
                   )
                 }
               >
@@ -2883,7 +2941,8 @@ function ForwardModal({
                       body: forwardBody(t.provider === 'gmail' ? 'email' : 'chat'),
                       attachmentIds: attachmentIdsFor(t.provider)
                     },
-                    label
+                    label,
+                    t.provider
                   )
                 }
               >

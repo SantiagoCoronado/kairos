@@ -18,6 +18,7 @@ import type {
   CommsProvider
 } from '../comms-types'
 import { newId, nowIso } from '../ids'
+import { deliveredMap } from '../outbox-units'
 
 // ---------- accounts ----------
 
@@ -1020,6 +1021,34 @@ export function claimOutboxItem(db: DbDriver, id: string): boolean {
   )
 }
 
+/**
+ * Persist one delivered unit the moment the provider accepts it, so a crash
+ * requeue or a manual retry resumes at the first undelivered unit instead of
+ * resending the whole batch. Read-modify-write inside a transaction (there is
+ * a single drainer today, but be safe).
+ *
+ * Residual window, by design: a crash between the provider accepting a unit
+ * and this write committing re-sends that ONE unit on resume. Shrinking it to
+ * zero needs provider-side idempotency keys WhatsApp doesn't offer.
+ */
+export function recordOutboxDelivery(
+  db: DbDriver,
+  id: string,
+  unitKey: string,
+  externalId: string
+): void {
+  db.transaction(() => {
+    const row = db.get<{ delivered_json: string | null }>(
+      'SELECT delivered_json FROM comms_outbox WHERE id = ?',
+      id
+    )
+    if (!row) return
+    const map = deliveredMap(row)
+    map[unitKey] = externalId
+    db.run('UPDATE comms_outbox SET delivered_json = ? WHERE id = ?', JSON.stringify(map), id)
+  })
+}
+
 export function finishOutbox(
   db: DbDriver,
   id: string,
@@ -1038,7 +1067,28 @@ export function finishOutbox(
   }
 }
 
-/** Requeue items stuck in 'sending' (e.g. app was killed mid-send) — call on startup. */
+/** Requeue items stuck in 'sending' (e.g. app was killed mid-send) — call on
+ *  startup. delivered_json survives the flip, so dispatch resumes at the
+ *  first undelivered unit rather than resending the whole batch. */
 export function requeueStuckSending(db: DbDriver): number {
   return db.run("UPDATE comms_outbox SET status = 'queued' WHERE status = 'sending'").changes
+}
+
+/** Give a claimed item back to the queue untouched — drain deferral, e.g.
+ *  the provider socket is mid-reconnect. Not a failure: error and
+ *  delivered_json stay as they were. */
+export function unclaimOutbox(db: DbDriver, id: string): void {
+  db.run("UPDATE comms_outbox SET status = 'queued' WHERE id = ? AND status = 'sending'", id)
+}
+
+/** Flip one failed row back to queued for a user-driven retry — same row, so
+ *  delivered_json keeps already-shipped units out of the re-send. Returns
+ *  false when the row isn't in 'failed' (unknown, in flight, or already sent). */
+export function requeueFailed(db: DbDriver, id: string): boolean {
+  return (
+    db.run(
+      "UPDATE comms_outbox SET status = 'queued', error = NULL WHERE id = ? AND status = 'failed'",
+      id
+    ).changes > 0
+  )
 }

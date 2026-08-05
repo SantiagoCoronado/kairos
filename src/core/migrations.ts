@@ -615,7 +615,17 @@ CREATE INDEX idx_tasks_meeting ON tasks(meeting_id);
         threadId
       )
     }
-  }
+  },
+  // 022 — per-unit delivery bookkeeping for multi-message sends. A WhatsApp
+  // forward (text + N files) is ONE outbox row but up to N+1 provider
+  // messages, sent sequentially. delivered_json maps delivery-unit key
+  // ("text" | "att:<i>", derived in core/outbox-units.ts) → provider message
+  // id, written the moment each unit is accepted — so a crash requeue or a
+  // manual retry resumes at the first undelivered unit instead of resending
+  // the whole batch. NULL = nothing delivered yet.
+  `
+ALTER TABLE comms_outbox ADD COLUMN delivered_json TEXT;
+`
 ]
 
 /** Run one migration by 0-based index without recording its version. Lets tests

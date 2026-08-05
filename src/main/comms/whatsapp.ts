@@ -21,6 +21,7 @@ import type { DbDriver } from '../../core/driver'
 import type { OutboundAttachment, OutboxItem } from '../../core/comms-types'
 import type { CommsEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/comms'
+import { deliveredMap, pendingUnits, sendUnits } from '../../core/outbox-units'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
 
@@ -265,6 +266,11 @@ export class WhatsAppConnection {
             repo.setAccountStatus(this.db, this.accountId, 'needs_auth', 'logged out from phone')
             this.opts.emit({ kind: 'sync', accountId: this.accountId, status: 'needs_auth' })
             this.opts.onChanged()
+            // stop for real, like the invalid-session QR branch above: nothing
+            // reconnects until a re-link, and a half-alive connection would
+            // keep willReconnect() true — making the outbox drain defer this
+            // account's rows forever instead of failing them honestly
+            this.stop()
             return
           }
           this.scheduleReconnect(`close ${statusCode ?? '?'}`)
@@ -559,6 +565,16 @@ export class WhatsAppConnection {
     if (learned) this.applyNames()
   }
 
+  /** The outbox drain should hold this account's rows for a later tick: the
+   *  socket is down but this connection is still trying (startup handshake,
+   *  watchdog recycle, sleep-pause). Dispatching now would terminally fail a
+   *  row — possibly one mid-resume with delivered units — that would deliver
+   *  seconds later. False once stop() ran: nothing will reconnect, so a
+   *  dispatch should fail honestly instead of queueing forever. */
+  willReconnect(): boolean {
+    return !this.stopped && !(this.open && this.sock?.ws.isOpen === true)
+  }
+
   async send(item: OutboxItem, attachments: OutboundAttachment[] = []): Promise<string> {
     if (!this.sock) throw new Error('WhatsApp is not connected')
     const to = JSON.parse(item.to_json) as { jid?: string }
@@ -571,31 +587,70 @@ export class WhatsAppConnection {
     // read (const copies also keep TS narrowing across the closure).
     const sock = this.sock
     const dest = jid
+    const units = sendUnits(item)
+    if (units.length === 0) throw new Error('nothing to send')
+    // Resume, don't restart: skip units a previous attempt already delivered
+    // (crash requeue, manual retry) — delivered_json is the ledger, written
+    // after every provider accept below.
+    const done = deliveredMap(item)
+    const pending = pendingUnits(item)
     // Read every file BEFORE the first send — an unreadable file must fail
-    // the item while nothing has shipped yet, not midway through.
-    const files = attachments.map((f) => ({ ...f, bytes: readFileSync(f.path) }))
+    // the item while nothing has shipped yet, not midway through. The list
+    // holds only still-pending attachments (delivered ones were skipped at
+    // resolve), keyed by their to_json position.
+    const files = new Map(
+      attachments.map((f) => [f.index, { ...f, bytes: readFileSync(f.path) }])
+    )
     // text first, then each file as its own message (matching how phones
     // forward media)
     let lastId = ''
-    let delivered = 0
-    const sendOne = async (content: AnyMessageContent, what: string): Promise<void> => {
+    let sentNow = 0
+    const sendOne = async (
+      unitKey: string,
+      content: AnyMessageContent,
+      what: string
+    ): Promise<void> => {
+      let sent: Awaited<ReturnType<typeof sock.sendMessage>>
       try {
-        const sent = await sock.sendMessage(dest, content)
-        lastId = sent?.key.id ?? lastId
-        delivered++
+        sent = await sock.sendMessage(dest, content)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        // a multi-message send has no transaction: be explicit about what
-        // already shipped so a manual retry doesn't silently duplicate it
+        // a multi-message send has no transaction: say what already shipped
+        // and that a retry of THIS row picks up where it left off
+        const deliveredCount = Object.keys(done).length
         throw new Error(
-          delivered > 0
-            ? `${what} failed after ${delivered} message(s) were already delivered — retrying resends those too: ${msg}`
+          deliveredCount > 0
+            ? `${what} failed — ${deliveredCount} of ${units.length} messages already delivered; Retry sends only what's left: ${msg}`
             : `${what} failed: ${msg}`
         )
       }
+      lastId = sent?.key.id ?? lastId
+      sentNow++
+      done[unitKey] = sent?.key.id ?? ''
+      // The message IS delivered from here on — the ledger write lives
+      // outside the provider try/catch so a bookkeeping failure can't
+      // report an accepted message as a send failure (a retry would then
+      // duplicate it). Swallowed: a missing entry costs at worst the same
+      // one-unit re-send as the documented crash window.
+      try {
+        repo.recordOutboxDelivery(this.db, item.id, unitKey, sent?.key.id ?? '')
+      } catch (err) {
+        logLine(
+          'warn',
+          'comms',
+          `${this.tag()} outbox ledger write failed for ${item.id}/${unitKey}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        )
+      }
     }
-    if (item.body_text.trim()) await sendOne({ text: item.body_text }, 'text')
-    for (const f of files) {
+    for (const unit of pending) {
+      if (unit.kind === 'text') {
+        await sendOne(unit.key, { text: item.body_text }, 'text')
+        continue
+      }
+      const f = files.get(unit.index)
+      if (!f) throw new Error('a forwarded attachment no longer exists')
       // ptt only for the ogg container WhatsApp records itself — opus in
       // WebM (or any other audio) plays as a regular audio message
       const content: AnyMessageContent = f.mimeType.startsWith('audio/')
@@ -605,9 +660,15 @@ export class WhatsAppConnection {
           : f.mimeType.startsWith('video/')
             ? { video: f.bytes, mimetype: f.mimeType }
             : { document: f.bytes, mimetype: f.mimeType, fileName: f.filename }
-      await sendOne(content, `"${f.filename}"`)
+      await sendOne(unit.key, content, `"${f.filename}"`)
     }
-    if (delivered === 0) throw new Error('nothing to send')
+    // everything was already delivered by a prior attempt (crash after the
+    // last accept, before the row went 'sent') — report the last known id,
+    // skipping units whose provider id never came back
+    if (sentNow === 0) {
+      const ids = Object.values(done).filter((id) => id !== '')
+      return ids[ids.length - 1] ?? ''
+    }
     // our own copy comes back through messages.upsert (fromMe) and is ingested there
     return lastId
   }

@@ -341,6 +341,9 @@ export interface IpcApi {
   /** place an account before another in the rail (null = move to end) */
   'comms:reorderAccount': (id: string, beforeId: string | null) => void
   'comms:send': (input: CommsSendInput) => Promise<CommsSendResult>
+  /** re-dispatch a failed outbox row — SAME row, so units a prior attempt
+   *  already delivered (delivered_json) are skipped, never duplicated */
+  'comms:retryOutbox': (outboxId: string) => Promise<CommsSendResult>
   'comms:syncNow': (accountId?: string) => void
   'comms:linkSender': (provider: CommsProvider, handle: string, personId: string) => void
   /** inverse of linkSender: drop the identity and clear person_id on its messages */
@@ -382,7 +385,11 @@ export interface CommsSendInput {
   attachmentIds?: string[]
 }
 
-export type CommsSendResult = { ok: true; outboxId: string } | { ok: false; message: string }
+export type CommsSendResult =
+  | { ok: true; outboxId: string }
+  /** outboxId present when a row exists — a partially-delivered multi-message
+   *  send can then be resumed via comms:retryOutbox instead of re-sent whole */
+  | { ok: false; message: string; outboxId?: string }
 
 export type CommsArchiveResult = { ok: true } | { ok: false; message: string }
 

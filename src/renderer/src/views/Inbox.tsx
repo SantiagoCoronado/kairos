@@ -23,6 +23,7 @@ import {
   Pause,
   Mic,
   ChevronLeft,
+  ExternalLink,
   Filter,
   UserPlus
 } from 'lucide-react'
@@ -41,8 +42,9 @@ import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { pushUndo } from '../lib/undo'
 import { pendingEchoLanded } from '../lib/pending-echo'
 import { toast } from '../lib/toast'
-import { useIsMobile } from '../lib/mobile'
+import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
+import { MicButton } from '../components/MicButton'
 import { InviteCard } from '../components/InviteCard'
 import { Linkified } from '../components/Linkify'
 import { clamp, useResizableWidth, ResizeHandle } from '../components/ResizeHandle'
@@ -621,6 +623,7 @@ export function InboxView({
             <ThreadPane
               key={thread.id}
               thread={thread}
+              accountEmail={accounts?.find((a) => a.id === thread.account_id)?.external_id ?? null}
               onBack={closeThread}
               onOpenPerson={onOpenPerson}
               onOpenCalendar={onOpenCalendar}
@@ -909,6 +912,7 @@ export function InboxView({
           <ThreadPane
             key={thread.id}
             thread={thread}
+            accountEmail={accounts?.find((a) => a.id === thread.account_id)?.external_id ?? null}
             onOpenPerson={onOpenPerson}
             onOpenCalendar={onOpenCalendar}
             onArchive={() => archiveThread(thread)}
@@ -1654,6 +1658,7 @@ function ChannelManager({ account }: { account: CommsAccount }): React.JSX.Eleme
 
 function ThreadPane({
   thread,
+  accountEmail,
   onOpenPerson,
   onOpenCalendar,
   onArchive,
@@ -1663,6 +1668,8 @@ function ThreadPane({
   onBack
 }: {
   thread: CommsThreadListItem
+  /** the account's own address (gmail) — needed for the open-in-Gmail deep link */
+  accountEmail?: string | null
   onOpenPerson?: (id: string) => void
   onOpenCalendar?: (day: Date) => void
   /** fire-and-forget — the list owns the exit animation and error banner */
@@ -1841,6 +1848,21 @@ function ThreadPane({
         >
           {archived ? <ArchiveRestore size={onBack ? 16 : 14} /> : <Archive size={onBack ? 16 : 14} />}
         </button>
+        {/* not on the phone header — five actions already leave the title ~60px */}
+        {!onBack && thread.provider === 'gmail' && accountEmail && (
+          <button
+            onClick={() =>
+              // routed to the system browser by the main-process window-open handler
+              window.open(
+                `https://mail.google.com/mail/?authuser=${encodeURIComponent(accountEmail)}#all/${thread.external_id}`
+              )
+            }
+            title="Open in Gmail"
+            className={cn('shrink-0 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised', actionBtn)}
+          >
+            <ExternalLink size={14} />
+          </button>
+        )}
         {thread.provider === 'gmail' && (
           <button
             onClick={onDelete}
@@ -2127,7 +2149,9 @@ function fmtClock(seconds: number): string {
 }
 
 /** Inline player for voice notes / audio attachments. Bytes come over IPC as
- *  a data URL on first play (then cached on disk main-side). */
+ *  a data URL — fetched eagerly (desktop only, and only once the file is
+ *  already cached on disk main-side) so the duration shows before first
+ *  play; otherwise on first click. */
 function VoiceNoteChip({
   attachment: a,
   mine
@@ -2136,6 +2160,8 @@ function VoiceNoteChip({
   mine: boolean
 }): React.JSX.Element {
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  // a click during the eager fetch must share it, not start a second one
+  const pendingRef = useRef<Promise<HTMLAudioElement | null> | null>(null)
   // guards the await in ensureAudio: without it, unmounting mid-fetch lets
   // the resolved promise create + play an Audio nothing can ever stop
   const aliveRef = useRef(true)
@@ -2145,61 +2171,80 @@ function VoiceNoteChip({
   const [clock, setClock] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // leaving the thread must stop playback
+  const ensureAudio = (silent = false): Promise<HTMLAudioElement | null> => {
+    if (audioRef.current) return Promise.resolve(audioRef.current)
+    if (pendingRef.current) return pendingRef.current
+    const job = (async (): Promise<HTMLAudioElement | null> => {
+      try {
+        const res = await api.invoke('comms:attachmentData', a.id)
+        if (!aliveRef.current) return null
+        if (!res.ok) {
+          // the eager pass stays quiet — a disconnected account must not
+          // paint an error under every voice note on thread open
+          if (!silent) setError(res.message)
+          return null
+        }
+        const audio = new Audio(res.dataUrl)
+        audio.addEventListener('loadedmetadata', () => {
+          if (Number.isFinite(audio.duration)) setClock(fmtClock(audio.duration))
+        })
+        audio.addEventListener('timeupdate', () => {
+          if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            setProgress(audio.currentTime / audio.duration)
+            setClock(fmtClock(audio.currentTime))
+          }
+        })
+        audio.addEventListener('play', () => setPlaying(true))
+        audio.addEventListener('pause', () => setPlaying(false))
+        audio.addEventListener('ended', () => {
+          setPlaying(false)
+          setProgress(0)
+          audio.currentTime = 0
+          if (Number.isFinite(audio.duration)) setClock(fmtClock(audio.duration))
+        })
+        audio.addEventListener('error', () => {
+          setPlaying(false)
+          setError('could not play this voice message')
+        })
+        audioRef.current = audio
+        return audio
+      } finally {
+        pendingRef.current = null
+      }
+    })()
+    pendingRef.current = job
+    return job
+  }
+
+  // Eager metadata fetch so the duration shows before first play — but only
+  // when the bytes are already on disk and inside the preview cap: an
+  // undownloaded WhatsApp note would trigger a full media download (and a
+  // remote PWA session would pay the transfer) for something never played.
+  // Leaving the thread must stop playback either way.
   useEffect(() => {
     aliveRef.current = true
+    if (!IS_REMOTE && a.local_path && (a.size_bytes ?? 0) <= MAX_PREVIEW_BYTES) {
+      void ensureAudio(true)
+    }
     return () => {
       aliveRef.current = false
       audioRef.current?.pause()
       audioRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  const ensureAudio = async (): Promise<HTMLAudioElement | null> => {
-    if (audioRef.current) return audioRef.current
-    setBusy(true)
-    try {
-      const res = await api.invoke('comms:attachmentData', a.id)
-      if (!aliveRef.current) return null
-      if (!res.ok) {
-        setError(res.message)
-        return null
-      }
-      const audio = new Audio(res.dataUrl)
-      audio.addEventListener('loadedmetadata', () => {
-        if (Number.isFinite(audio.duration)) setClock(fmtClock(audio.duration))
-      })
-      audio.addEventListener('timeupdate', () => {
-        if (Number.isFinite(audio.duration) && audio.duration > 0) {
-          setProgress(audio.currentTime / audio.duration)
-          setClock(fmtClock(audio.currentTime))
-        }
-      })
-      audio.addEventListener('play', () => setPlaying(true))
-      audio.addEventListener('pause', () => setPlaying(false))
-      audio.addEventListener('ended', () => {
-        setPlaying(false)
-        setProgress(0)
-        audio.currentTime = 0
-        if (Number.isFinite(audio.duration)) setClock(fmtClock(audio.duration))
-      })
-      audio.addEventListener('error', () => {
-        setPlaying(false)
-        setError('could not play this voice message')
-      })
-      audioRef.current = audio
-      return audio
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const toggle = async (): Promise<void> => {
     setError(null)
+    if (!audioRef.current) setBusy(true)
     const audio = await ensureAudio()
+    if (aliveRef.current) setBusy(false)
     if (!audio || !aliveRef.current) return
     if (audio.paused) {
-      void audio.play().catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      void audio.play().catch((e) => {
+        if ((e as DOMException)?.name === 'AbortError') return
+        setError(e instanceof Error ? e.message : String(e))
+      })
     } else {
       audio.pause()
     }
@@ -2209,14 +2254,18 @@ function VoiceNoteChip({
     const audio = audioRef.current
     if (!audio || !Number.isFinite(audio.duration) || audio.duration === 0) return
     const rect = e.currentTarget.getBoundingClientRect()
-    audio.currentTime = ((e.clientX - rect.left) / rect.width) * audio.duration
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    audio.currentTime = frac * audio.duration
+    setProgress(frac)
   }
 
+  const pct = Math.round(progress * 100)
+
   return (
-    <div className="mt-1">
+    <div className={cn('mt-1', mine && 'flex flex-col items-end')}>
       <div
         className={cn(
-          'inline-flex items-center gap-2 w-60 max-w-full px-2.5 py-1.5 rounded-full border',
+          'inline-flex items-center gap-2 w-64 max-w-full pl-1.5 pr-3 py-1.5 rounded-full border',
           mine ? 'bg-accent/10 border-accent/20' : 'bg-panel border-border'
         )}
       >
@@ -2224,27 +2273,33 @@ function VoiceNoteChip({
           onClick={() => void toggle()}
           disabled={busy}
           title={playing ? 'Pause' : 'Play voice message'}
-          className="shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-full bg-raised hover:bg-border text-text disabled:opacity-60"
+          className="shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-full bg-accent/20 hover:bg-accent/30 text-accent disabled:opacity-60"
         >
           {busy ? (
-            <RefreshCw size={11} className="animate-spin text-faint" />
+            <RefreshCw size={12} className="animate-spin" />
           ) : playing ? (
-            <Pause size={11} />
+            <Pause size={12} />
           ) : (
-            <Play size={11} className="ml-0.5" />
+            <Play size={12} className="ml-0.5" />
           )}
         </button>
+        {/* h-6 hit area around a 6px track — the old bare 4px strip was
+            nearly unclickable */}
         <div
-          className="flex-1 h-1 rounded-full bg-border cursor-pointer"
+          className="relative flex-1 h-6 flex items-center cursor-pointer"
           onClick={seek}
           title="Seek"
         >
+          <div className="h-1.5 w-full rounded-full bg-border overflow-hidden">
+            <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+          </div>
+          {/* centered on the same linear mapping seek uses */}
           <div
-            className="h-1 rounded-full bg-accent"
-            style={{ width: `${Math.round(progress * 100)}%` }}
+            className="absolute top-1/2 -mt-[5px] h-2.5 w-2.5 rounded-full bg-accent shadow -translate-x-1/2"
+            style={{ left: `${pct}%` }}
           />
         </div>
-        <span className="shrink-0 font-mono text-[10px] text-faint inline-flex items-center gap-1">
+        <span className="shrink-0 font-mono text-[10px] text-muted inline-flex items-center gap-1">
           <Mic size={10} />
           {clock ?? '· · ·'}
         </span>
@@ -2260,7 +2315,7 @@ function VoiceNoteChip({
 
 /** Preview-sized cap mirrors MAX_PREVIEW_BYTES main-side — anything bigger
  *  would be refused there anyway, so don't even request the bytes. */
-const MAX_IMG_PREVIEW_BYTES = 10 * 1024 * 1024
+const MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
 /** Inline thumbnail for image attachments: bytes arrive as a data URL over
  *  IPC (cached on disk main-side), click opens the full-size file. Falls back
@@ -2269,7 +2324,7 @@ function ImageThumb({ attachment: a }: { attachment: CommsAttachment }): React.J
   const [dataUrl, setDataUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [opening, setOpening] = useState(false)
-  const tooBig = a.size_bytes != null && a.size_bytes > MAX_IMG_PREVIEW_BYTES
+  const tooBig = a.size_bytes != null && a.size_bytes > MAX_PREVIEW_BYTES
 
   useEffect(() => {
     if (tooBig) return undefined
@@ -2558,6 +2613,8 @@ function Composer({
   const [aiOpen, setAiOpen] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [drafting, setDrafting] = useState(false)
+  // dictation is gated on the ElevenLabs key, same as every other MicButton
+  const { data: settings } = useInvoke('settings:get', [], ['settings'])
 
   useEffect(() => {
     const merge = (text: string): void =>
@@ -2672,6 +2729,17 @@ function Composer({
             if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur()
           }}
         />
+        {settings?.elevenLabsApiKey && (
+          <MicButton
+            size={14}
+            className="h-8 w-8 rounded-md border border-border flex items-center justify-center hover:bg-raised"
+            onTranscript={(t) => {
+              setBody((prev) => (prev.trim() ? `${prev.trimEnd()} ${t}` : t))
+              document.getElementById('inbox-reply')?.focus()
+            }}
+            onError={(message) => setError(message)}
+          />
+        )}
         <button
           onClick={() => setAiOpen((v) => !v)}
           title="Draft a reply with AI"
@@ -2710,6 +2778,7 @@ function ComposePane({
   const [to, setTo] = useState(draft?.to ?? '')
   const [subject, setSubject] = useState(draft?.subject ?? '')
   const [body, setBody] = useState(draft?.body ?? '')
+  const { data: settings } = useInvoke('settings:get', [], ['settings'])
 
   /** deferred behind the undo window — ⌘Z reopens the pane with the draft */
   const send = (): void => {
@@ -2762,7 +2831,15 @@ function ComposePane({
         value={body}
         onChange={(e) => setBody(e.target.value)}
       />
-      <div className="flex justify-end">
+      <div className="flex justify-end items-center gap-2">
+        {settings?.elevenLabsApiKey && (
+          <MicButton
+            size={14}
+            className="h-8 w-8 rounded-md border border-border flex items-center justify-center hover:bg-raised"
+            onTranscript={(t) => setBody((prev) => (prev.trim() ? `${prev.trimEnd()} ${t}` : t))}
+            onError={(message) => toast({ variant: 'error', text: 'Dictation failed', detail: message })}
+          />
+        )}
         <Button
           variant="accent"
           disabled={!to.trim() || !subject.trim() || !body.trim()}

@@ -82,6 +82,19 @@ describe('buildMime', () => {
     expect(raw).not.toMatch(/name="[^"]*canción/)
   })
 
+  it('filename* percent-encodes the chars RFC 2231 forbids but encodeURIComponent keeps', () => {
+    const raw = buildMime({
+      ...base,
+      attachments: [
+        { filename: "Presentación (final)'.pdf", mimeType: 'application/pdf', contentBase64: png }
+      ]
+    })
+    const ext = raw.split('\r\n').find((l) => l.includes('filename*='))!
+    const value = ext.slice(ext.indexOf("''") + 2)
+    expect(value).not.toMatch(/[()'*]/)
+    expect(value).toContain('%28final%29')
+  })
+
   it('ascii filenames skip the filename* parameter', () => {
     const raw = buildMime({
       ...base,

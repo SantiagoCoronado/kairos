@@ -121,7 +121,7 @@ export function sanitizeFilename(name: string): string {
 /** RFC 2231 extended-value encoding for filename* — percent-encode, plus
  *  the chars encodeURIComponent leaves that 2231 forbids in a value. */
 const encodeRFC2231 = (s: string): string =>
-  encodeURIComponent(s).replace(/['*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  encodeURIComponent(s).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
 
 /** Header-safe media type: strip parameters, validate bare type/subtype.
  *  The value is remote-controlled (a WhatsApp sender's protobuf, a Gmail

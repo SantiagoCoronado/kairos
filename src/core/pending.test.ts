@@ -7,7 +7,14 @@ import * as interactions from './repo/interactions'
 import * as tasks from './repo/tasks'
 import * as notes from './repo/notes'
 import * as comms from './repo/comms'
-import { pendingItems } from './repo/pending'
+import {
+  pendingItems,
+  snoozeItem,
+  unsnoozeItem,
+  dismissItem,
+  undismissItem,
+  markAllSeen
+} from './repo/pending'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
 const daysAgo = (n: number, from: Date = T0): Date =>
@@ -227,5 +234,96 @@ describe('overlay', () => {
       T0
     )
     expect(pendingItems(db, T0).items.filter((i) => i.kind === 'followup')).toHaveLength(0)
+  })
+})
+
+describe('triage writes', () => {
+  const later = (h: number): Date => new Date(T0.getTime() + h * 60 * 60 * 1000)
+
+  it('snoozeItem hides until the timestamp; unsnoozeItem restores immediately', () => {
+    const t = tasks.createTask(db, { title: 'later', due_date: '2026-06-28' }, T0)
+    snoozeItem(db, `task:${t.id}`, later(2).toISOString(), T0)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+    expect(pendingItems(db, later(3)).items).toHaveLength(1)
+    snoozeItem(db, `task:${t.id}`, later(5).toISOString(), later(3))
+    unsnoozeItem(db, `task:${t.id}`, later(3))
+    expect(pendingItems(db, later(3)).items).toHaveLength(1)
+  })
+
+  it('dismissItem hides at the current fingerprint; renewal resurfaces; undismiss restores', () => {
+    seedThread('a', { lastMessageAt: '2026-06-30T10:00:00Z' })
+    dismissItem(db, 'thread:a', T0)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T08:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items.map((i) => i.key)).toEqual(['thread:a'])
+    dismissItem(db, 'thread:a', T0)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+    undismissItem(db, 'thread:a', T0)
+    expect(pendingItems(db, T0).items).toHaveLength(1)
+  })
+
+  it('writes on a resolved item throw', () => {
+    expect(() => dismissItem(db, 'task:nope', T0)).toThrow(/not pending/)
+    seedThread('read', { unread: 0 })
+    expect(() => snoozeItem(db, 'thread:read', later(1).toISOString(), T0)).toThrow(/not pending/)
+  })
+
+  it('threads beyond the display cap can still be triaged', () => {
+    const pad = (i: number): string => String(i).padStart(2, '0')
+    for (let i = 0; i < 17; i++)
+      seedThread(`t${pad(i)}`, { lastMessageAt: daysAgo(i).toISOString() })
+    // t16 is oldest — outside the 15 shown, but the badge counts it
+    expect(pendingItems(db, T0).items.map((i) => i.id)).not.toContain('t16')
+    dismissItem(db, 'thread:t16', T0)
+    expect(pendingItems(db, T0).total).toBe(16)
+  })
+
+  it('markAllSeen clears unseen; arrivals and renewals count as unseen again', () => {
+    const t = tasks.createTask(db, { title: 'due', due_date: '2026-06-28' }, T0)
+    seedThread('a', { lastMessageAt: '2026-06-30T10:00:00Z' })
+    expect(pendingItems(db, T0).unseen).toBe(2)
+    markAllSeen(db, T0)
+    expect(pendingItems(db, T0).unseen).toBe(0)
+    expect(pendingItems(db, T0).total).toBe(2)
+
+    seedThread('b') // new arrival
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T09:00:00Z' WHERE id = 'a'`) // renewal
+    tasks.updateTask(db, t.id, { due_date: '2026-06-29' }, T0) // renewal (still overdue)
+    expect(pendingItems(db, T0).unseen).toBe(3)
+  })
+
+  it('markAllSeen includes threads beyond the display cap so the badge can clear', () => {
+    const pad = (i: number): string => String(i).padStart(2, '0')
+    for (let i = 0; i < 18; i++)
+      seedThread(`t${pad(i)}`, { lastMessageAt: daysAgo(i).toISOString() })
+    markAllSeen(db, T0)
+    expect(pendingItems(db, T0).unseen).toBe(0)
+  })
+
+  it('markAllSeen never revives a stale dismissal', () => {
+    seedThread('a', { lastMessageAt: '2026-06-30T10:00:00Z' })
+    dismissItem(db, 'thread:a', T0)
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T08:00:00Z' WHERE id = 'a'`)
+    markAllSeen(db, T0) // stamps the new fingerprint — must clear dismissed_at
+    expect(pendingItems(db, T0).items.map((i) => i.key)).toEqual(['thread:a'])
+    expect(pendingItems(db, T0).unseen).toBe(0)
+  })
+
+  it('triage writes garbage-collect rows for resolved items, keep still-snoozed ones', () => {
+    const gone = tasks.createTask(db, { title: 'gone', due_date: '2026-06-28' }, T0)
+    dismissItem(db, `task:${gone.id}`, T0)
+    const parked = tasks.createTask(db, { title: 'parked', due_date: '2026-06-28' }, T0)
+    snoozeItem(db, `task:${parked.id}`, '2026-07-09T00:00:00Z', T0)
+    tasks.completeTask(db, gone.id, T0)
+    tasks.completeTask(db, parked.id, T0)
+
+    const live = tasks.createTask(db, { title: 'live', due_date: '2026-06-28' }, T0)
+    dismissItem(db, `task:${live.id}`, T0) // any write triggers GC
+    const keys = db
+      .all<{ item_key: string }>('SELECT item_key FROM pending_overlay')
+      .map((r) => r.item_key)
+      .sort()
+    // gone: resolved + no snooze → deleted; parked: snooze still running → kept
+    expect(keys).toEqual([`task:${live.id}`, `task:${parked.id}`].sort())
   })
 })

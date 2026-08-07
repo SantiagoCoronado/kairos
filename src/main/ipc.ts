@@ -24,7 +24,14 @@ import * as interactions from '../core/repo/interactions'
 import * as followups from '../core/repo/followups'
 import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
-import { pendingItems } from '../core/repo/pending'
+import {
+  pendingItems,
+  snoozeItem,
+  unsnoozeItem,
+  dismissItem,
+  undismissItem,
+  markAllSeen
+} from '../core/repo/pending'
 import { composeBriefing } from '../core/briefing'
 import { DEFAULT_VOICE_ID, listVoices, synthesize, transcribe } from './tts/elevenlabs'
 import { executeCapture } from '../core/capture'
@@ -438,7 +445,38 @@ export function registerIpc(): void {
 
   handle('today:get', () => todayAgenda(db))
 
-  handle('pending:list', () => pendingItems(db))
+  // While the view is open, whatever it shows counts as seen — stamped lazily
+  // inside pending:list so a burst of db:changed events can't badge items the
+  // user is literally looking at. The stamp deliberately does NOT broadcast:
+  // pending:list runs on every 'pending' invalidation, so a broadcast here
+  // would re-trigger itself forever. Clients converge on the next event.
+  let pendingViewActive = false
+  handle('pending:list', () => {
+    if (pendingViewActive) markAllSeen(db)
+    return pendingItems(db)
+  })
+  handle('pending:setViewActive', (active) => {
+    pendingViewActive = active
+    // both transitions: everything visible up to this moment counts as seen
+    markAllSeen(db)
+    broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:snooze', (key, untilIso) => {
+    snoozeItem(db, key, untilIso)
+    broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:unsnooze', (key) => {
+    unsnoozeItem(db, key)
+    broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:dismiss', (key) => {
+    dismissItem(db, key)
+    broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:undismiss', (key) => {
+    undismissItem(db, key)
+    broadcast('db:changed', { entity: 'pending' })
+  })
 
   handle('calendar:today', () => calendarToday())
 

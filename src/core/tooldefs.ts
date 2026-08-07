@@ -11,7 +11,7 @@ import * as agentTasks from './repo/agent-tasks'
 import * as projects from './repo/projects'
 import * as objectives from './repo/objectives'
 import { todayAgenda } from './repo/today'
-import { pendingItems } from './repo/pending'
+import { pendingItems, snoozeItem, dismissItem } from './repo/pending'
 import { exportMarkdown } from './export/markdown'
 import { readMemory, saveMemory } from './memory'
 import * as comms from './repo/comms'
@@ -623,6 +623,31 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
         'Everything currently pending: overdue/due-today tasks, follow-ups due, note reminders due, and unread comms threads (action-needed first, capped with a more_threads count). Items carry a stable key used by snooze/dismiss.',
       schema: {},
       handler: () => pendingItems(db)
+    },
+    {
+      name: 'pending_snooze',
+      description:
+        'Hide a pending-inbox item until a time. Inbox-local: the underlying task/thread/person is untouched. Use the item key from pending_inbox.',
+      schema: {
+        key: z.string().describe('item key from pending_inbox, e.g. "task:<id>"'),
+        until: z.string().describe('ISO datetime to resurface at')
+      },
+      handler: (a: { key: string; until: string }) => {
+        snoozeItem(db, a.key, a.until)
+        ctx.onMutate('pending')
+        return { snoozed: a.key, until: a.until }
+      }
+    },
+    {
+      name: 'pending_dismiss',
+      description:
+        'Dismiss a pending-inbox item: hidden while its condition is unchanged, resurfaces if it renews (new message, re-missed due date). Inbox-local; to actually resolve something, complete the task / reply to the thread instead.',
+      schema: { key: z.string().describe('item key from pending_inbox') },
+      handler: (a: { key: string }) => {
+        dismissItem(db, a.key)
+        ctx.onMutate('pending')
+        return { dismissed: a.key }
+      }
     },
     {
       name: 'export_markdown',

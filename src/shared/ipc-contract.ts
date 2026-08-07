@@ -177,9 +177,17 @@ export interface IpcApi {
 
   'today:get': () => TodayPayload
 
-  /** the Pending view AND the sidebar badge (via .total) — one computation,
+  /** the Pending view AND the sidebar badge (via .unseen) — one computation,
    *  so the two can never disagree about what counts as pending */
   'pending:list': () => PendingPayload
+  /** inbox-local: hide until the timestamp; never mutates the source domain */
+  'pending:snooze': (key: string, untilIso: string) => void
+  'pending:unsnooze': (key: string) => void
+  /** inbox-local: hide while the item's condition is unchanged (fingerprint) */
+  'pending:dismiss': (key: string) => void
+  'pending:undismiss': (key: string) => void
+  /** view visibility → seen watermarks (same idea as agentTasks:setViewActive) */
+  'pending:setViewActive': (active: boolean) => void
 
   'calendar:today': () => Promise<CalendarResult>
 

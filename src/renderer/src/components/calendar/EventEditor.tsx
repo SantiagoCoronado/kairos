@@ -6,6 +6,7 @@ import type {
   CalendarEventRecord,
   RsvpResponse
 } from '../../../../core/types'
+import { selfAttendee } from '../../../../core/repo/calendar'
 import type { AttendeeSuggestion } from '../../../../shared/ipc-contract'
 import { api } from '../../lib/api'
 import { MeetingSection } from '../meeting/MeetingSection'
@@ -74,10 +75,24 @@ export function EventEditor({
   const calendar = calendars.find((c) => c.id === calendarId)
   const isGoogle = Boolean(calendar?.account_id)
   const canMove = !existing?.google_event_id
-  // Google stamps `self` on our attendee entry when the event syncs down —
-  // its presence means this is an invitation we can answer (organizer-owned
-  // events list us as accepted, and the buttons just show that state)
-  const selfEntry = existing?.google_event_id ? attendees.find((a) => a.self) : undefined
+
+  // the account email feeds selfAttendee() — the SAME rule detection and the
+  // write path use (self flag, else email match), so the response row can
+  // never exist in Pending but be missing here for flag-less feeds
+  const [accountEmail, setAccountEmail] = useState('')
+  useEffect(() => {
+    const accountId = existing?.google_event_id
+      ? calendars.find((c) => c.id === existing.calendar_id)?.account_id
+      : null
+    if (!accountId) return
+    void api.invoke('calendar:accounts').then((accounts) => {
+      setAccountEmail(accounts.find((a) => a.id === accountId)?.external_id ?? '')
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // present on Google-synced events where we're a guest; organizer-owned
+  // events list us as accepted and the buttons just show that state
+  const selfEntry = existing?.google_event_id ? selfAttendee(attendees, accountEmail) : undefined
 
   const rsvp = (response: RsvpResponse): void => {
     if (!existing) return
@@ -86,7 +101,11 @@ export function EventEditor({
     void api
       .invoke('calendar:respond', existing.id, response)
       .then(() => {
-        setAttendees((prev) => prev.map((a) => (a.self ? { ...a, responseStatus: response } : a)))
+        // update the entry selfAttendee() resolved, not the flag — a
+        // flag-less feed's entry was matched by email
+        setAttendees((prev) =>
+          prev.map((a) => (a === selfEntry ? { ...a, responseStatus: response } : a))
+        )
         setRsvpBusy(false)
       })
       .catch((err) => {

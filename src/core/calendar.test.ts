@@ -404,6 +404,23 @@ describe('RSVP helpers', () => {
     expect(next.find((a) => a.email === 'peer@example.com')!.responseStatus).toBe('tentative')
   })
 
+  it('applyRsvp round-trips wire fields beyond the CalendarAttendee type', () => {
+    // Google attendee objects carry more than our five typed fields; an RSVP
+    // patch replaces the whole array, so anything rebuilt field-by-field
+    // would strip these from every guest (see the applyRsvp doc comment)
+    const wire = [
+      { email: 'room-4@resource.calendar.google.com', resource: true, responseStatus: 'accepted' },
+      { email: 'peer@example.com', optional: true, comment: 'maybe late', responseStatus: 'tentative' },
+      { email: 'me@gmail.com', self: true, responseStatus: 'needsAction', additionalGuests: 2 }
+    ] as unknown as import('./types').CalendarAttendee[]
+    const next = cal.applyRsvp(wire, 'me@gmail.com', 'accepted')!
+    expect(next[0]).toBe(wire[0]) // non-self entries pass through by reference
+    expect(next[1]).toBe(wire[1])
+    const self = next[2] as unknown as Record<string, unknown>
+    expect(self.responseStatus).toBe('accepted')
+    expect(self.additionalGuests).toBe(2) // spread keeps untyped fields on self too
+  })
+
   it('applyRsvp falls back to a case-insensitive email match and reports strangers', () => {
     const noFlag = guests().map(({ self: _self, ...a }) => a)
     const next = cal.applyRsvp(noFlag, 'me@gmail.com', 'declined')!

@@ -538,6 +538,12 @@ export function selfAttendee(
  * RSVP patch. Google replaces the whole attendees array on patch, so everyone
  * else must be carried through unchanged or their RSVPs reset to needsAction.
  * Returns undefined when no self entry exists (we are not invited).
+ *
+ * Entries deliberately pass through whole (others by reference, self by
+ * spread): the wire objects carry fields beyond CalendarAttendee's five —
+ * optional, resource, comment, additionalGuests — and rebuilding entries
+ * field-by-field, rowToGoogleBody-style, would silently strip those flags
+ * from every guest on each RSVP. Do not "tidy" this into a reconstruction.
  */
 export function applyRsvp(
   attendees: CalendarAttendee[],

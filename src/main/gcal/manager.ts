@@ -4,6 +4,10 @@
 // a fast push drain that sends dirty local rows (pending_create/update/delete)
 // to Google. Conflict policy: last-write-wins, remote preferred — pushes carry
 // If-Match etags and a 412 re-fetches the remote copy over the local edit.
+// One gap in that guard: a series RSVP clears the local instances' etags
+// (applySelfResponseToSeries), so an edit to such an instance before the next
+// pull reconciles pushes WITHOUT If-Match — an unconditional overwrite for
+// that short window. Accepted: the policy is remote-preferred, not local-safe.
 import type { DbDriver } from '../../core/driver'
 import type {
   CalendarAccount,

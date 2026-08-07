@@ -111,24 +111,30 @@ export function PendingView({
   const [snoozeKey, setSnoozeKey] = useState<string | null>(null)
   const [highlightKey, setHighlightKey] = useState<string | null>(null)
 
-  // notification deep link: scroll the named row into view and pulse it.
+  // Notification deep link: scroll the named row into view and pulse it.
   // One-shot — consumed even when the item resolved before we landed (the
   // deep link's job is done either way; the queue itself is the fallback).
+  // NOTE: consuming nulls the parent's focus state, which re-triggers this
+  // effect within milliseconds — so this effect must own NO timer (its
+  // teardown would cancel the pulse before it ran; that shipped once).
   useEffect(() => {
     if (!focusKey || !payload) return
     const el = document.querySelector(`[data-pending-key="${CSS.escape(focusKey)}"]`)
-    if (!el) {
-      // item resolved before we landed — the deep link's job is done anyway
-      onFocusConsumed?.()
-      return
+    if (el) {
+      el.scrollIntoView({ block: 'center' })
+      setHighlightKey(focusKey)
     }
-    el.scrollIntoView({ block: 'center' })
-    setHighlightKey(focusKey)
-    const t = setTimeout(() => setHighlightKey(null), 2500)
     onFocusConsumed?.()
-    return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusKey, payload])
+
+  // the pulse timer belongs to the state it mutates: keyed on highlightKey,
+  // it survives the focus-consumption re-render and still cleans up on unmount
+  useEffect(() => {
+    if (!highlightKey) return
+    const t = setTimeout(() => setHighlightKey(null), 2500)
+    return () => clearTimeout(t)
+  }, [highlightKey])
 
   // due-ness moves with the clock even when nothing writes to the db — a
   // reminder crossing its remind_at must appear without a db:changed ping.

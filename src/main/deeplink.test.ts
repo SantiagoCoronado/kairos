@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import type { BrowserWindow } from 'electron'
 import { deliverDeepLink, claimDeepLink } from './deeplink'
 
@@ -18,6 +18,10 @@ function fakeWin(): { win: BrowserWindow; sends: { channel: string; payload: unk
 }
 
 describe('notification deep-link handshake', () => {
+  // the stash is a one-shot module-level global — drain it so no test
+  // depends on what the previous one left behind
+  beforeEach(() => void claimDeepLink(Infinity))
+
   it('stashes on deliver and hands the link to the first claim', () => {
     const { win, sends } = fakeWin()
     deliverDeepLink(win, { view: 'pending', id: 'agent_run:r1' }, T0)

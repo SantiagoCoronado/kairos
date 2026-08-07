@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sidebar, SidebarToggle, VIEW_ORDER, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
-import { useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
+import { IS_REMOTE, useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
 import { pushUndo } from './lib/undo'
 import { dismissToast, toast } from './lib/toast'
 import { getSnapshot as meetingSnapshot, startRecording } from './lib/meeting-store'
@@ -124,7 +124,7 @@ export default function App(): React.JSX.Element {
       if (v === 'pending' && id) setPendingFocus(id)
       setView(v)
     }
-    if (window.api) {
+    if (!IS_REMOTE) {
       void api
         .invoke('nav:claim')
         .then((link) => link && applyNav(link))
@@ -132,7 +132,7 @@ export default function App(): React.JSX.Element {
     }
     return api.on('nav:goto', (link) => {
       applyNav(link)
-      if (window.api) void api.invoke('nav:claim').catch(() => {}) // ack: consume the stashed copy
+      if (!IS_REMOTE) void api.invoke('nav:claim').catch(() => {}) // ack: consume the stashed copy
     })
   }, [])
 

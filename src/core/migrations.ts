@@ -645,6 +645,20 @@ CREATE TABLE pending_overlay (
   seen_at       TEXT,
   updated_at    TEXT NOT NULL
 );
+`,
+  // 024 — repair stripped attendee fields. Until Aug 2026 the gcal pull
+  // rebuilt each attendee from five named fields, so optional/resource/
+  // comment/additionalGuests were stripped BEFORE storage — and with pushes
+  // now sending row.attendees verbatim, a pre-repair row's first push would
+  // rewrite those flags away on Google, once, irreversibly. Nulling every
+  // sync_token forces the windowed full resync on next launch (the same path
+  // a 410 syncToken expiry takes): applyRemoteEvent rewrites synced rows
+  // unconditionally, so the store picks up the whole wire objects even
+  // though nothing changed remotely. Caveats, accepted: the repair covers
+  // the sync window only (−182d/+548d — events outside stay stripped), and
+  // it costs one full page-through per calendar on next launch.
+  `
+UPDATE calendar_calendars SET sync_token = NULL;
 `
 ]
 

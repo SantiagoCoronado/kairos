@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate } from './migrations'
+import { migrate, migrations, applyMigration } from './migrations'
 import * as cal from './repo/calendar'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
@@ -307,6 +307,22 @@ describe('remote apply + full-sync reconciliation', () => {
     expect(hits[0].etag).toBe('e2')
   })
 
+  it('rewrites a SYNCED row even when the etag is unchanged (migration 024 depends on this)', () => {
+    // the stripped-attendees repair nulls sync tokens and relies on the
+    // forced full resync re-storing rows that did NOT change remotely — the
+    // etag early-return must only shield locally-dirty rows
+    const { calendarId } = googleCalendar()
+    cal.applyRemoteEvent(db, calendarId, remote({ attendees: [{ email: 'a@b.c' }] }))
+    cal.applyRemoteEvent(
+      db,
+      calendarId,
+      remote({ attendees: [{ email: 'a@b.c', resource: false, optional: true }] })
+    )
+    const [row] = cal.listEventsInRange(db, '2026-07-01', '2026-07-08')
+    expect(row.etag).toBe('e1')
+    expect(row.attendees[0].optional).toBe(true)
+  })
+
   it('remote cancellation deletes the local row', () => {
     const { calendarId } = googleCalendar()
     cal.applyRemoteEvent(db, calendarId, remote())
@@ -472,5 +488,17 @@ describe('RSVP helpers', () => {
       expect(ev.sync_status).toBe('synced')
       expect(ev.etag).toBeNull()
     }
+  })
+})
+
+describe('migration 024: stripped-attendees repair', () => {
+  it('nulls every sync token so the next pull takes the full-resync branch', () => {
+    const { calendarId } = googleCalendar()
+    cal.setCalendarSyncToken(db, calendarId, 'tok-1', T0)
+    expect(cal.getCalendar(db, calendarId)!.sync_token).toBe('tok-1')
+
+    // re-run the repair by index (fresh DBs already ran it inside migrate())
+    applyMigration(db, migrations.length - 1)
+    expect(cal.getCalendar(db, calendarId)!.sync_token).toBeNull()
   })
 })

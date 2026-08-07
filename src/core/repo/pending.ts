@@ -247,10 +247,14 @@ function runItems(db: DbDriver, now: Date): PendingItem[] {
     `SELECT r.id, r.status, r.finished_at, r.error, r.result, t.name AS task_name
      FROM agent_task_runs r JOIN agent_tasks t ON t.id = r.task_id
      WHERE r.finished_at IS NOT NULL AND r.finished_at > ?
-     ORDER BY r.finished_at DESC
+     ORDER BY (r.status = 'error') DESC, r.finished_at DESC
      LIMIT ${RUN_CAP}`,
     cutoff
   )
+  // errors float above the cap line so 30 successes can never displace one
+  // failure — bound the list on the axis you're willing to lose. Truncation
+  // is deliberately silent (no "N more" tail like threads): nothing below
+  // the line is danger-tone, and stale successes age out of the window anyway.
   return rows.map((r) => ({
     key: `agent_run:${r.id}`,
     kind: 'agent_run' as const,
@@ -484,7 +488,11 @@ export function markAllSeen(
 
 /** Delete rows whose item is no longer pending at all and whose snooze has
  *  lapsed — nothing left to say; a re-pending item gets a fresh fingerprint.
- *  Runs on every triage write, never on read. */
+ *  Runs on every triage write, never on read.
+ *
+ *  The `live` set here must ALWAYS be global — never thread an `onlyKind`
+ *  scope through: a partial set would read every kind it didn't compute as
+ *  "gone" and silently wipe their snooze/dismiss state on each pass. */
 function gcOverlay(db: DbDriver, now: Date): void {
   const ts = nowIso(now)
   const live = new Set(fixedItems(db, now).map((i) => i.key))

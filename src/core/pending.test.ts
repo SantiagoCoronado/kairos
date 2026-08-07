@@ -513,3 +513,23 @@ describe('review round: danger persistence and run cap', () => {
     expect(unseenRunCount(db, T0)).toBe(0)
   })
 })
+
+describe('review round 2: errors are un-croppable', () => {
+  it('a lone error survives 35 later successes crowding the run cap', () => {
+    const task = agentTasks.createAgentTask(db, { name: 't', prompt: 'p' }, T0)
+    const hoursAgo = (h: number): Date => new Date(T0.getTime() - h * 60 * 60_000)
+    const bad = agentTasks.createRun(db, task.id, null, hoursAgo(40))
+    agentTasks.finishRun(db, bad.id, { status: 'error', error: 'boom' }, hoursAgo(40))
+    for (let i = 0; i < 35; i++) {
+      const r = agentTasks.createRun(db, task.id, null, hoursAgo(30 - i / 2))
+      agentTasks.finishRun(db, r.id, { status: 'success' }, hoursAgo(30 - i / 2))
+    }
+    const payload = pendingItems(db, T0)
+    const runs = payload.items.filter((i) => i.kind === 'agent_run')
+    expect(runs).toHaveLength(30)
+    // the error floats above the cap line — 30 successes can never displace it
+    expect(runs[0].id).toBe(bad.id)
+    expect(runs[0].tone).toBe('danger')
+    expect(payload.danger).toBe(1)
+  })
+})

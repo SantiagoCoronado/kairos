@@ -107,6 +107,7 @@ export class Scheduler {
         this.db.run(
           'UPDATE notes SET reminder_fired_at = ?, updated_at = ? WHERE id = ?',
           nowIso(now),
+          nowIso(now),
           note.id
         )
       }

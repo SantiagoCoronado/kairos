@@ -625,6 +625,26 @@ CREATE INDEX idx_tasks_meeting ON tasks(meeting_id);
   // the whole batch. NULL = nothing delivered yet.
   `
 ALTER TABLE comms_outbox ADD COLUMN delivered_json TEXT;
+`,
+  // 023 — Pending inbox overlay. Pending items themselves are computed live
+  // from their source domains (core/repo/pending.ts); this table only stores
+  // per-item triage state, keyed by the item's stable key ("task:<id>",
+  // "thread:<id>", …). Snooze/dismiss are inbox-local: they hide the item
+  // from Pending without touching the source row. A dismissal is scoped to
+  // the fingerprint captured at dismiss time — when the underlying condition
+  // renews (new inbound message, due date pushed and missed again) the
+  // fingerprints stop matching and the item resurfaces. Rows whose item is
+  // gone and whose snooze has lapsed are garbage-collected by the triage
+  // write paths — reads stay pure.
+  `
+CREATE TABLE pending_overlay (
+  item_key      TEXT PRIMARY KEY,
+  fingerprint   TEXT NOT NULL,
+  snoozed_until TEXT,
+  dismissed_at  TEXT,
+  seen_at       TEXT,
+  updated_at    TEXT NOT NULL
+);
 `
 ]
 

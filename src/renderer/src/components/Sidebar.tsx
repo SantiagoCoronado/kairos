@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Bell } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useResizableWidth, ResizeHandle } from './ResizeHandle'
 import { useInvoke } from '../lib/api'
@@ -7,6 +7,7 @@ import { useTerminalAvailable } from '../lib/mobile'
 
 export type ViewId =
   | 'today'
+  | 'pending'
   | 'inbox'
   | 'people'
   | 'tasks'
@@ -42,8 +43,27 @@ export function SidebarToggle({
 const SIDEBAR_W_KEY = 'kairos.sidebar.w'
 const SIDEBAR_W = { def: 208, min: 160, max: 320 }
 
+/** ⌘1–⌘9 slots (drives App's key handler AND the tooltips here). Pending is
+ *  deliberately appended, not inserted at its sidebar position: the
+ *  long-standing slots (⌘2 Inbox, ⌘3 People, …) keep their muscle memory,
+ *  and anything past ⌘9 simply has no shortcut. */
+export const VIEW_ORDER: ViewId[] = [
+  'today',
+  'inbox',
+  'people',
+  'tasks',
+  'notes',
+  'calendar',
+  'objectives',
+  'automations',
+  'chat',
+  'terminal',
+  'pending'
+]
+
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
+  { id: 'pending', label: 'Pending', icon: Bell },
   { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'people', label: 'People', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare },
@@ -66,6 +86,18 @@ export function Sidebar({
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
+  const { data: pending, reload: reloadPending } = useInvoke(
+    'pending:list',
+    [],
+    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms']
+  )
+  // due-ness moves with the clock — same tick the Pending view runs, so the
+  // badge can't lag the list when a reminder crosses its remind_at
+  useEffect(() => {
+    const t = setInterval(reloadPending, 60_000)
+    return () => clearInterval(t)
+  }, [reloadPending])
+  const pendingTotal = pending?.total
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
   // terminal is denied over remote access unless the user opted in — don't
@@ -84,17 +116,24 @@ export function Sidebar({
         <SidebarToggle hidden={false} onToggle={onHide} />
       </div>
       <nav className="flex-1 px-2 py-2 space-y-0.5">
-        {nav.map(({ id, label, icon: Icon }, i) => (
+        {nav.map(({ id, label, icon: Icon }) => {
+          const slot = VIEW_ORDER.indexOf(id)
+          return (
           <button
             key={id}
             onClick={() => onNavigate(id)}
-            title={`${label} (⌘${i + 1})`}
+            title={slot >= 0 && slot < 9 ? `${label} (⌘${slot + 1})` : label}
             className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-left transition-colors ${
               view === id ? 'bg-raised text-text' : 'text-muted hover:text-text hover:bg-raised/50'
             }`}
           >
             <Icon size={15} strokeWidth={1.75} />
             <span className="text-[13px] flex-1">{label}</span>
+            {id === 'pending' && (pendingTotal ?? 0) > 0 && (
+              <span className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
+                {pendingTotal! > 99 ? '99+' : pendingTotal}
+              </span>
+            )}
             {id === 'inbox' && (unread ?? 0) > 0 && (
               <span className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
                 {unread! > 99 ? '99+' : unread}
@@ -130,7 +169,8 @@ export function Sidebar({
               </span>
             )}
           </button>
-        ))}
+          )
+        })}
       </nav>
       <div className="px-4 py-3 border-t border-border flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-faint">

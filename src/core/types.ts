@@ -19,6 +19,7 @@ export type DbEntity =
   | 'meetings'
   | 'settings'
   | 'terminal'
+  | 'pending'
   | 'all'
 
 export type InteractionKind = 'call' | 'message' | 'email' | 'meeting' | 'coffee' | 'other'
@@ -634,4 +635,44 @@ export interface TodayPayload {
   due_today_tasks: Task[]
   followups: FollowupDue[]
   objectives: ObjectiveWithKRs[]
+}
+
+// ---------- pending inbox ----------
+
+export type PendingKind =
+  | 'task'
+  | 'followup'
+  | 'reminder'
+  | 'thread'
+  | 'outbox'
+  | 'meeting'
+  | 'agent_run'
+  | 'invite'
+
+/**
+ * One entry in the Pending inbox. Computed live from its source domain —
+ * never stored. `key` is the stable identity the pending_overlay table keys
+ * snooze/dismiss/seen state on; `fingerprint` changes when the underlying
+ * condition renews (new due date, new inbound message), which is what lets a
+ * dismissal expire instead of hiding the item forever.
+ */
+export interface PendingItem {
+  key: string // `${kind}:${id}`
+  kind: PendingKind
+  /** id of the source object (task id, person id, note id, thread id …) */
+  id: string
+  title: string
+  subtitle: string
+  tone: 'accent' | 'danger' | 'muted'
+  /** the timestamp that makes it pending (due date, remind_at, last message) */
+  at: string | null
+  fingerprint: string
+}
+
+export interface PendingPayload {
+  items: PendingItem[]
+  /** unread threads beyond the display cap — the "N more in Inbox" tail row */
+  more_threads: number
+  /** full actionable count including capped threads — the sidebar badge */
+  total: number
 }

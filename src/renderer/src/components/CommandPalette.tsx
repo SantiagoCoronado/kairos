@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, CircleAlert } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, CircleAlert, Bell } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { CaptureContext } from '../../../shared/ipc-contract'
 import type { ViewId } from './Sidebar'
@@ -156,6 +156,9 @@ export function CommandPalette({
             >
               <Item onSelect={() => go('today')} keywords={['home', 'dashboard']}>
                 <Sun size={14} /> Today
+              </Item>
+              <Item onSelect={() => go('pending')} keywords={['triage', 'attention', 'due', 'needs', 'queue']}>
+                <Bell size={14} /> Pending
               </Item>
               <Item onSelect={() => go('inbox')} keywords={['mail', 'email', 'slack', 'whatsapp', 'messages']}>
                 <Inbox size={14} /> Inbox

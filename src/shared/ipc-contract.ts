@@ -23,6 +23,7 @@ import type {
   ObjectiveStatus,
   KeyResult,
   TodayPayload,
+  PendingPayload,
   Note,
   NoteFilter,
   NewNote,
@@ -175,6 +176,10 @@ export interface IpcApi {
   'krs:tasks': (krId: string) => Task[]
 
   'today:get': () => TodayPayload
+
+  /** the Pending view AND the sidebar badge (via .total) — one computation,
+   *  so the two can never disagree about what counts as pending */
+  'pending:list': () => PendingPayload
 
   'calendar:today': () => Promise<CalendarResult>
 
@@ -635,6 +640,7 @@ export type AgentTaskParseResult =
 /** views addressable by main-process deep links (notification clicks) */
 export type NavView =
   | 'today'
+  | 'pending'
   | 'inbox'
   | 'people'
   | 'tasks'

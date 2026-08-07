@@ -24,7 +24,14 @@ import * as interactions from '../core/repo/interactions'
 import * as followups from '../core/repo/followups'
 import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
-import { pendingItems } from '../core/repo/pending'
+import {
+  pendingItems,
+  snoozeItem,
+  unsnoozeItem,
+  dismissItem,
+  undismissItem,
+  markAllSeen
+} from '../core/repo/pending'
 import { composeBriefing } from '../core/briefing'
 import { DEFAULT_VOICE_ID, listVoices, synthesize, transcribe } from './tts/elevenlabs'
 import { executeCapture } from '../core/capture'
@@ -438,7 +445,47 @@ export function registerIpc(): void {
 
   handle('today:get', () => todayAgenda(db))
 
-  handle('pending:list', () => pendingItems(db))
+  // While the view is open, whatever it shows counts as seen — stamped lazily
+  // inside pending:list so a burst of db:changed events can't badge items the
+  // user is literally looking at. The stamp deliberately does NOT broadcast:
+  // pending:list runs on every 'pending' invalidation, so a broadcast here
+  // would re-trigger itself forever. Clients converge on the next event.
+  //
+  // The active flag is process-wide and remote clients dispatch to it too; a
+  // client that vanishes mid-view never sends its unmount `false`, so the
+  // flag is a TTL the open view re-arms from its own tick — it self-heals
+  // instead of pinning "seen" forever.
+  const PENDING_ACTIVE_TTL_MS = 90_000
+  let pendingViewActiveUntil = 0
+  const pendingViewActive = (): boolean => Date.now() < pendingViewActiveUntil
+  handle('pending:list', () => {
+    if (pendingViewActive()) markAllSeen(db)
+    return pendingItems(db)
+  })
+  handle('pending:setViewActive', (active) => {
+    const was = pendingViewActive()
+    pendingViewActiveUntil = active ? Date.now() + PENDING_ACTIVE_TTL_MS : 0
+    // both transitions: everything visible up to this moment counts as seen
+    markAllSeen(db)
+    // transition-only broadcast — a periodic re-arm must not cause a reload storm
+    if (was !== active) broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:snooze', (key, untilIso) => {
+    snoozeItem(db, key, untilIso)
+    broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:unsnooze', (key) => {
+    unsnoozeItem(db, key)
+    broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:dismiss', (key) => {
+    dismissItem(db, key)
+    broadcast('db:changed', { entity: 'pending' })
+  })
+  handle('pending:undismiss', (key) => {
+    undismissItem(db, key)
+    broadcast('db:changed', { entity: 'pending' })
+  })
 
   handle('calendar:today', () => calendarToday())
 

@@ -146,3 +146,33 @@ describe('notes repo', () => {
     expect(notes.getNote(db, n.id)!.items).toEqual([])
   })
 })
+
+describe('markReminderFired', () => {
+  const T = new Date('2026-07-01T12:00:00Z')
+
+  it('one-shot: stamps reminder_fired_at so the scheduler dedupe holds (regression: 3fd2659)', () => {
+    const n = notes.createNote(db, { title: 'water', remind_at: '2026-07-01T09:00:00Z' }, T)
+    expect(notes.listDueReminders(db, T).map((x) => x.id)).toEqual([n.id])
+    const next = notes.markReminderFired(db, notes.getNote(db, n.id)!, T)
+    expect(next).toBeNull()
+    const after = notes.getNote(db, n.id)!
+    expect(after.reminder_fired_at).toBe(T.toISOString())
+    expect(after.remind_at).toBe('2026-07-01T09:00:00Z')
+    expect(notes.listDueReminders(db, T)).toHaveLength(0)
+  })
+
+  it('recurring: advances remind_at and re-arms', () => {
+    const n = notes.createNote(
+      db,
+      { title: 'standup', remind_at: '2026-07-01T09:00:00Z', repeat: 'daily' },
+      T
+    )
+    const next = notes.markReminderFired(db, notes.getNote(db, n.id)!, T)
+    const after = notes.getNote(db, n.id)!
+    expect(next).not.toBeNull()
+    expect(after.remind_at).toBe(next)
+    expect(after.remind_at! > T.toISOString()).toBe(true)
+    expect(after.reminder_fired_at).toBeNull()
+    expect(notes.listDueReminders(db, T)).toHaveLength(0)
+  })
+})

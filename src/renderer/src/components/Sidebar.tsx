@@ -97,7 +97,7 @@ export function Sidebar({
     const t = setInterval(reloadPending, 60_000)
     return () => clearInterval(t)
   }, [reloadPending])
-  const pendingTotal = pending?.total
+  const pendingTotal = pending?.unseen
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
   // terminal is denied over remote access unless the user opted in — don't

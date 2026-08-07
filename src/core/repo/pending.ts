@@ -133,33 +133,56 @@ function threadItems(db: DbDriver, ts: string): PendingItem[] {
   })
 }
 
-/** Exact count of visible unread threads (uncapped). */
-function visibleThreadCount(db: DbDriver, ts: string): number {
+/** An item is "seen" only while the fingerprint it was seen at still holds —
+ *  a renewed condition makes it unseen again, mirroring dismissal scoping. */
+const THREAD_SEEN = `EXISTS (
+  SELECT 1 FROM pending_overlay o
+  WHERE o.item_key = 'thread:' || t.id
+    AND o.seen_at IS NOT NULL
+    AND o.fingerprint = COALESCE(t.last_message_at, '')
+)`
+
+/** Exact count of visible unread threads (uncapped); unseen-only variant. */
+function visibleThreadCount(db: DbDriver, ts: string, unseenOnly = false): number {
   return (
     db.get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM comms_threads t
-       WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE}`,
+       WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE}${unseenOnly ? ` AND NOT ${THREAD_SEEN}` : ''}`,
       ts
     )?.n ?? 0
   )
 }
 
+/** The non-thread sources, pre-overlay. */
+function fixedItems(db: DbDriver, now: Date): PendingItem[] {
+  const today = localDate(now)
+  return [...taskItems(db, today), ...followupItems(db, now), ...reminderItems(db, now)]
+}
+
+function loadOverlays(db: DbDriver): Map<string, OverlayRow> {
+  return new Map(db.all<OverlayRow>('SELECT * FROM pending_overlay').map((r) => [r.item_key, r]))
+}
+
+/** JS twin of THREAD_VISIBLE, for the fixed sources — the one place the
+ *  overlay-visibility rule lives outside SQL. */
+function hiddenBy(o: OverlayRow | undefined, fingerprint: string, ts: string): boolean {
+  if (!o) return false
+  if (o.snoozed_until && o.snoozed_until > ts) return true
+  if (o.dismissed_at && o.fingerprint === fingerprint) return true
+  return false
+}
+
 export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPayload {
   const ts = nowIso(now)
-  const today = localDate(now)
 
-  const fixed = [...taskItems(db, today), ...followupItems(db, now), ...reminderItems(db, now)]
+  const fixed = fixedItems(db, now)
   // threads apply the overlay in SQL (THREAD_VISIBLE); only the small fixed
   // sources need the JS pass
-  const overlays = new Map<string, OverlayRow>(
-    db.all<OverlayRow>('SELECT * FROM pending_overlay').map((r) => [r.item_key, r])
-  )
-  const visible = (it: PendingItem): boolean => {
+  const overlays = loadOverlays(db)
+  const visible = (it: PendingItem): boolean => !hiddenBy(overlays.get(it.key), it.fingerprint, ts)
+  const seen = (it: PendingItem): boolean => {
     const o = overlays.get(it.key)
-    if (!o) return true
-    if (o.snoozed_until && o.snoozed_until > ts) return false
-    if (o.dismissed_at && o.fingerprint === it.fingerprint) return false
-    return true
+    return Boolean(o?.seen_at && o.fingerprint === it.fingerprint)
   }
 
   const visFixed = fixed.filter(visible)
@@ -168,6 +191,151 @@ export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPaylo
   return {
     items: [...visFixed, ...shownThreads],
     more_threads: threadTotal - shownThreads.length,
-    total: visFixed.length + threadTotal
+    total: visFixed.length + threadTotal,
+    unseen: visFixed.filter((i) => !seen(i)).length + visibleThreadCount(db, ts, true)
+  }
+}
+
+// ---------- triage writes ----------
+// Snooze/dismiss are inbox-local: they never touch the source domain. Every
+// write stamps the item's CURRENT fingerprint — resolved server-side so
+// callers (view rows, MCP tools) only ever pass a key — and resets the other
+// visibility fields: a write is only reachable while the item is visible,
+// which means any dismissed_at/snoozed_until already on the row is stale, and
+// carrying it forward under the fresh fingerprint would wrongly re-hide.
+
+/** Current fingerprint of a still-pending item; undefined once resolved. */
+function currentFingerprint(db: DbDriver, key: string, now: Date): string | undefined {
+  if (key.startsWith('thread:')) {
+    const row = db.get<{ fp: string }>(
+      `SELECT COALESCE(last_message_at, '') AS fp FROM comms_threads
+       WHERE id = ? AND ${UNREAD_THREAD}`,
+      key.slice('thread:'.length)
+    )
+    return row?.fp
+  }
+  return fixedItems(db, now).find((i) => i.key === key)?.fingerprint
+}
+
+function writeOverlay(
+  db: DbDriver,
+  key: string,
+  patch: { snoozed_until: string | null; dismissed_at: string | null },
+  now: Date
+): void {
+  const fp = currentFingerprint(db, key, now)
+  if (fp === undefined) throw new Error(`not pending: ${key}`)
+  const ts = nowIso(now)
+  db.run(
+    `INSERT INTO pending_overlay (item_key, fingerprint, snoozed_until, dismissed_at, seen_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(item_key) DO UPDATE SET
+       fingerprint = excluded.fingerprint,
+       snoozed_until = excluded.snoozed_until,
+       dismissed_at = excluded.dismissed_at,
+       seen_at = excluded.seen_at,
+       updated_at = excluded.updated_at`,
+    key,
+    fp,
+    patch.snoozed_until,
+    patch.dismissed_at,
+    ts, // triaging an item is seeing it
+    ts
+  )
+  gcOverlay(db, now)
+}
+
+export function snoozeItem(db: DbDriver, key: string, untilIso: string, now: Date = new Date()): void {
+  // normalize to UTC …Z form: both comparison sites are lexicographic string
+  // compares against nowIso(), which is only sound if every stored value uses
+  // the same form — MCP callers hand us local-offset ISO all the time, and
+  // stored verbatim it sorts as already-lapsed (a silent no-op snooze)
+  const until = new Date(untilIso)
+  if (Number.isNaN(until.getTime())) throw new Error(`bad snooze timestamp: ${untilIso}`)
+  writeOverlay(db, key, { snoozed_until: until.toISOString(), dismissed_at: null }, now)
+}
+
+export function dismissItem(db: DbDriver, key: string, now: Date = new Date()): void {
+  writeOverlay(db, key, { snoozed_until: null, dismissed_at: nowIso(now) }, now)
+}
+
+/** Undo paths: clear one visibility field, leave the rest of the row alone. */
+export function unsnoozeItem(db: DbDriver, key: string, now: Date = new Date()): void {
+  db.run(
+    'UPDATE pending_overlay SET snoozed_until = NULL, updated_at = ? WHERE item_key = ?',
+    nowIso(now),
+    key
+  )
+}
+
+export function undismissItem(db: DbDriver, key: string, now: Date = new Date()): void {
+  db.run(
+    'UPDATE pending_overlay SET dismissed_at = NULL, updated_at = ? WHERE item_key = ?',
+    nowIso(now),
+    key
+  )
+}
+
+/** Stamp every currently-visible item as seen at its current fingerprint.
+ *  Includes threads beyond the display cap: the badge counts them, so
+ *  opening the view must clear them too. Rows already seen at the same
+ *  fingerprint are skipped to avoid write churn on every view visit. */
+export function markAllSeen(db: DbDriver, now: Date = new Date()): void {
+  const ts = nowIso(now)
+  const overlays = loadOverlays(db)
+  const stamp: { key: string; fp: string }[] = []
+
+  for (const it of fixedItems(db, now)) {
+    const o = overlays.get(it.key)
+    if (hiddenBy(o, it.fingerprint, ts)) continue // not on screen, stays unseen
+    if (o?.seen_at && o.fingerprint === it.fingerprint) continue
+    stamp.push({ key: it.key, fp: it.fingerprint })
+  }
+  const threads = db.all<{ id: string; fp: string }>(
+    `SELECT id, COALESCE(last_message_at, '') AS fp FROM comms_threads t
+     WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE} AND NOT ${THREAD_SEEN}`,
+    ts
+  )
+  for (const t of threads) stamp.push({ key: `thread:${t.id}`, fp: t.fp })
+
+  // steady state on an open view: everything already stamped — make the
+  // common case free instead of paying fixedItems + GC on every pending:list
+  if (stamp.length === 0) return
+
+  for (const s of stamp) {
+    // visible ⇒ any snooze on the row lapsed and any dismissal mismatched;
+    // reset them so the fresh fingerprint can't revive a stale dismissal
+    db.run(
+      `INSERT INTO pending_overlay (item_key, fingerprint, snoozed_until, dismissed_at, seen_at, updated_at)
+       VALUES (?, ?, NULL, NULL, ?, ?)
+       ON CONFLICT(item_key) DO UPDATE SET
+         fingerprint = excluded.fingerprint,
+         snoozed_until = NULL,
+         dismissed_at = NULL,
+         seen_at = excluded.seen_at,
+         updated_at = excluded.updated_at`,
+      s.key,
+      s.fp,
+      ts,
+      ts
+    )
+  }
+  gcOverlay(db, now)
+}
+
+/** Delete rows whose item is no longer pending at all and whose snooze has
+ *  lapsed — nothing left to say; a re-pending item gets a fresh fingerprint.
+ *  Runs on every triage write, never on read. */
+function gcOverlay(db: DbDriver, now: Date): void {
+  const ts = nowIso(now)
+  const live = new Set(fixedItems(db, now).map((i) => i.key))
+  for (const r of db.all<{ id: string }>(`SELECT id FROM comms_threads WHERE ${UNREAD_THREAD}`))
+    live.add(`thread:${r.id}`)
+  for (const o of db.all<{ item_key: string; snoozed_until: string | null }>(
+    'SELECT item_key, snoozed_until FROM pending_overlay'
+  )) {
+    if (!live.has(o.item_key) && (!o.snoozed_until || o.snoozed_until <= ts)) {
+      db.run('DELETE FROM pending_overlay WHERE item_key = ?', o.item_key)
+    }
   }
 }

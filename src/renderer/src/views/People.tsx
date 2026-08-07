@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Archive, ArchiveRestore, BellOff, Plus, Trash2, Unlink, X } from 'lucide-react'
 import type { Person, Area, InteractionKind, FollowupDue } from '../../../core/types'
+import { localDate } from '../../../core/ids'
 import type { MacContact } from '../../../shared/ipc-contract'
 import { api, useInvoke } from '../lib/api'
 import { Input, Button, Select, Chip, Segmented, EmptyState, InlineText, cn } from '../components/ui'
@@ -280,7 +281,9 @@ function PersonDetail({
   const snoozeFor = (days: number): void => {
     const d = new Date()
     d.setDate(d.getDate() + days)
-    void api.invoke('followups:snooze', person.id, d.toISOString().slice(0, 10))
+    // snoozed_until is a LOCAL day — toISOString() writes tomorrow's date
+    // every evening once UTC has rolled over
+    void api.invoke('followups:snooze', person.id, localDate(d))
     setSnoozeOpen(false)
   }
 

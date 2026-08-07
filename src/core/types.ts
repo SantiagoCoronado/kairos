@@ -673,6 +673,10 @@ export interface PendingPayload {
   items: PendingItem[]
   /** unread threads beyond the display cap — the "N more in Inbox" tail row */
   more_threads: number
-  /** full actionable count including capped threads — the sidebar badge */
+  /** full actionable count including capped threads */
   total: number
+  /** items not yet seen at their current fingerprint — the sidebar badge;
+   *  a renewed condition (new message, re-missed due date) counts as unseen
+   *  again even if the item was seen before */
+  unseen: number
 }

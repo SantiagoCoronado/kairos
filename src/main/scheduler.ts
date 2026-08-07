@@ -4,8 +4,6 @@ import type { Note } from '../core/types'
 import type { AgentTaskRunner } from './chat/task-runner'
 import * as notes from '../core/repo/notes'
 import * as agentTasks from '../core/repo/agent-tasks'
-import { advanceReminder } from '../core/schedule'
-import { nowIso } from '../core/ids'
 import { broadcast } from './ipc'
 import { createMainWindow } from './windows/main-window'
 import { getSettings } from './settings'
@@ -93,24 +91,7 @@ export class Scheduler {
     const { title, body } = reminderText(note)
 
     // bookkeeping FIRST so a notification error can never re-fire the loop
-    const next = advanceReminder(note.remind_at!, note.repeat, now)
-    this.db.transaction(() => {
-      if (next) {
-        // recurring: advance and re-arm
-        this.db.run(
-          'UPDATE notes SET remind_at = ?, reminder_fired_at = NULL, updated_at = ? WHERE id = ?',
-          next,
-          nowIso(now),
-          note.id
-        )
-      } else {
-        this.db.run(
-          'UPDATE notes SET reminder_fired_at = ?, updated_at = ? WHERE id = ?',
-          nowIso(now),
-          note.id
-        )
-      }
-    })
+    const next = notes.markReminderFired(this.db, note, now)
     broadcast('db:changed', { entity: 'notes' })
 
     this.deliver(note, title, body)

@@ -18,6 +18,7 @@ import type {
 } from '../../core/types'
 import type { CalendarSyncEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/calendar'
+import { applyRsvp } from '../../core/attendees'
 import { newId } from '../../core/ids'
 import type { GoogleEvent } from './api'
 import {
@@ -391,7 +392,7 @@ export class CalendarSyncManager {
 
     const targetId = event.recurring_event_id ?? event.google_event_id
     const remote = await getEventRemote(this.db, account, cal.google_calendar_id, targetId)
-    const attendees = repo.applyRsvp(remote.attendees ?? [], account.external_id, response)
+    const attendees = applyRsvp(remote.attendees ?? [], account.external_id, response)
     if (!attendees) throw new Error('this Google account is not on the guest list')
 
     let patched: GoogleEvent

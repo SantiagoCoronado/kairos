@@ -375,13 +375,10 @@ export function googleEventToRemote(ev: GoogleEvent): RemoteEvent {
     all_day: start.allDay,
     timezone: ev.start?.timeZone ?? null,
     color: ev.colorId ?? null,
-    attendees: (ev.attendees ?? []).map((a) => ({
-      email: a.email,
-      displayName: a.displayName,
-      responseStatus: a.responseStatus,
-      organizer: a.organizer,
-      self: a.self
-    })),
+    // pass through whole — a field-by-field rebuild here strips wire fields
+    // (optional, resource, comment…) BEFORE they're ever stored, and the next
+    // push would then rewrite them away on Google (see CalendarAttendee)
+    attendees: ev.attendees ?? [],
     conferencing_url: meetLinkOf(ev),
     status: ev.status ?? 'confirmed'
   }
@@ -400,12 +397,13 @@ export function rowToGoogleBody(row: CalendarEventRecord): Record<string, unknow
     end: row.all_day
       ? { date: row.end_at, dateTime: null }
       : { dateTime: row.end_at, timeZone: row.timezone ?? undefined, date: null },
-    // keep responseStatus for attendees we already know — a patch replaces
-    // the whole list and omitting it would reset RSVPs to needsAction
-    attendees: row.attendees.map((a) => ({
-      email: a.email,
-      displayName: a.displayName,
-      ...(a.responseStatus ? { responseStatus: a.responseStatus } : {})
-    }))
+    // send the stored entries whole — a patch replaces the entire attendees
+    // array, so anything omitted is destroyed on Google: dropping
+    // responseStatus resets RSVPs to needsAction, and the old field-by-field
+    // rebuild here meant renaming an event rewrote every guest's optional/
+    // resource flags away. Output-only fields (self, organizer) riding along
+    // are ignored by Google — the RSVP path already sends full wire objects
+    // the same way.
+    attendees: row.attendees
   }
 }

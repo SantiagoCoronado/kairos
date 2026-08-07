@@ -6,7 +6,7 @@ import type {
   CalendarEventRecord,
   RsvpResponse
 } from '../../../../core/types'
-import { selfAttendee } from '../../../../core/repo/calendar'
+import { selfAttendee } from '../../../../core/attendees'
 import type { AttendeeSuggestion } from '../../../../shared/ipc-contract'
 import { api } from '../../lib/api'
 import { MeetingSection } from '../meeting/MeetingSection'

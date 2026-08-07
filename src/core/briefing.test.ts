@@ -86,4 +86,35 @@ describe('composeBriefing', () => {
     const text = composeBriefing(agenda(), [event('Lunch', '2026-07-13T13:00:00')], MONDAY_9AM)
     expect(text).toContain('Lunch at 1 PM.')
   })
+
+  it('speaks the failure alarm first, right after the date', () => {
+    const text = composeBriefing(agenda(), [event('Standup', '2026-07-13T10:00:00')], MONDAY_9AM, {
+      failures: 2,
+      invites: 0
+    })
+    expect(text).toContain('Heads up: 2 failures need your attention — check Pending.')
+    expect(text.indexOf('Heads up')).toBeLessThan(text.indexOf('Standup'))
+    expect(text).not.toContain('Clear runway')
+    expect(text).toContain("That's your day.")
+  })
+
+  it('singular failure and invitation phrasing', () => {
+    const text = composeBriefing(agenda(), [], MONDAY_9AM, { failures: 1, invites: 1 })
+    expect(text).toContain('one failure needs your attention')
+    expect(text).toContain('An invitation awaits your answer.')
+  })
+
+  it('invitations alone still suppress the clear-runway stoic close', () => {
+    const text = composeBriefing(agenda(), [], MONDAY_9AM, { failures: 0, invites: 3 })
+    expect(text).toContain('3 invitations await your answer.')
+    expect(text).not.toContain('Clear runway')
+    expect(text).toContain("That's your day.")
+  })
+
+  it('zero failures and invites add nothing (the agenda lines already cover due work)', () => {
+    const text = composeBriefing(agenda(), [], MONDAY_9AM, { failures: 0, invites: 0 })
+    expect(text).not.toContain('Pending')
+    expect(text).not.toContain('invitation')
+    expect(text).toContain('Clear runway')
+  })
 })

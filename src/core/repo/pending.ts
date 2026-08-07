@@ -561,6 +561,13 @@ export function markAllSeen(
   return stamp.map((s) => s.key)
 }
 
+/** Boot-time sweep: the write-path GC below only runs when the user triages,
+ *  so a quiet stretch would let rows for long-resolved items linger. One
+ *  pass at startup bounds that without adding GC to any read path. */
+export function gcPendingOverlay(db: DbDriver, now: Date = new Date()): void {
+  gcOverlay(db, now)
+}
+
 /** Delete rows whose item is no longer pending at all and whose snooze has
  *  lapsed — nothing left to say; a re-pending item gets a fresh fingerprint.
  *  Runs on every triage write, never on read.

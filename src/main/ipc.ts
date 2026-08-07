@@ -31,7 +31,8 @@ import {
   dismissItem,
   undismissItem,
   markAllSeen,
-  unseenRunCount
+  unseenRunCount,
+  gcPendingOverlay
 } from '../core/repo/pending'
 import { composeBriefing } from '../core/briefing'
 import { DEFAULT_VOICE_ID, listVoices, synthesize, transcribe } from './tts/elevenlabs'
@@ -470,6 +471,9 @@ export function registerIpc(): void {
   // flag is a TTL the open view re-arms from its own tick — it self-heals
   // instead of pinning "seen" forever.
   const PENDING_ACTIVE_TTL_MS = 90_000
+  // overlay GC otherwise runs only on triage writes — one boot sweep bounds
+  // leftover rows from items that resolved while nothing was being triaged
+  gcPendingOverlay(db)
   let pendingViewActiveUntil = 0
   const pendingViewActive = (): boolean => Date.now() < pendingViewActiveUntil
   // stamping a run seen here must also refresh the Automations badge — but
@@ -525,7 +529,11 @@ export function registerIpc(): void {
     if (!key) return { ok: false as const, message: 'Add an ElevenLabs API key in Settings first.' }
     try {
       const cal = await calendarToday()
-      const text = composeBriefing(todayAgenda(db), 'events' in cal ? cal.events : [])
+      const p = pendingItems(db)
+      const text = composeBriefing(todayAgenda(db), 'events' in cal ? cal.events : [], new Date(), {
+        failures: p.danger,
+        invites: p.items.filter((i) => i.kind === 'invite').length
+      })
       const mp3 = await synthesize(key, elevenLabsVoiceId ?? DEFAULT_VOICE_ID, text)
       return { ok: true as const, dataUrl: `data:audio/mpeg;base64,${mp3.toString('base64')}` }
     } catch (err) {

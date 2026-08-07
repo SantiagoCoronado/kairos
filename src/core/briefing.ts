@@ -12,13 +12,32 @@ export interface BriefingEvent {
 const MAX_EVENTS = 5
 const MAX_TASKS = 3
 
+/** The Pending-inbox facts the briefing speaks. Deliberately NOT the full
+ *  count: the agenda lines below already cover due tasks and follow-ups, so
+ *  only what they can't say earns a sentence — failures (danger-tone items)
+ *  and invitations awaiting an answer. */
+export interface BriefingPending {
+  failures: number
+  invites: number
+}
+
 /** Today's agenda as a short spoken-English paragraph for TTS (< ~45s read). */
 export function composeBriefing(
   agenda: TodayPayload,
   events: BriefingEvent[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  pending: BriefingPending = { failures: 0, invites: 0 }
 ): string {
   const parts: string[] = [`${greeting(now)}. It's ${spokenDate(now)}.`]
+
+  // the alarm goes first — a failed send or errored run outranks the agenda
+  if (pending.failures > 0) {
+    parts.push(
+      pending.failures === 1
+        ? 'Heads up: one failure needs your attention — check Pending.'
+        : `Heads up: ${pending.failures} failures need your attention — check Pending.`
+    )
+  }
 
   if (events.length > 0) {
     const spoken = events.map((e) =>
@@ -59,7 +78,22 @@ export function composeBriefing(
     )
   }
 
-  if (overdue.length === 0 && due.length === 0 && followups.length === 0) {
+  if (pending.invites > 0) {
+    parts.push(
+      pending.invites === 1
+        ? 'An invitation awaits your answer.'
+        : `${pending.invites} invitations await your answer.`
+    )
+  }
+
+  // "clear runway" would ring false over a failure alarm or an open invite
+  const clear =
+    overdue.length === 0 &&
+    due.length === 0 &&
+    followups.length === 0 &&
+    pending.failures === 0 &&
+    pending.invites === 0
+  if (clear) {
     const teaching = stoicForDate(now)
     parts.push(
       `Nothing is due today. Clear runway. ${teaching.author} reminds you: ${teaching.text}`

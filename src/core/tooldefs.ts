@@ -1,7 +1,15 @@
 import { z } from 'zod'
 import { join } from 'node:path'
 import type { DbDriver } from './driver'
-import type { DbEntity, Area, InteractionKind, TaskStatus, Person, AppEventName } from './types'
+import type {
+  DbEntity,
+  Area,
+  InteractionKind,
+  TaskStatus,
+  Person,
+  AppEventName,
+  RsvpResponse
+} from './types'
 import * as people from './repo/people'
 import * as interactions from './repo/interactions'
 import * as followups from './repo/followups'
@@ -31,6 +39,10 @@ export interface ToolCtx {
    *  process wires this — the MCP twin runs in another process and its
    *  writes cannot fire event-triggered automations. */
   onEvent?: (name: AppEventName) => void
+  /** direct Google Calendar RSVP (network + OAuth session). Only the Electron
+   *  main process wires this — the MCP twin cannot reach Google, and
+   *  calendar_respond says so plainly when the hook is absent. */
+  respondInvite?: (eventId: string, response: RsvpResponse) => Promise<void>
 }
 
 export interface ToolDef {
@@ -940,6 +952,25 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
         calendar.deleteEvent(db, a.id)
         ctx.onMutate('calendar_events')
         return { deleted: true }
+      }
+    },
+    {
+      name: 'calendar_respond',
+      description:
+        'Answer a Google Calendar invitation: accept, decline, or tentative. Updates only your own attendee responseStatus on Google (the organizer is notified). Responding to a recurring event instance answers the whole series. Event ids come from calendar_events_list or pending_inbox invite items.',
+      schema: {
+        event_id: z.string(),
+        response: z.enum(['accepted', 'declined', 'tentative'])
+      },
+      handler: async (a: { event_id: string; response: RsvpResponse }) => {
+        if (!ctx.respondInvite)
+          throw new Error(
+            'RSVP needs the Kairos app process (Google session) — answer from the Pending view or the in-app chat.'
+          )
+        await ctx.respondInvite(a.event_id, a.response)
+        ctx.onMutate('calendar_events')
+        ctx.onMutate('pending')
+        return { responded: a.response }
       }
     },
     {

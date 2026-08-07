@@ -103,6 +103,80 @@ function reminderItems(db: DbDriver, now: Date): PendingItem[] {
   }))
 }
 
+/** Google Calendar invitations awaiting our answer: we are an attendee, our
+ *  responseStatus is still needsAction, and the event isn't over. The self
+ *  entry is found the same way the RSVP write path finds it (self flag, else
+ *  email match against the account) so detect and respond can never disagree
+ *  about who "we" are. */
+function inviteItems(db: DbDriver, now: Date): PendingItem[] {
+  const rows = db.all<{
+    id: string
+    title: string
+    start_at: string
+    all_day: number
+    etag: string | null
+    updated_at: string
+    recurring_event_id: string | null
+    attendees: string
+  }>(
+    // end_at > now, not start_at: an invite for a meeting already in progress
+    // is still answerable. All-day date-only strings compare correctly against
+    // ISO datetimes here for the same reason listEventsInRange's overlap does.
+    `SELECT e.id, e.title, e.start_at, e.all_day, e.etag, e.updated_at,
+            e.recurring_event_id, e.attendees
+     FROM calendar_events e
+     JOIN calendar_calendars c ON c.id = e.calendar_id
+     JOIN calendar_accounts a ON a.id = c.account_id
+     WHERE e.status != 'cancelled' AND e.sync_status != 'pending_delete'
+       AND c.is_visible = 1
+       AND e.end_at > ?
+       AND EXISTS (
+         SELECT 1 FROM json_each(e.attendees) je
+         WHERE json_extract(je.value, '$.responseStatus') = 'needsAction'
+           AND (json_extract(je.value, '$.self') = 1
+                OR lower(json_extract(je.value, '$.email')) = a.external_id)
+       )
+     ORDER BY e.start_at`,
+    nowIso(now)
+  )
+  // one row per series: a weekly invite is one question, not N expanded
+  // instances. The earliest upcoming instance represents it — when that
+  // occurrence passes, the key rolls to the next instance and any dismissal
+  // expires with it, the same renewed-nag semantics as repeating reminders.
+  const seenSeries = new Set<string>()
+  const out: PendingItem[] = []
+  for (const e of rows) {
+    const series = e.recurring_event_id ?? e.id
+    if (seenSeries.has(series)) continue
+    seenSeries.add(series)
+    let organizer: string | undefined
+    try {
+      const att = JSON.parse(e.attendees) as { email?: string; displayName?: string; organizer?: boolean }[]
+      const o = att.find((x) => x.organizer)
+      organizer = o?.displayName || o?.email
+    } catch {
+      // corrupted json: the EXISTS above can't have matched, but stay safe
+    }
+    const start = new Date(e.start_at)
+    const when = e.all_day
+      ? e.start_at
+      : `${localDate(start)} ${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`
+    out.push({
+      key: `invite:${e.id}`,
+      kind: 'invite' as const,
+      id: e.id,
+      title: e.title || 'Untitled event',
+      subtitle: organizer ? `${organizer} · ${when}` : when,
+      tone: 'accent' as const,
+      at: e.start_at,
+      // etag changes on every remote modification (reschedule, forwarded
+      // update), so a dismissal survives exactly until the invite changes
+      fingerprint: e.etag ?? e.updated_at
+    })
+  }
+  return out
+}
+
 const UNREAD_THREAD = `sync_enabled = 1 AND is_archived = 0 AND unread_count > 0`
 
 /** THE copy of the thread overlay-visibility predicate: hidden while snoozed,
@@ -283,6 +357,7 @@ function fixedItems(db: DbDriver, now: Date, only?: PendingKind): PendingItem[] 
   const want = (k: PendingKind): boolean => !only || only === k
   const out: PendingItem[] = []
   if (want('outbox')) out.push(...outboxItems(db, now))
+  if (want('invite')) out.push(...inviteItems(db, now))
   if (want('task')) out.push(...taskItems(db, localDate(now)))
   if (want('followup')) out.push(...followupItems(db, now))
   if (want('reminder')) out.push(...reminderItems(db, now))

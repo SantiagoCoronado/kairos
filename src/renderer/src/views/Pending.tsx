@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { AudioLines, Bot, CheckSquare, Inbox, Send, StickyNote, Users } from 'lucide-react'
-import type { PendingItem, PendingKind } from '../../../core/types'
+import { AudioLines, Bot, CalendarClock, CheckSquare, Inbox, Send, StickyNote, Users } from 'lucide-react'
+import type { PendingItem, PendingKind, RsvpResponse } from '../../../core/types'
 import { localDate } from '../../../core/ids'
 import type { ViewId } from '../components/Sidebar'
 import { api, useInvoke } from '../lib/api'
@@ -20,7 +20,7 @@ const KIND_VIEW: Partial<Record<PendingKind, ViewId>> = {
   thread: 'inbox',
   outbox: 'inbox',
   agent_run: 'automations'
-  // meeting rows route through onOpenCalendar (day focus), not a plain view
+  // meeting and invite rows route through onOpenCalendar (day focus)
 }
 
 const KIND_ICON: Partial<Record<PendingKind, typeof CheckSquare>> = {
@@ -30,12 +30,15 @@ const KIND_ICON: Partial<Record<PendingKind, typeof CheckSquare>> = {
   thread: Inbox,
   outbox: Send,
   meeting: AudioLines,
-  agent_run: Bot
+  agent_run: Bot,
+  invite: CalendarClock
 }
 
-/** failures first — a failed send outranks a due task */
+/** failures first — a failed send outranks a due task; invitations next,
+ *  they carry someone else's deadline */
 const SECTIONS: { kind: PendingKind; title: string }[] = [
   { kind: 'outbox', title: 'sends' },
+  { kind: 'invite', title: 'invitations' },
   { kind: 'task', title: 'tasks due' },
   { kind: 'followup', title: 'follow-ups' },
   { kind: 'reminder', title: 'reminders' },
@@ -88,7 +91,17 @@ export function PendingView({
   const { data: payload, reload } = useInvoke(
     'pending:list',
     [],
-    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms', 'meetings', 'agent_tasks']
+    [
+      'pending',
+      'tasks',
+      'people',
+      'interactions',
+      'notes',
+      'comms',
+      'meetings',
+      'agent_tasks',
+      'calendar_events'
+    ]
   )
   const [snoozeKey, setSnoozeKey] = useState<string | null>(null)
 
@@ -119,7 +132,8 @@ export function PendingView({
 
   const open = (item: PendingItem): void => {
     if (item.kind === 'followup') onOpenPerson(item.id)
-    else if (item.kind === 'meeting') onOpenCalendar(item.at ? new Date(item.at) : new Date())
+    else if (item.kind === 'meeting' || item.kind === 'invite')
+      onOpenCalendar(item.at ? new Date(item.at) : new Date())
     else onNavigate(KIND_VIEW[item.kind] ?? 'today')
   }
 
@@ -140,6 +154,27 @@ export function PendingView({
       label: 'Send discarded',
       commit: () => void api.invoke('comms:discardOutbox', item.id)
     })
+  }
+
+  // outward-facing (the organizer is notified), so no undo — the answer can
+  // be changed any time from the event editor
+  const respond = (item: PendingItem, response: RsvpResponse): void => {
+    void api
+      .invoke('calendar:respond', item.id, response)
+      .then(() => {
+        const verb =
+          response === 'accepted' ? 'Accepted' : response === 'declined' ? 'Declined' : 'Tentative'
+        toast({ variant: 'success', text: `${verb} — ${item.title}` })
+      })
+      .catch((err) => {
+        toast({
+          variant: 'error',
+          text: 'RSVP failed',
+          detail: err instanceof Error ? err.message : String(err),
+          timeoutMs: 6000
+        })
+        reload()
+      })
   }
 
   const summarize = (item: PendingItem): void => {
@@ -263,6 +298,13 @@ export function PendingView({
                     )}
                     {item.kind === 'meeting' && item.status === 'ready' && (
                       <RowAction onClick={() => summarize(item)}>summarize</RowAction>
+                    )}
+                    {item.kind === 'invite' && (
+                      <>
+                        <RowAction onClick={() => respond(item, 'accepted')}>accept</RowAction>
+                        <RowAction onClick={() => respond(item, 'tentative')}>maybe</RowAction>
+                        <RowAction onClick={() => respond(item, 'declined')}>decline</RowAction>
+                      </>
                     )}
                     <RowAction onClick={() => setSnoozeKey(item.key)}>snooze</RowAction>
                     <RowAction onClick={() => dismiss(item)}>dismiss</RowAction>

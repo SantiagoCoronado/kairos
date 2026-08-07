@@ -35,9 +35,10 @@ export class AgentTaskRunner {
     private db: DbDriver,
     private onMutate: (entity: DbEntity) => void,
     /** deep-link a notification click into the renderer (nav:goto) */
-    private onNavigate: (view: 'automations', id?: string) => void
+    private onNavigate: (view: 'automations', id?: string) => void,
+    hooks: import('./agent').ToolHooks = {}
   ) {
-    this.server = buildKairosSdkServer(db, onMutate)
+    this.server = buildKairosSdkServer(db, onMutate, hooks)
   }
 
   /** queue a task for execution; no-op when it is already queued or running */

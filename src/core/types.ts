@@ -275,6 +275,9 @@ export interface CalendarAttendee {
   self?: boolean
 }
 
+/** an answer to an invitation — the self-attendee's responseStatus */
+export type RsvpResponse = 'accepted' | 'declined' | 'tentative'
+
 /**
  * Timed events: start_at/end_at are UTC ISO datetimes; `timezone` (IANA) is
  * captured at create and used only when pushing to Google. All-day events:

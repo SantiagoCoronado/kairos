@@ -32,7 +32,7 @@ for (const tool of buildToolDefs(db, { dataDir, onMutate: () => {} })) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (args: any) => {
       try {
-        const result = tool.handler(args)
+        const result = await tool.handler(args)
         return { content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }] }
       } catch (err) {
         return {

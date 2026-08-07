@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Repeat, Trash2, Video, X } from 'lucide-react'
-import type { CalendarAttendee, CalendarCalendar, CalendarEventRecord } from '../../../../core/types'
+import type {
+  CalendarAttendee,
+  CalendarCalendar,
+  CalendarEventRecord,
+  RsvpResponse
+} from '../../../../core/types'
 import type { AttendeeSuggestion } from '../../../../shared/ipc-contract'
 import { api } from '../../lib/api'
 import { MeetingSection } from '../meeting/MeetingSection'
@@ -62,12 +67,33 @@ export function EventEditor({
   const [wantMeet, setWantMeet] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [rsvpBusy, setRsvpBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [meetUrl, setMeetUrl] = useState<string | null>(null)
 
   const calendar = calendars.find((c) => c.id === calendarId)
   const isGoogle = Boolean(calendar?.account_id)
   const canMove = !existing?.google_event_id
+  // Google stamps `self` on our attendee entry when the event syncs down —
+  // its presence means this is an invitation we can answer (organizer-owned
+  // events list us as accepted, and the buttons just show that state)
+  const selfEntry = existing?.google_event_id ? attendees.find((a) => a.self) : undefined
+
+  const rsvp = (response: RsvpResponse): void => {
+    if (!existing) return
+    setRsvpBusy(true)
+    setError(null)
+    void api
+      .invoke('calendar:respond', existing.id, response)
+      .then(() => {
+        setAttendees((prev) => prev.map((a) => (a.self ? { ...a, responseStatus: response } : a)))
+        setRsvpBusy(false)
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err))
+        setRsvpBusy(false)
+      })
+  }
 
   const addAttendee = (email: string, displayName?: string): void => {
     const clean = email.trim().replace(/,$/, '')
@@ -423,6 +449,33 @@ export function EventEditor({
             </p>
           )}
         </div>
+
+        {/* our answer to an invitation — works on recurring instances too
+            (it answers the whole series), so not gated by readOnlyRecurring */}
+        {selfEntry && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-faint mr-1">
+              Your response{readOnlyRecurring ? ' (whole series)' : ''}
+            </span>
+            {(
+              [
+                ['accepted', 'Accept'],
+                ['tentative', 'Maybe'],
+                ['declined', 'Decline']
+              ] as const
+            ).map(([value, label]) => (
+              <Button
+                key={value}
+                variant={selfEntry.responseStatus === value ? 'accent' : 'ghost'}
+                className="text-[11.5px]"
+                disabled={rsvpBusy}
+                onClick={() => selfEntry.responseStatus !== value && rsvp(value)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        )}
 
         {/* conferencing */}
         <div className="flex items-center gap-1.5">

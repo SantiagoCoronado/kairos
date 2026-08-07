@@ -17,7 +17,7 @@ import * as agentTasksRepo from '../core/repo/agent-tasks'
 import { AgentTaskRunner, parseTaskDraft } from './chat/task-runner'
 import { smartCapture, smartCaptureInstruct } from './chat/smart-capture'
 import { emitAppEvent, onAppEvent } from './events'
-import type { AppEventName } from '../core/types'
+import type { AppEventName, RsvpResponse } from '../core/types'
 import * as projects from '../core/repo/projects'
 import * as people from '../core/repo/people'
 import * as interactions from '../core/repo/interactions'
@@ -249,10 +249,19 @@ export function registerIpc(): void {
   handle('notes:labels', () => notes.listLabels(db))
   handle('notes:dueCount', () => notes.dueNoteCount(db))
 
+  // reads the module-level manager at call time — the chat stack is built
+  // before the CalendarSyncManager exists
+  const respondInvite = async (eventId: string, response: RsvpResponse): Promise<void> => {
+    if (!calendarManager) throw new Error('calendar sync is not running')
+    await calendarManager.respond(eventId, response)
+    broadcast('db:changed', { entity: 'pending' })
+  }
+
   const runner = new AgentTaskRunner(
     db,
     (entity) => broadcast('db:changed', { entity }),
-    (view, id) => broadcast('nav:goto', { view, id })
+    (view, id) => broadcast('nav:goto', { view, id }),
+    { respondInvite }
   )
   taskRunner = runner
 
@@ -568,6 +577,8 @@ export function registerIpc(): void {
     calManager.pokePush()
   })
   handle('calendarEvents:addMeet', (id) => calManager.addMeet(id))
+  // same path the calendar_respond tool uses (also refreshes Pending)
+  handle('calendar:respond', (eventId, response) => respondInvite(eventId, response))
   handle('calendar:calendars', () => calendarRepo.listCalendars(db))
   handle('calendar:setVisible', (calendarId, visible) => {
     calendarRepo.setCalendarVisible(db, calendarId, visible)
@@ -833,7 +844,8 @@ export function registerIpc(): void {
   const chat = new ChatManager(
     db,
     (event) => broadcast('chat:event', event),
-    (entity) => broadcast('db:changed', { entity })
+    (entity) => broadcast('db:changed', { entity }),
+    { respondInvite }
   )
   handle('chat:send', (localSessionId, text) => chat.send(localSessionId, text))
   handle('chat:attach', () => attachViaDialog())

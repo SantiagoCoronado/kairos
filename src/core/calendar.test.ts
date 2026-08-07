@@ -389,3 +389,63 @@ describe('remote apply + full-sync reconciliation', () => {
     expect(cal.listDirtyEvents(db, accountId).map((e) => e.title)).toEqual(['first', 'second'])
   })
 })
+
+describe('RSVP helpers', () => {
+  const guests = (): import('./types').CalendarAttendee[] => [
+    { email: 'boss@example.com', organizer: true, responseStatus: 'accepted' },
+    { email: 'peer@example.com', responseStatus: 'tentative' },
+    { email: 'me@gmail.com', self: true, responseStatus: 'needsAction' }
+  ]
+
+  it('applyRsvp changes only the self entry and carries everyone else through', () => {
+    const next = cal.applyRsvp(guests(), 'me@gmail.com', 'accepted')!
+    expect(next.find((a) => a.self)!.responseStatus).toBe('accepted')
+    expect(next.find((a) => a.organizer)!.responseStatus).toBe('accepted')
+    expect(next.find((a) => a.email === 'peer@example.com')!.responseStatus).toBe('tentative')
+  })
+
+  it('applyRsvp falls back to a case-insensitive email match and reports strangers', () => {
+    const noFlag = guests().map(({ self: _self, ...a }) => a)
+    const next = cal.applyRsvp(noFlag, 'me@gmail.com', 'declined')!
+    expect(next.find((a) => a.email === 'me@gmail.com')!.responseStatus).toBe('declined')
+    expect(cal.applyRsvp(noFlag, 'stranger@example.com', 'declined')).toBeUndefined()
+  })
+
+  it('applySelfResponseToSeries updates every instance without dirtying the rows', () => {
+    const { calendarId } = googleCalendar()
+    const seed = (gid: string, day: string): void =>
+      cal.applyRemoteEvent(db, calendarId, {
+        google_event_id: gid,
+        etag: `etag-${gid}`,
+        recurring_event_id: 'rec-1',
+        title: 'standup',
+        description: null,
+        location: null,
+        start_at: `${day}T09:00:00Z`,
+        end_at: `${day}T09:15:00Z`,
+        all_day: false,
+        timezone: null,
+        color: null,
+        attendees: guests(),
+        conferencing_url: null,
+        status: 'confirmed'
+      })
+    seed('g-a', '2026-07-02')
+    seed('g-b', '2026-07-09')
+
+    const changed = cal.applySelfResponseToSeries(db, calendarId, 'rec-1', 'me@gmail.com', 'accepted', T0)
+    expect(changed).toBe(2)
+    for (const gid of ['g-a', 'g-b']) {
+      const row = db.get<{ id: string }>(
+        'SELECT id FROM calendar_events WHERE google_event_id = ?',
+        gid
+      )!
+      const ev = cal.getEvent(db, row.id)!
+      expect(ev.attendees.find((a) => a.self)!.responseStatus).toBe('accepted')
+      // not dirtied: the change already lives on Google; etag cleared so the
+      // next pull re-syncs the instances unconditionally
+      expect(ev.sync_status).toBe('synced')
+      expect(ev.etag).toBeNull()
+    }
+  })
+})

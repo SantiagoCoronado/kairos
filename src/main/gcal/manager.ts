@@ -5,10 +5,17 @@
 // to Google. Conflict policy: last-write-wins, remote preferred — pushes carry
 // If-Match etags and a 412 re-fetches the remote copy over the local edit.
 import type { DbDriver } from '../../core/driver'
-import type { CalendarAccount, CalendarCalendar, CalendarEventRecord, DbEntity } from '../../core/types'
+import type {
+  CalendarAccount,
+  CalendarCalendar,
+  CalendarEventRecord,
+  DbEntity,
+  RsvpResponse
+} from '../../core/types'
 import type { CalendarSyncEvent } from '../../shared/ipc-contract'
 import * as repo from '../../core/repo/calendar'
 import { newId } from '../../core/ids'
+import type { GoogleEvent } from './api'
 import {
   connectGcal,
   deleteEventRemote,
@@ -354,6 +361,69 @@ export class CalendarSyncManager {
       }
       throw err
     }
+  }
+
+  // ---------- RSVP ----------
+
+  /**
+   * Answer an invitation: patch our attendee entry's responseStatus on Google.
+   * Direct remote write, not the dirty-row drain — a drain push sends the full
+   * event body, and RSVP must touch nothing but our own answer. The fresh
+   * get-then-patch keeps other attendees' RSVPs current (a patch replaces the
+   * whole attendees array) and carries the freshest etag.
+   *
+   * A recurring instance answers the whole SERIES (patching the parent event),
+   * matching what Google's own UI does by default — Kairos stores only
+   * expanded instances, so per-occurrence RSVP has no local anchor anyway.
+   */
+  async respond(eventId: string, response: RsvpResponse): Promise<void> {
+    const event = repo.getEvent(this.db, eventId)
+    if (!event) throw new Error('event not found')
+    const cal = repo.getCalendar(this.db, event.calendar_id)
+    if (!cal?.account_id || !cal.google_calendar_id || !event.google_event_id)
+      throw new Error('RSVP needs an invitation on a synced Google calendar')
+    const account = repo.getCalendarAccount(this.db, cal.account_id)
+    if (!account) throw new Error('calendar account missing')
+
+    const targetId = event.recurring_event_id ?? event.google_event_id
+    const remote = await getEventRemote(this.db, account, cal.google_calendar_id, targetId)
+    const attendees = repo.applyRsvp(remote.attendees ?? [], account.external_id, response)
+    if (!attendees) throw new Error('this Google account is not on the guest list')
+
+    let patched: GoogleEvent
+    try {
+      patched = await patchEvent(
+        this.db,
+        account,
+        cal.google_calendar_id,
+        targetId,
+        { attendees },
+        // organizer gets notified of the answer, like responding in Google's UI
+        { etag: remote.etag, sendUpdates: true }
+      )
+    } catch (err) {
+      if (err instanceof GcalConflict)
+        throw new Error('the event just changed on Google — try again')
+      if (err instanceof GcalNotFound || err instanceof GcalGone)
+        throw new Error('this event no longer exists on Google')
+      throw err
+    }
+
+    // reflect locally without dirtying: the change already lives remotely
+    if (event.recurring_event_id) {
+      repo.applySelfResponseToSeries(
+        this.db,
+        cal.id,
+        event.recurring_event_id,
+        account.external_id,
+        response
+      )
+      // instance etags are stale now — reconcile soon
+      this.pokePull()
+    } else {
+      repo.applyRemoteEvent(this.db, cal.id, googleEventToRemote(patched))
+    }
+    this.onDbChanged('calendar_events')
   }
 
   // ---------- Google Meet ----------

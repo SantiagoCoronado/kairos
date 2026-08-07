@@ -24,6 +24,7 @@ import * as interactions from '../core/repo/interactions'
 import * as followups from '../core/repo/followups'
 import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
+import { pendingItems, pendingCount } from '../core/repo/pending'
 import { composeBriefing } from '../core/briefing'
 import { DEFAULT_VOICE_ID, listVoices, synthesize, transcribe } from './tts/elevenlabs'
 import { executeCapture } from '../core/capture'
@@ -436,6 +437,9 @@ export function registerIpc(): void {
   handle('krs:tasks', (krId) => objectives.tasksForKr(db, krId))
 
   handle('today:get', () => todayAgenda(db))
+
+  handle('pending:list', () => pendingItems(db))
+  handle('pending:count', () => pendingCount(db))
 
   handle('calendar:today', () => calendarToday())
 

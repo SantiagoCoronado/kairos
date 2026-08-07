@@ -11,6 +11,7 @@ import * as agentTasks from './repo/agent-tasks'
 import * as projects from './repo/projects'
 import * as objectives from './repo/objectives'
 import { todayAgenda } from './repo/today'
+import { pendingItems } from './repo/pending'
 import { exportMarkdown } from './export/markdown'
 import { readMemory, saveMemory } from './memory'
 import * as comms from './repo/comms'
@@ -615,6 +616,13 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
         'The Today dashboard payload: overdue tasks, tasks due today, follow-ups due, active objectives with progress.',
       schema: {},
       handler: () => todayAgenda(db)
+    },
+    {
+      name: 'pending_inbox',
+      description:
+        'Everything currently pending: overdue/due-today tasks, follow-ups due, note reminders due, and unread comms threads (action-needed first, capped with a more_threads count). Items carry a stable key used by snooze/dismiss.',
+      schema: {},
+      handler: () => pendingItems(db)
     },
     {
       name: 'export_markdown',

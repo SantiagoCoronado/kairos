@@ -8,6 +8,7 @@ import { dismissToast, toast } from './lib/toast'
 import { getSnapshot as meetingSnapshot, startRecording } from './lib/meeting-store'
 import { RECORD_PROMPT_TOAST_MS, recordPromptToast } from './lib/meeting-ui'
 import { TodayView } from './views/Today'
+import { PendingView } from './views/Pending'
 import { InboxView } from './views/Inbox'
 import { PeopleView } from './views/People'
 import { TasksView } from './views/Tasks'
@@ -28,6 +29,7 @@ const promptToasts = new Map<string, number>()
 const SIDEBAR_KEY = 'kairos.sidebarHidden'
 const VIEW_ORDER: ViewId[] = [
   'today',
+  'pending',
   'inbox',
   'people',
   'tasks',
@@ -258,6 +260,7 @@ export default function App(): React.JSX.Element {
         )}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {commonViews}
+          {view === 'pending' && <PendingView onNavigate={setView} onOpenPerson={openPerson} />}
           {view === 'tasks' && <TasksView />}
           {view === 'objectives' && <ObjectivesView />}
           {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}

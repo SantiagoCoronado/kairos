@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Bell } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useResizableWidth, ResizeHandle } from './ResizeHandle'
 import { useInvoke } from '../lib/api'
@@ -7,6 +7,7 @@ import { useTerminalAvailable } from '../lib/mobile'
 
 export type ViewId =
   | 'today'
+  | 'pending'
   | 'inbox'
   | 'people'
   | 'tasks'
@@ -44,6 +45,7 @@ const SIDEBAR_W = { def: 208, min: 160, max: 320 }
 
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
+  { id: 'pending', label: 'Pending', icon: Bell },
   { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'people', label: 'People', icon: Users },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare },
@@ -66,6 +68,11 @@ export function Sidebar({
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
+  const { data: pendingTotal } = useInvoke(
+    'pending:count',
+    [],
+    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms']
+  )
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
   // terminal is denied over remote access unless the user opted in — don't
@@ -95,6 +102,11 @@ export function Sidebar({
           >
             <Icon size={15} strokeWidth={1.75} />
             <span className="text-[13px] flex-1">{label}</span>
+            {id === 'pending' && (pendingTotal ?? 0) > 0 && (
+              <span className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
+                {pendingTotal! > 99 ? '99+' : pendingTotal}
+              </span>
+            )}
             {id === 'inbox' && (unread ?? 0) > 0 && (
               <span className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
                 {unread! > 99 ? '99+' : unread}

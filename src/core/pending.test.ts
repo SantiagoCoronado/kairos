@@ -481,3 +481,35 @@ describe('failure-state sources', () => {
     expect(pendingItems(db, T0).items.map((i) => i.key)).toEqual(['outbox:ob-1'])
   })
 })
+
+describe('review round: danger persistence and run cap', () => {
+  it('danger persists through markAllSeen — glancing is not fixing', () => {
+    db.run(
+      `INSERT INTO comms_outbox (id, account_id, provider, to_json, body_text, status, error, source, created_at)
+       VALUES ('ob-1', ?, 'whatsapp', '{}', 'hola', 'failed', 'boom', 'app', ?)`,
+      accountId,
+      daysAgo(1).toISOString()
+    )
+    expect(pendingItems(db, T0)).toMatchObject({ total: 1, unseen: 1, danger: 1 })
+    markAllSeen(db, T0)
+    // seen zeroes the unseen count but the failure stays actionable: the
+    // sidebar renders on unseen || danger, so the badge must stay lit
+    expect(pendingItems(db, T0)).toMatchObject({ total: 1, unseen: 0, danger: 1 })
+    const item = pendingItems(db, T0).items[0]
+    expect(item.status).toBe('failed')
+    expect(item.provider).toBe('whatsapp')
+  })
+
+  it('runs are capped, badge and list share the bound', () => {
+    const task = agentTasks.createAgentTask(db, { name: 't', prompt: 'p' }, T0)
+    for (let i = 0; i < 35; i++) {
+      const r = agentTasks.createRun(db, task.id, null, new Date(T0.getTime() - i * 60_000))
+      agentTasks.finishRun(db, r.id, { status: 'success' }, new Date(T0.getTime() - i * 60_000))
+    }
+    const payload = pendingItems(db, T0)
+    expect(payload.items.filter((i) => i.kind === 'agent_run')).toHaveLength(30)
+    expect(unseenRunCount(db, T0)).toBe(30)
+    markAllSeen(db, T0)
+    expect(unseenRunCount(db, T0)).toBe(0)
+  })
+})

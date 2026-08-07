@@ -255,13 +255,13 @@ export function PendingView({
                     )}
                     {item.kind === 'outbox' &&
                       item.provider === 'whatsapp' &&
-                      item.fingerprint.startsWith('failed') && (
+                      item.status === 'failed' && (
                         <RowAction onClick={() => retrySend(item)}>retry</RowAction>
                       )}
                     {item.kind === 'outbox' && (
                       <RowAction onClick={() => discardSend(item)}>discard</RowAction>
                     )}
-                    {item.kind === 'meeting' && item.tone === 'muted' && (
+                    {item.kind === 'meeting' && item.status === 'ready' && (
                       <RowAction onClick={() => summarize(item)}>summarize</RowAction>
                     )}
                     <RowAction onClick={() => setSnoozeKey(item.key)}>snooze</RowAction>

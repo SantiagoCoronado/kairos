@@ -670,6 +670,10 @@ export interface PendingItem {
   /** outbox items only: send provider — gates the duplicate-safe Retry
    *  (WhatsApp tracks delivered units; a gmail retry could re-send) */
   provider?: string
+  /** source-domain status, carried explicitly for action gating (outbox
+   *  retry, meeting summarize) — never parse it out of the fingerprint,
+   *  whose composition is the aggregator's private business */
+  status?: string
 }
 
 export interface PendingPayload {

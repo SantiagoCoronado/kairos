@@ -97,7 +97,10 @@ export function Sidebar({
     const t = setInterval(reloadPending, 60_000)
     return () => clearInterval(t)
   }, [reloadPending])
-  const pendingTotal = pending?.unseen
+  // seen-style semantics are right for threads and runs but wrong for
+  // failures, which stay actionable until retried/discarded — a danger item
+  // keeps the badge lit even after you've glanced at it
+  const pendingBadge = pending ? (pending.unseen > 0 ? pending.unseen : pending.danger) : 0
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
   // terminal is denied over remote access unless the user opted in — don't
@@ -129,7 +132,7 @@ export function Sidebar({
           >
             <Icon size={15} strokeWidth={1.75} />
             <span className="text-[13px] flex-1">{label}</span>
-            {id === 'pending' && (pendingTotal ?? 0) > 0 && (
+            {id === 'pending' && pendingBadge > 0 && (
               <span
                 title={
                   (pending?.danger ?? 0) > 0
@@ -140,7 +143,7 @@ export function Sidebar({
                   (pending?.danger ?? 0) > 0 ? 'bg-danger/20 text-danger' : 'bg-accent/20 text-accent'
                 }`}
               >
-                {pendingTotal! > 99 ? '99+' : pendingTotal}
+                {pendingBadge > 99 ? '99+' : pendingBadge}
               </span>
             )}
             {id === 'inbox' && (unread ?? 0) > 0 && (

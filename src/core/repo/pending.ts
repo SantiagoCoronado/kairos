@@ -21,6 +21,11 @@ const STUCK_OUTBOX_MS = 10 * 60_000
 const UNSUMMARIZED_GRACE_MS = 15 * 60_000
 /** finished agent runs surface for review this long, then age out */
 const RUN_WINDOW_MS = 48 * 60 * 60_000
+/** newest runs shown within the window — same "not a second mail client"
+ *  argument as THREAD_CAP; hourly automations would otherwise put hundreds
+ *  of rows here. All run paths (items, unseen count) share the bound, so
+ *  the badge and the list stay consistent. */
+const RUN_CAP = 30
 
 const snippet = (s: string | null): string => (s ?? '').replace(/\s+/g, ' ').trim().slice(0, 120)
 
@@ -190,7 +195,8 @@ function outboxItems(db: DbDriver, now: Date): PendingItem[] {
       fingerprint: `${o.status}:${o.error ?? ''}`,
       // retry is only duplicate-safe where delivered units are tracked
       // per-message (WhatsApp); a gmail ambiguous accept would re-send
-      provider: o.provider
+      provider: o.provider,
+      status: o.status
     }
   })
 }
@@ -204,7 +210,8 @@ function meetingItems(db: DbDriver, now: Date): PendingItem[] {
     subtitle: m.error ?? 'processing failed',
     tone: 'danger' as const,
     at: m.started_at,
-    fingerprint: `${m.status}:${m.summarized_at ?? ''}`
+    fingerprint: `${m.status}:${m.summarized_at ?? ''}`,
+    status: m.status
   }))
   // summarize failures leave status='ready' with summarized_at NULL and no
   // error — this predicate is their only trace outside a warn log line
@@ -219,7 +226,8 @@ function meetingItems(db: DbDriver, now: Date): PendingItem[] {
       subtitle: 'ready — not summarized',
       tone: 'muted' as const,
       at: m.started_at,
-      fingerprint: `${m.status}:${m.summarized_at ?? ''}`
+      fingerprint: `${m.status}:${m.summarized_at ?? ''}`,
+      status: m.status
     }))
   return [...errored, ...unsummarized]
 }
@@ -239,7 +247,8 @@ function runItems(db: DbDriver, now: Date): PendingItem[] {
     `SELECT r.id, r.status, r.finished_at, r.error, r.result, t.name AS task_name
      FROM agent_task_runs r JOIN agent_tasks t ON t.id = r.task_id
      WHERE r.finished_at IS NOT NULL AND r.finished_at > ?
-     ORDER BY r.finished_at DESC`,
+     ORDER BY r.finished_at DESC
+     LIMIT ${RUN_CAP}`,
     cutoff
   )
   return rows.map((r) => ({
@@ -258,21 +267,24 @@ function runItems(db: DbDriver, now: Date): PendingItem[] {
     at: r.finished_at,
     // a run is immutable once finished — dismissing one is final, and the
     // row ages out of the window anyway
-    fingerprint: r.finished_at
+    fingerprint: r.finished_at,
+    status: r.status
   }))
 }
 
-/** The non-thread sources, pre-overlay. */
-function fixedItems(db: DbDriver, now: Date): PendingItem[] {
-  const today = localDate(now)
-  return [
-    ...outboxItems(db, now),
-    ...taskItems(db, today),
-    ...followupItems(db, now),
-    ...reminderItems(db, now),
-    ...meetingItems(db, now),
-    ...runItems(db, now)
-  ]
+/** The non-thread sources, pre-overlay. `only` scopes which sources are even
+ *  computed — the Automations hot path (agentTasks:activity fires per tool
+ *  call) must not pay for six queries it throws away. */
+function fixedItems(db: DbDriver, now: Date, only?: PendingKind): PendingItem[] {
+  const want = (k: PendingKind): boolean => !only || only === k
+  const out: PendingItem[] = []
+  if (want('outbox')) out.push(...outboxItems(db, now))
+  if (want('task')) out.push(...taskItems(db, localDate(now)))
+  if (want('followup')) out.push(...followupItems(db, now))
+  if (want('reminder')) out.push(...reminderItems(db, now))
+  if (want('meeting')) out.push(...meetingItems(db, now))
+  if (want('agent_run')) out.push(...runItems(db, now))
+  return out
 }
 
 function loadOverlays(db: DbDriver): Map<string, OverlayRow> {
@@ -413,7 +425,13 @@ export function undismissItem(db: DbDriver, key: string, now: Date = new Date())
  *  `onlyKind` scopes the stamp — the Automations view marks agent_run items
  *  seen without touching anyone else's watermarks. Returns the stamped keys
  *  so callers can cross-notify exactly when something changed (e.g. Pending
- *  stamping a run must refresh the Automations badge, and only then). */
+ *  stamping a run must refresh the Automations badge, and only then).
+ *
+ *  INVARIANT: cross-notify loop-safety rests on every fingerprint being
+ *  stable between writes — a stamp at fingerprint F must find nothing to
+ *  stamp on the next pass. A time-derived fingerprint (anything computed
+ *  from `now`) would re-stamp forever and turn the "only when stamped"
+ *  broadcast guard into an infinite loop. */
 export function markAllSeen(
   db: DbDriver,
   now: Date = new Date(),
@@ -423,8 +441,7 @@ export function markAllSeen(
   const overlays = loadOverlays(db)
   const stamp: { key: string; fp: string }[] = []
 
-  for (const it of fixedItems(db, now)) {
-    if (onlyKind && it.kind !== onlyKind) continue
+  for (const it of fixedItems(db, now, onlyKind)) {
     const o = overlays.get(it.key)
     if (hiddenBy(o, it.fingerprint, ts)) continue // not on screen, stays unseen
     if (o?.seen_at && o.fingerprint === it.fingerprint) continue

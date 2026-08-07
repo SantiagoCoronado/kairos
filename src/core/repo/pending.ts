@@ -11,10 +11,6 @@ import { followupsDue } from './followups'
 
 /** unread threads shown before the "N more in Inbox" tail row */
 const THREAD_CAP = 15
-/** materialization bound: headroom over the cap so overlay-hidden rows can't
- *  starve the visible list; the badge total never depends on this (it's a
- *  SQL COUNT), only which rows are available for display does */
-const THREAD_FETCH = 50
 
 interface OverlayRow {
   item_key: string
@@ -92,9 +88,21 @@ function reminderItems(db: DbDriver, now: Date): PendingItem[] {
 
 const UNREAD_THREAD = `sync_enabled = 1 AND is_archived = 0 AND unread_count > 0`
 
-/** Unread, sync-enabled, unarchived threads — action-needed first. Bounded:
- *  only THREAD_FETCH rows are materialized; totals come from SQL counts. */
-function threadItems(db: DbDriver): PendingItem[] {
+/** THE copy of the thread overlay-visibility predicate: hidden while snoozed,
+ *  or while dismissed with an unchanged fingerprint (= last_message_at).
+ *  Fetch and count both use it, so LIMIT applies to *visible* rows and the
+ *  materialized list can never go empty while the count says otherwise.
+ *  Takes one `?` (now as ISO). */
+const THREAD_VISIBLE = `NOT EXISTS (
+  SELECT 1 FROM pending_overlay o
+  WHERE o.item_key = 'thread:' || t.id
+    AND ((o.snoozed_until IS NOT NULL AND o.snoozed_until > ?)
+      OR (o.dismissed_at IS NOT NULL
+          AND o.fingerprint = COALESCE(t.last_message_at, '')))
+)`
+
+/** Visible unread threads — action-needed first, capped for display. */
+function threadItems(db: DbDriver, ts: string): PendingItem[] {
   const rows = db.all<{
     id: string
     title: string
@@ -102,10 +110,11 @@ function threadItems(db: DbDriver): PendingItem[] {
     last_message_at: string | null
     labels: string
   }>(
-    `SELECT id, title, snippet, last_message_at, labels FROM comms_threads
-     WHERE ${UNREAD_THREAD}
+    `SELECT id, title, snippet, last_message_at, labels FROM comms_threads t
+     WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE}
      ORDER BY instr(',' || labels || ',', ',action-needed,') > 0 DESC, last_message_at DESC
-     LIMIT ${THREAD_FETCH}`
+     LIMIT ${THREAD_CAP}`,
+    ts
   )
   return rows.map((r) => {
     const actionNeeded = r.labels.split(',').includes('action-needed')
@@ -124,20 +133,12 @@ function threadItems(db: DbDriver): PendingItem[] {
   })
 }
 
-/** Exact count of unread threads the overlay is not hiding — the predicate
- *  must mirror `visible()` below; keep them in lockstep. */
+/** Exact count of visible unread threads (uncapped). */
 function visibleThreadCount(db: DbDriver, ts: string): number {
   return (
     db.get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM comms_threads t
-       WHERE ${UNREAD_THREAD}
-         AND NOT EXISTS (
-           SELECT 1 FROM pending_overlay o
-           WHERE o.item_key = 'thread:' || t.id
-             AND ((o.snoozed_until IS NOT NULL AND o.snoozed_until > ?)
-               OR (o.dismissed_at IS NOT NULL
-                   AND o.fingerprint = COALESCE(t.last_message_at, '')))
-         )`,
+       WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE}`,
       ts
     )?.n ?? 0
   )
@@ -148,8 +149,8 @@ export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPaylo
   const today = localDate(now)
 
   const fixed = [...taskItems(db, today), ...followupItems(db, now), ...reminderItems(db, now)]
-  const threads = threadItems(db)
-
+  // threads apply the overlay in SQL (THREAD_VISIBLE); only the small fixed
+  // sources need the JS pass
   const overlays = new Map<string, OverlayRow>(
     db.all<OverlayRow>('SELECT * FROM pending_overlay').map((r) => [r.item_key, r])
   )
@@ -162,7 +163,7 @@ export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPaylo
   }
 
   const visFixed = fixed.filter(visible)
-  const shownThreads = threads.filter(visible).slice(0, THREAD_CAP)
+  const shownThreads = threadItems(db, ts)
   const threadTotal = visibleThreadCount(db, ts)
   return {
     items: [...visFixed, ...shownThreads],

@@ -111,8 +111,10 @@ type, new `DbEntity` member `'pending'`.
   plain unread is the baseline signal. Cap at ~15 with an "open Inbox" tail row
   so Pending doesn't become a second mail client.
 - Overlay filtering per the semantics above (table exists; writes and GC come
-  in Phase 2). Thread materialization is bounded (LIMIT 50); totals come from
-  SQL `COUNT`s so large mailboxes never fully materialize.
+  in Phase 2). For threads the overlay predicate lives in SQL (one copy,
+  shared by fetch and count): the display LIMIT applies to *visible* rows, so
+  large mailboxes never fully materialize and the list can never be empty
+  while the count is non-zero.
 - Co-located `pending.test.ts`: every source, ordering, cap, fingerprint values.
 
 **1.3 — IPC + MCP surface.** A single `pending:list` channel in

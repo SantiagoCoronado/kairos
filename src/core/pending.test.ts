@@ -179,6 +179,25 @@ describe('overlay', () => {
     expect(items.map((i) => i.key)).toEqual(['thread:a'])
   })
 
+  it('materializes visible threads even when dismissed rows dominate recency', () => {
+    // 60 unread, the 50 newest dismissed: the fetch bound applies to VISIBLE
+    // rows, so the 10 older pending threads must all render — never an empty
+    // section under a non-zero badge
+    const pad = (i: number): string => String(i).padStart(2, '0')
+    for (let i = 0; i < 60; i++)
+      seedThread(`t${pad(i)}`, { lastMessageAt: daysAgo(i).toISOString() })
+    for (let i = 0; i < 50; i++)
+      overlayRow(`thread:t${pad(i)}`, daysAgo(i).toISOString(), {
+        dismissed_at: T0.toISOString()
+      })
+    const payload = pendingItems(db, T0)
+    expect(payload.items.map((i) => i.id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `t${pad(50 + i)}`)
+    )
+    expect(payload.total).toBe(10)
+    expect(payload.more_threads).toBe(0)
+  })
+
   it('excludes overlay-hidden threads from total and more_threads (SQL count path)', () => {
     seedThread('kept', { lastMessageAt: '2026-06-30T10:00:00Z' })
     seedThread('dismissed', { lastMessageAt: '2026-06-29T10:00:00Z' })

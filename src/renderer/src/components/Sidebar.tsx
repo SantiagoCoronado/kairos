@@ -116,13 +116,13 @@ export function Sidebar({
         <SidebarToggle hidden={false} onToggle={onHide} />
       </div>
       <nav className="flex-1 px-2 py-2 space-y-0.5">
-        {nav.map(({ id, label, icon: Icon }) => (
+        {nav.map(({ id, label, icon: Icon }) => {
+          const slot = VIEW_ORDER.indexOf(id)
+          return (
           <button
             key={id}
             onClick={() => onNavigate(id)}
-            title={
-              VIEW_ORDER.indexOf(id) < 9 ? `${label} (⌘${VIEW_ORDER.indexOf(id) + 1})` : label
-            }
+            title={slot >= 0 && slot < 9 ? `${label} (⌘${slot + 1})` : label}
             className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-left transition-colors ${
               view === id ? 'bg-raised text-text' : 'text-muted hover:text-text hover:bg-raised/50'
             }`}
@@ -169,7 +169,8 @@ export function Sidebar({
               </span>
             )}
           </button>
-        ))}
+          )
+        })}
       </nav>
       <div className="px-4 py-3 border-t border-border flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-faint">

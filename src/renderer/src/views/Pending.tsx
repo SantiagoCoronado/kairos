@@ -64,12 +64,15 @@ export function PendingView({
         </p>
       </div>
 
-      {payload && payload.items.length === 0 && <EmptyState>Nothing needs you.</EmptyState>}
+      {payload && payload.total === 0 && <EmptyState>Nothing needs you.</EmptyState>}
 
       {payload &&
         SECTIONS.map(({ kind, title }) => {
           const items = payload.items.filter((i) => i.kind === kind)
-          if (items.length === 0) return null
+          // the thread section must survive having zero materialized rows as
+          // long as the count says threads exist — the tail row is the way out
+          const tail = kind === 'thread' && payload.more_threads > 0
+          if (items.length === 0 && !tail) return null
           const Icon = KIND_ICON[kind] ?? CheckSquare
           return (
             <Section key={kind} title={title}>
@@ -98,7 +101,7 @@ export function PendingView({
                   </span>
                 </button>
               ))}
-              {kind === 'thread' && payload.more_threads > 0 && (
+              {tail && (
                 <button
                   onClick={() => onNavigate('inbox')}
                   className="font-mono text-[10.5px] text-faint hover:text-muted py-1.5"

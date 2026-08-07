@@ -92,7 +92,8 @@ describe('composeBriefing', () => {
       failures: 2,
       invites: 0
     })
-    expect(text).toContain('Heads up: 2 failures need your attention — check Pending.')
+    // no "check Pending" pointer — the phone plays this too and has no Pending
+    expect(text).toContain('Heads up: 2 failures need your attention.')
     expect(text.indexOf('Heads up')).toBeLessThan(text.indexOf('Standup'))
     expect(text).not.toContain('Clear runway')
     expect(text).toContain("That's your day.")

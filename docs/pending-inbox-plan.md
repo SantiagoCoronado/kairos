@@ -276,17 +276,24 @@ Branch `feat/pending-inbox-polish`.
   bar sits at 5 tabs (6 with Terminal) and remote IPC already serves the
   channels, so placement can be revisited any time without plumbing work.
 - Notification deep links: the automation-finished notification lands on
-  `pending` instead of Automations — the run is there for review (opening
-  stamps its seen watermark), failures carry danger context, and the rest
-  of the triage queue is in frame. Reminder/comms/meeting notifications
-  keep their specific targets; an item-focused landing beats the queue when
-  the notification names one item.
+  `pending` carrying the run's item key — the view scrolls to and pulses
+  that row, so the link stays deep even though runs are the 7th section
+  and errors sort above fresh successes. Reminder/comms/meeting
+  notifications keep their specific targets; an item-focused landing beats
+  the queue when the notification names one item. DECISION: landing on
+  Pending stamps the whole visible queue seen, same as any other arrival —
+  "visible = seen" is one rule, not two classes of viewing; danger keeps
+  the badge lit and nothing is delisted.
 - Briefing: speaks only what the agenda lines can't already say — a
-  failure alarm ("Heads up: N failures need your attention — check
-  Pending") FIRST, before the calendar, and an invitations line after
-  follow-ups. Silent at zero; either suppresses the "clear runway" stoic
-  close. A raw pending total was rejected as double-counting the
-  due/follow-up lines.
+  failure alarm ("Heads up: N failures need your attention") FIRST, before
+  the calendar, and an invitations line after follow-ups. Silent at zero;
+  either suppresses the "clear runway" stoic close. A raw pending total
+  was rejected as double-counting the due/follow-up lines. No "check
+  Pending" pointer in the alarm: the briefing plays on the phone, where
+  Pending deliberately isn't. DECISION: an undismissed errored run repeats
+  the alarm on consecutive mornings (runs sit in the 48h window) — dismiss
+  IS the acknowledgement gesture; an alarm that self-silences unheard
+  would be worse.
 - Overlay GC hardening: `gcPendingOverlay()` boot sweep — the write-path GC
   only runs when the user triages, so rows for items that resolved during a
   quiet stretch would otherwise linger indefinitely.

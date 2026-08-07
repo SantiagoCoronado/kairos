@@ -34,8 +34,9 @@ export class AgentTaskRunner {
   constructor(
     private db: DbDriver,
     private onMutate: (entity: DbEntity) => void,
-    /** deep-link a notification click into the renderer (nav:goto) */
-    private onNavigate: (view: 'automations' | 'pending', id?: string) => void,
+    /** deep-link a notification click into the renderer (nav:goto); the id is
+     *  the pending item key to focus (`agent_run:<runId>`) */
+    private onNavigate: (view: 'pending', id?: string) => void,
     hooks: import('./agent').ToolHooks = {}
   ) {
     this.server = buildKairosSdkServer(db, onMutate, hooks)
@@ -100,7 +101,7 @@ export class AgentTaskRunner {
         error: 'Claude Code binary not found — set its path in Settings'
       })
       this.onMutate('agent_tasks')
-      this.notifyFinished(task, false, 'Claude Code binary not found')
+      this.notifyFinished(task, false, 'Claude Code binary not found', run.id)
       return
     }
 
@@ -193,7 +194,7 @@ export class AgentTaskRunner {
     )
 
     if (task.notify === 1 && !wasStopped) {
-      this.notifyFinished(task, !failed, failed ?? resultText)
+      this.notifyFinished(task, !failed, failed ?? resultText, run.id)
     }
 
     // chaining: a successful run kicks off the linked task (cycle-checked at save time)
@@ -203,7 +204,7 @@ export class AgentTaskRunner {
     }
   }
 
-  private notifyFinished(task: AgentTask, ok: boolean, detail: string): void {
+  private notifyFinished(task: AgentTask, ok: boolean, detail: string, runId: string): void {
     if (!Notification.isSupported()) return
     const n = new Notification({
       title: `${ok ? '✓' : '✗'} ${task.name}`,
@@ -216,9 +217,11 @@ export class AgentTaskRunner {
       win.focus()
       app.focus({ steal: true })
       // Pending is the better landing than Automations: the finished run is
-      // there for review (opening stamps its seen watermark), failures carry
-      // danger context, and everything else awaiting triage is in frame
-      this.onNavigate('pending')
+      // there for review, failures carry danger context, and everything else
+      // awaiting triage is in frame. The item key keeps the link DEEP — runs
+      // are the 7th section and errors sort above fresh successes, so without
+      // a focus target "it's in there somewhere" would be the actual UX.
+      this.onNavigate('pending', `agent_run:${runId}`)
     })
     n.show()
   }

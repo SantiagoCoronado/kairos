@@ -30,12 +30,15 @@ export function composeBriefing(
 ): string {
   const parts: string[] = [`${greeting(now)}. It's ${spokenDate(now)}.`]
 
-  // the alarm goes first — a failed send or errored run outranks the agenda
+  // The alarm goes first — a failed send or errored run outranks the agenda.
+  // No "check Pending" pointer: the briefing plays on the phone too, where
+  // Pending is (deliberately) not reachable — the fact is true and actionable
+  // on every surface, the view name only on one.
   if (pending.failures > 0) {
     parts.push(
       pending.failures === 1
-        ? 'Heads up: one failure needs your attention — check Pending.'
-        : `Heads up: ${pending.failures} failures need your attention — check Pending.`
+        ? 'Heads up: one failure needs your attention.'
+        : `Heads up: ${pending.failures} failures need your attention.`
     )
   }
 

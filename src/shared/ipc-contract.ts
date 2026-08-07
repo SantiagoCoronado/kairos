@@ -357,6 +357,8 @@ export interface IpcApi {
   /** re-dispatch a failed outbox row — SAME row, so units a prior attempt
    *  already delivered (delivered_json) are skipped, never duplicated */
   'comms:retryOutbox': (outboxId: string) => Promise<CommsSendResult>
+  /** drop an unsent outbox row for good (Pending's Discard; sent rows refuse) */
+  'comms:discardOutbox': (outboxId: string) => void
   'comms:syncNow': (accountId?: string) => void
   'comms:linkSender': (provider: CommsProvider, handle: string, personId: string) => void
   /** inverse of linkSender: drop the identity and clear person_id on its messages */
@@ -509,9 +511,6 @@ export interface AppSettings {
   elevenLabsApiKey: string | null
   /** ElevenLabs voice for TTS; null = first voice on the account */
   elevenLabsVoiceId: string | null
-  /** UI cursor, not a user preference: newest automation run already seen
-   *  in the Automations view (drives the sidebar unseen-runs badge) */
-  automationsSeenAt: string | null
   /** serve the UI over HTTP+WebSocket so a phone/browser can connect */
   remoteAccess: boolean
   /** bearer token required on the WebSocket handshake; generated on first enable */

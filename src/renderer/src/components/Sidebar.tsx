@@ -89,7 +89,7 @@ export function Sidebar({
   const { data: pending, reload: reloadPending } = useInvoke(
     'pending:list',
     [],
-    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms']
+    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms', 'meetings', 'agent_tasks']
   )
   // due-ness moves with the clock — same tick the Pending view runs, so the
   // badge can't lag the list when a reminder crosses its remind_at
@@ -130,7 +130,16 @@ export function Sidebar({
             <Icon size={15} strokeWidth={1.75} />
             <span className="text-[13px] flex-1">{label}</span>
             {id === 'pending' && (pendingTotal ?? 0) > 0 && (
-              <span className="min-w-4 h-4 px-1 rounded-full bg-accent/20 text-accent font-mono text-[10px] flex items-center justify-center">
+              <span
+                title={
+                  (pending?.danger ?? 0) > 0
+                    ? 'Something failed — a send, meeting, or automation run'
+                    : undefined
+                }
+                className={`min-w-4 h-4 px-1 rounded-full font-mono text-[10px] flex items-center justify-center ${
+                  (pending?.danger ?? 0) > 0 ? 'bg-danger/20 text-danger' : 'bg-accent/20 text-accent'
+                }`}
+              >
                 {pendingTotal! > 99 ? '99+' : pendingTotal}
               </span>
             )}

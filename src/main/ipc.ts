@@ -30,7 +30,8 @@ import {
   unsnoozeItem,
   dismissItem,
   undismissItem,
-  markAllSeen
+  markAllSeen,
+  unseenRunCount
 } from '../core/repo/pending'
 import { composeBriefing } from '../core/briefing'
 import { DEFAULT_VOICE_ID, listVoices, synthesize, transcribe } from './tts/elevenlabs'
@@ -292,30 +293,34 @@ export function registerIpc(): void {
   handle('agentTasks:usage', () => agentTasksRepo.usageByTask(db))
   handle('agentTasks:parse', (text) => parseTaskDraft(text))
 
-  // unseen-runs badge: while the Automations view is open every finished run
-  // is immediately "seen"; the marker persists in settings across restarts.
-  // activity fires on every agent_tasks broadcast (incl. per-tool-call), so
-  // the marker write is throttled — the live answer comes from the
-  // viewActive override, the file is only durability.
-  let automationsViewActive = false
-  let seenWriteAt = 0
-  const SEEN_WRITE_MIN_GAP_MS = 5000
-  const markAutomationsSeen = (force = false): void => {
-    if (!force && Date.now() - seenWriteAt < SEEN_WRITE_MIN_GAP_MS) return
-    seenWriteAt = Date.now()
-    saveSettings({ automationsSeenAt: new Date().toISOString() })
-  }
+  // Unseen-runs badge: the watermark now lives in pending_overlay per run
+  // (shared with the Pending inbox, so the two badges can never disagree) —
+  // the old settings.automationsSeenAt cursor is retired. Same TTL shape as
+  // the pending flag below: a vanished remote client expires instead of
+  // pinning "seen" forever; the Automations view re-arms from its tick.
+  const AUTOMATIONS_ACTIVE_TTL_MS = 90_000
+  let automationsViewActiveUntil = 0
+  const automationsViewActive = (): boolean => Date.now() < automationsViewActiveUntil
   handle('agentTasks:setViewActive', (active) => {
-    automationsViewActive = active
-    // both transitions: everything visible up to this moment counts as seen
-    markAutomationsSeen(true)
-    broadcast('db:changed', { entity: 'agent_tasks' })
+    const was = automationsViewActive()
+    automationsViewActiveUntil = active ? Date.now() + AUTOMATIONS_ACTIVE_TTL_MS : 0
+    // both transitions: every run visible up to this moment counts as seen
+    const stamped = markAllSeen(db, new Date(), 'agent_run')
+    if (was !== active) broadcast('db:changed', { entity: 'agent_tasks' })
+    // the runs just marked seen also count into the Pending badge — notify
+    // only when something actually changed, so this can't loop
+    if (stamped.length > 0) broadcast('db:changed', { entity: 'pending' })
   })
   handle('agentTasks:activity', () => {
-    if (automationsViewActive) markAutomationsSeen()
-    const counts = agentTasksRepo.activityCounts(db, getSettings().automationsSeenAt)
-    // open view = seen by definition, even between throttled marker writes
-    return automationsViewActive ? { ...counts, unseenFinished: 0 } : counts
+    if (automationsViewActive()) {
+      const stamped = markAllSeen(db, new Date(), 'agent_run')
+      if (stamped.length > 0) broadcast('db:changed', { entity: 'pending' })
+    }
+    return {
+      running: agentTasksRepo.runningCount(db),
+      // open view = seen by definition, even mid-burst
+      unseenFinished: automationsViewActive() ? 0 : unseenRunCount(db)
+    }
   })
 
   // event-triggered automations: count occurrences, fire on every Nth.
@@ -458,15 +463,22 @@ export function registerIpc(): void {
   const PENDING_ACTIVE_TTL_MS = 90_000
   let pendingViewActiveUntil = 0
   const pendingViewActive = (): boolean => Date.now() < pendingViewActiveUntil
+  // stamping a run seen here must also refresh the Automations badge — but
+  // only when something was actually stamped, so the cross-broadcast can't
+  // loop (the very next pass stamps nothing and stays silent)
+  const crossNotifyRuns = (stampedKeys: string[]): void => {
+    if (stampedKeys.some((k) => k.startsWith('agent_run:')))
+      broadcast('db:changed', { entity: 'agent_tasks' })
+  }
   handle('pending:list', () => {
-    if (pendingViewActive()) markAllSeen(db)
+    if (pendingViewActive()) crossNotifyRuns(markAllSeen(db))
     return pendingItems(db)
   })
   handle('pending:setViewActive', (active) => {
     const was = pendingViewActive()
     pendingViewActiveUntil = active ? Date.now() + PENDING_ACTIVE_TTL_MS : 0
     // both transitions: everything visible up to this moment counts as seen
-    markAllSeen(db)
+    crossNotifyRuns(markAllSeen(db))
     // transition-only broadcast — a periodic re-arm must not cause a reload storm
     if (was !== active) broadcast('db:changed', { entity: 'pending' })
   })
@@ -907,6 +919,10 @@ export function registerIpc(): void {
   })
   handle('comms:send', (input) => manager.sendNow(input))
   handle('comms:retryOutbox', (outboxId) => manager.retryOutbox(outboxId))
+  handle('comms:discardOutbox', (outboxId) => {
+    comms.deleteOutboxItem(db, outboxId)
+    broadcast('db:changed', { entity: 'comms' })
+  })
   handle('comms:syncNow', (accountId) => manager.syncNow(accountId))
   handle('comms:linkSender', (provider, handle_, personId) => {
     comms.linkHandleToPerson(db, provider, handle_.trim().toLowerCase(), personId)

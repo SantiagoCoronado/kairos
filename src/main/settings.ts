@@ -28,7 +28,6 @@ const DEFAULTS: Settings = {
   slackClientSecret: null,
   elevenLabsApiKey: null,
   elevenLabsVoiceId: null,
-  automationsSeenAt: null,
   remoteAccess: false,
   remoteToken: null,
   remotePort: 4699,

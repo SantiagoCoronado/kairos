@@ -1092,3 +1092,28 @@ export function requeueFailed(db: DbDriver, id: string): boolean {
     ).changes > 0
   )
 }
+
+/** Failed sends plus rows stuck in queued/sending past a grace window (the
+ *  drain loop normally empties within seconds; restart requeues sending →
+ *  queued) — the Pending inbox's outbox source. Thread title joined for a
+ *  human destination on slack/whatsapp, where to_json carries none. */
+export function listOutboxPending(
+  db: DbDriver,
+  now: Date = new Date(),
+  stuckAfterMs = 10 * 60_000
+): (OutboxItem & { thread_title: string | null })[] {
+  const cutoff = new Date(now.getTime() - stuckAfterMs).toISOString()
+  return db.all<OutboxItem & { thread_title: string | null }>(
+    `SELECT o.*, t.title AS thread_title FROM comms_outbox o
+     LEFT JOIN comms_threads t ON t.id = o.thread_id
+     WHERE o.status = 'failed' OR (o.status IN ('queued','sending') AND o.created_at < ?)
+     ORDER BY o.created_at DESC`,
+    cutoff
+  )
+}
+
+/** Drop an unsent outbox row for good (Pending's Discard). Sent rows are
+ *  history, not pending work — refuse to delete them. */
+export function deleteOutboxItem(db: DbDriver, id: string): boolean {
+  return db.run("DELETE FROM comms_outbox WHERE id = ? AND status != 'sent'", id).changes > 0
+}

@@ -270,15 +270,36 @@ accepting from the row updates Google and the item clears on next sync.
 
 ## Phase 5 — Polish + mobile decision
 
-Branch `feat/pending-inbox-polish`. Cuttable/deferrable as a whole.
+Branch `feat/pending-inbox-polish`.
 
-- Mobile: decide whether Pending replaces a tab, lives behind the palette, or
-  joins `MOBILE_VIEWS` without a tab. (Remote IPC already serves the channels.)
-- Notification deep links: point relevant existing notifications' `nav:goto`
-  at `pending` where that's the better landing (e.g. automation-finished).
-- Verify-skill E2E pass over the whole flow with seeded data.
-- Overlay GC hardening + a `briefing.ts` mention ("6 things pending") if it
-  earns its place.
+- Mobile: **decided desktop-only for now** (Santiago, Aug 7 2026). The tab
+  bar sits at 5 tabs (6 with Terminal) and remote IPC already serves the
+  channels, so placement can be revisited any time without plumbing work.
+- Notification deep links: the automation-finished notification lands on
+  `pending` carrying the run's item key — the view scrolls to and pulses
+  that row, so the link stays deep even though runs are the 7th section
+  and errors sort above fresh successes. Reminder/comms/meeting
+  notifications keep their specific targets; an item-focused landing beats
+  the queue when the notification names one item. DECISION: landing on
+  Pending stamps the whole visible queue seen, same as any other arrival —
+  "visible = seen" is one rule, not two classes of viewing; danger keeps
+  the badge lit and nothing is delisted.
+- Briefing: speaks only what the agenda lines can't already say — a
+  failure alarm ("Heads up: N failures need your attention") FIRST, before
+  the calendar, and an invitations line after follow-ups. Silent at zero;
+  either suppresses the "clear runway" stoic close. A raw pending total
+  was rejected as double-counting the due/follow-up lines. No "check
+  Pending" pointer in the alarm: the briefing plays on the phone, where
+  Pending deliberately isn't. DECISION: an undismissed errored run repeats
+  the alarm on consecutive mornings (runs sit in the 48h window) — dismiss
+  IS the acknowledgement gesture; an alarm that self-silences unheard
+  would be worse.
+- Overlay GC hardening: `gcPendingOverlay()` boot sweep — the write-path GC
+  only runs when the user triages, so rows for items that resolved during a
+  quiet stretch would otherwise linger indefinitely.
+- Verify-skill E2E over the whole flow: all 8 sections seeded and rendered,
+  badge unseen→danger transition, overnight due-today→overdue fingerprint
+  renewal, error-above-cap run ordering, snooze + undo, boot GC sweep.
 
 ---
 

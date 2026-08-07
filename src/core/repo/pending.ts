@@ -561,13 +561,26 @@ export function markAllSeen(
   return stamp.map((s) => s.key)
 }
 
+/** Boot-time sweep: the write-path GC below only runs when the user triages,
+ *  so a quiet stretch would let rows for long-resolved items linger. One
+ *  pass at startup bounds that without adding GC to any read path. */
+export function gcPendingOverlay(db: DbDriver, now: Date = new Date()): void {
+  gcOverlay(db, now)
+}
+
 /** Delete rows whose item is no longer pending at all and whose snooze has
  *  lapsed — nothing left to say; a re-pending item gets a fresh fingerprint.
- *  Runs on every triage write, never on read.
+ *  Runs on every triage write and once at boot, never on read.
  *
  *  The `live` set here must ALWAYS be global — never thread an `onlyKind`
  *  scope through: a partial set would read every kind it didn't compute as
- *  "gone" and silently wipe their snooze/dismiss state on each pass. */
+ *  "gone" and silently wipe their snooze/dismiss state on each pass.
+ *
+ *  Known bound, accepted: runs enter `live` through RUN_CAP, so an
+ *  agent_run row cropped below the cap line is swept, and if that run later
+ *  rises back above it (errors aging out re-admit old successes) it returns
+ *  unseen. Reaching that takes ~28 errors inside the 48h window; below the
+ *  line it was neither shown nor counted, so nothing user-visible is lost. */
 function gcOverlay(db: DbDriver, now: Date): void {
   const ts = nowIso(now)
   const live = new Set(fixedItems(db, now).map((i) => i.key))

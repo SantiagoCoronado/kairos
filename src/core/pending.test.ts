@@ -17,7 +17,8 @@ import {
   dismissItem,
   undismissItem,
   markAllSeen,
-  unseenRunCount
+  unseenRunCount,
+  gcPendingOverlay
 } from './repo/pending'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
@@ -690,5 +691,29 @@ describe('invitation source', () => {
     snoozeItem(db, `invite:${id}`, inHours(4), T0)
     expect(invites()).toHaveLength(0)
     expect(invites(new Date(T0.getTime() + 5 * 60 * 60_000))).toHaveLength(1)
+  })
+})
+
+describe('boot-time overlay GC', () => {
+  it('sweeps rows for long-resolved items, keeps still-snoozed ones', () => {
+    // a task that was pending, got dismissed, then was completed — its
+    // overlay row survives until some triage write GCs, which may be never
+    const t = tasks.createTask(db, { title: 'was pending', due_date: '2026-06-30' }, T0)
+    overlayRow(`task:${t.id}`, 'todo:2026-06-30', { dismissed_at: T0.toISOString() })
+    tasks.updateTask(db, t.id, { status: 'done' }, T0)
+
+    // a resolved item whose snooze is still in the future keeps its row —
+    // consistent with the write-path GC (the snooze may still matter if it
+    // re-pends before lapsing)
+    overlayRow('reminder:ghost', 'x', {
+      snoozed_until: new Date(T0.getTime() + 60 * 60_000).toISOString()
+    })
+
+    gcPendingOverlay(db, T0)
+    const keys = db.all<{ item_key: string }>('SELECT item_key FROM pending_overlay').map(
+      (r) => r.item_key
+    )
+    expect(keys).not.toContain(`task:${t.id}`)
+    expect(keys).toContain('reminder:ghost')
   })
 })

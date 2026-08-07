@@ -82,11 +82,16 @@ function snoozePresets(now: Date, dayOnly: boolean): SnoozePreset[] {
 export function PendingView({
   onNavigate,
   onOpenPerson,
-  onOpenCalendar
+  onOpenCalendar,
+  focusKey = null,
+  onFocusConsumed
 }: {
   onNavigate: (v: ViewId) => void
   onOpenPerson: (id: string) => void
   onOpenCalendar: (day: Date) => void
+  /** pending item key a notification deep link wants scrolled into view */
+  focusKey?: string | null
+  onFocusConsumed?: () => void
 }): React.JSX.Element {
   const { data: payload, reload } = useInvoke(
     'pending:list',
@@ -104,6 +109,22 @@ export function PendingView({
     ]
   )
   const [snoozeKey, setSnoozeKey] = useState<string | null>(null)
+  const [highlightKey, setHighlightKey] = useState<string | null>(null)
+
+  // notification deep link: scroll the named row into view and pulse it.
+  // One-shot — consumed even when the item resolved before we landed (the
+  // deep link's job is done either way; the queue itself is the fallback).
+  useEffect(() => {
+    if (!focusKey || !payload) return
+    const el = document.querySelector(`[data-pending-key="${CSS.escape(focusKey)}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center' })
+      setHighlightKey(focusKey)
+      setTimeout(() => setHighlightKey(null), 2500)
+    }
+    onFocusConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey, payload])
 
   // due-ness moves with the clock even when nothing writes to the db — a
   // reminder crossing its remind_at must appear without a db:changed ping.
@@ -117,7 +138,11 @@ export function PendingView({
     return () => clearInterval(t)
   }, [reload])
 
-  // what's on screen counts as seen (badge watermark) — both transitions
+  // What's on screen counts as seen (badge watermark) — both transitions.
+  // DECISION: this applies however the user arrived, including a notification
+  // deep link about one run — landing here puts the whole queue on screen,
+  // and one rule ("visible = seen") beats two classes of viewing. Everything
+  // stays listed and danger keeps the badge lit; only the unseen count clears.
   useEffect(() => {
     void api.invoke('pending:setViewActive', true)
     return () => void api.invoke('pending:setViewActive', false)
@@ -260,7 +285,15 @@ export function PendingView({
           return (
             <Section key={kind} title={title}>
               {items.map((item) => (
-                <div key={item.key} className="relative flex items-center gap-3 py-1.5 group">
+                <div
+                  key={item.key}
+                  data-pending-key={item.key}
+                  className={cn(
+                    'relative flex items-center gap-3 py-1.5 px-1.5 -mx-1.5 rounded-md group',
+                    'transition-colors duration-700',
+                    highlightKey === item.key && 'bg-accent/10'
+                  )}
+                >
                   <Icon
                     size={13}
                     className={cn(

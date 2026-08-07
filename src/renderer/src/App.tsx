@@ -103,7 +103,8 @@ export default function App(): React.JSX.Element {
   )
 
   // deep links from main-process notifications (reminder clicks). A
-  // calendar goto carrying a meeting id also focuses that meeting's day.
+  // calendar goto carrying a meeting id also focuses that meeting's day; a
+  // pending goto carrying an item key scrolls to and highlights that row.
   useEffect(
     () =>
       api.on('nav:goto', ({ view: v, id }) => {
@@ -113,6 +114,7 @@ export default function App(): React.JSX.Element {
             .then(({ meeting }) => setCalendarFocus(new Date(meeting.started_at)))
             .catch(() => {})
         }
+        if (v === 'pending' && id) setPendingFocus(id)
         setView(v)
       }),
     []
@@ -163,6 +165,7 @@ export default function App(): React.JSX.Element {
   // "show in calendar" from invite cards — fresh Date identity each call so
   // the calendar re-anchors even for the same day twice
   const [calendarFocus, setCalendarFocus] = useState<Date | null>(null)
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null)
   const openCalendarAt = (day: Date): void => {
     setCalendarFocus(new Date(day))
     setView('calendar')
@@ -248,7 +251,13 @@ export default function App(): React.JSX.Element {
         <div className="flex-1 min-h-0 overflow-y-auto">
           {commonViews}
           {view === 'pending' && (
-            <PendingView onNavigate={setView} onOpenPerson={openPerson} onOpenCalendar={openCalendarAt} />
+            <PendingView
+              onNavigate={setView}
+              onOpenPerson={openPerson}
+              onOpenCalendar={openCalendarAt}
+              focusKey={pendingFocus}
+              onFocusConsumed={() => setPendingFocus(null)}
+            />
           )}
           {view === 'tasks' && <TasksView />}
           {view === 'objectives' && <ObjectivesView />}

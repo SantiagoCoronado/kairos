@@ -391,41 +391,49 @@ describe('remote apply + full-sync reconciliation', () => {
 })
 
 describe('RSVP helpers', () => {
+  // applyRsvp/selfAttendee unit tests live with their module (attendees.test.ts)
   const guests = (): import('./types').CalendarAttendee[] => [
     { email: 'boss@example.com', organizer: true, responseStatus: 'accepted' },
     { email: 'peer@example.com', responseStatus: 'tentative' },
     { email: 'me@gmail.com', self: true, responseStatus: 'needsAction' }
   ]
 
-  it('applyRsvp changes only the self entry and carries everyone else through', () => {
-    const next = cal.applyRsvp(guests(), 'me@gmail.com', 'accepted')!
-    expect(next.find((a) => a.self)!.responseStatus).toBe('accepted')
-    expect(next.find((a) => a.organizer)!.responseStatus).toBe('accepted')
-    expect(next.find((a) => a.email === 'peer@example.com')!.responseStatus).toBe('tentative')
-  })
-
-  it('applyRsvp round-trips wire fields beyond the CalendarAttendee type', () => {
-    // Google attendee objects carry more than our five typed fields; an RSVP
-    // patch replaces the whole array, so anything rebuilt field-by-field
-    // would strip these from every guest (see the applyRsvp doc comment)
+  it('attendee wire fields survive the store round-trip (pull → row → push body)', () => {
+    // the pull path must store attendees WHOLE: a rebuild at either boundary
+    // means the next push rewrites stripped flags away on Google (a renamed
+    // event un-flagging its room resource). rowToGoogleBody now sends
+    // row.attendees verbatim, so storage fidelity is the whole game.
+    const { calendarId } = googleCalendar()
     const wire = [
       { email: 'room-4@resource.calendar.google.com', resource: true, responseStatus: 'accepted' },
-      { email: 'peer@example.com', optional: true, comment: 'maybe late', responseStatus: 'tentative' },
-      { email: 'me@gmail.com', self: true, responseStatus: 'needsAction', additionalGuests: 2 }
-    ] as unknown as import('./types').CalendarAttendee[]
-    const next = cal.applyRsvp(wire, 'me@gmail.com', 'accepted')!
-    expect(next[0]).toBe(wire[0]) // non-self entries pass through by reference
-    expect(next[1]).toBe(wire[1])
-    const self = next[2] as unknown as Record<string, unknown>
-    expect(self.responseStatus).toBe('accepted')
-    expect(self.additionalGuests).toBe(2) // spread keeps untyped fields on self too
-  })
-
-  it('applyRsvp falls back to a case-insensitive email match and reports strangers', () => {
-    const noFlag = guests().map(({ self: _self, ...a }) => a)
-    const next = cal.applyRsvp(noFlag, 'me@gmail.com', 'declined')!
-    expect(next.find((a) => a.email === 'me@gmail.com')!.responseStatus).toBe('declined')
-    expect(cal.applyRsvp(noFlag, 'stranger@example.com', 'declined')).toBeUndefined()
+      { email: 'peer@example.com', optional: true, comment: 'running late' },
+      { email: 'me@gmail.com', self: true, responseStatus: 'accepted', additionalGuests: 1 }
+    ] as import('./types').CalendarAttendee[]
+    cal.applyRemoteEvent(db, calendarId, {
+      google_event_id: 'g-fid',
+      etag: 'e1',
+      recurring_event_id: null,
+      title: 'offsite',
+      description: null,
+      location: null,
+      start_at: '2026-07-02T10:00:00Z',
+      end_at: '2026-07-02T11:00:00Z',
+      all_day: false,
+      timezone: null,
+      color: null,
+      attendees: wire,
+      conferencing_url: null,
+      status: 'confirmed'
+    })
+    const row = db.get<{ id: string }>(
+      "SELECT id FROM calendar_events WHERE google_event_id = 'g-fid'"
+    )!
+    const stored = cal.getEvent(db, row.id)!.attendees
+    expect(stored).toEqual(wire)
+    expect(stored[0].resource).toBe(true)
+    expect(stored[1].optional).toBe(true)
+    expect(stored[1].comment).toBe('running late')
+    expect(stored[2].additionalGuests).toBe(1)
   })
 
   it('applySelfResponseToSeries updates every instance without dirtying the rows', () => {

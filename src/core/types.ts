@@ -267,12 +267,26 @@ export interface CalendarCalendar {
   updated_at: string
 }
 
+/**
+ * One entry of a Google event's attendees array. NOT exhaustive — the wire
+ * objects can carry more than what's typed here, so attendee lists must pass
+ * through WHOLE (store what Google sent, send back what was stored), never be
+ * rebuilt field-by-field: a rebuild silently strips flags like `resource`
+ * from every guest on the next push. See applyRsvp in core/attendees.ts.
+ */
 export interface CalendarAttendee {
   email: string
   displayName?: string
   responseStatus?: 'needsAction' | 'declined' | 'tentative' | 'accepted'
   organizer?: boolean
   self?: boolean
+  /** invited as optional (shown "optional" in Google's UI) */
+  optional?: boolean
+  /** a room / meeting resource, not a person */
+  resource?: boolean
+  /** free-text note the attendee attached to their response */
+  comment?: string
+  additionalGuests?: number
 }
 
 /** an answer to an invitation — the self-attendee's responseStatus */

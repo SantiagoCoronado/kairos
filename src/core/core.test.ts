@@ -247,6 +247,25 @@ describe('followup cadence math (injected clock)', () => {
     expect(people.getPerson(db, p.id)?.snoozed_until).toBeNull()
   })
 
+  it('a snooze until tomorrow holds through the local evening (UTC already rolled over)', () => {
+    // 2026-07-02T03:00Z is the local EVENING of July 1 in any UTC-negative
+    // timezone: snoozed_until is a local day, so "tomorrow" must still hold.
+    // (On a UTC/positive-offset machine both dates coincide and this passes
+    // trivially — the assertion bites where the bug bit: the Americas.)
+    const eveningUtcRolled = new Date('2026-07-02T03:00:00Z')
+    const localTomorrow = (() => {
+      const d = new Date(eveningUtcRolled)
+      d.setDate(d.getDate() + 1)
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${day}`
+    })()
+    const p = people.upsertPerson(db, { name: 'Anna', cadence_days: 7 }, daysAgo(30))
+    people.snoozeFollowup(db, p.id, localTomorrow, eveningUtcRolled)
+    expect(followups.followupsDue(db, eveningUtcRolled)).toHaveLength(0)
+  })
+
   it('archived people and people without cadence never appear', () => {
     people.upsertPerson(db, { name: 'NoCadence' }, daysAgo(100))
     const p = people.upsertPerson(db, { name: 'Archived', cadence_days: 1 }, daysAgo(100))

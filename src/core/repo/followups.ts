@@ -1,6 +1,6 @@
 import type { DbDriver } from '../driver'
 import type { FollowupDue } from '../types'
-import { nowIso } from '../ids'
+import { localDate, nowIso } from '../ids'
 
 // Cadence is computed, never stored: days since last interaction (or since
 // the person was created) minus cadence_days. `now` is a parameter so tests
@@ -21,13 +21,16 @@ GROUP BY p.id
 
 export function followupsDue(db: DbDriver, now: Date = new Date()): FollowupDue[] {
   const ts = nowIso(now)
+  // snoozed_until is a LOCAL day like every due date in the app — comparing
+  // against date(utc-iso) made an evening snooze until "tomorrow" lapse
+  // instantly once UTC had already rolled over
   return db.all<FollowupDue>(
     `${FOLLOWUP_SQL}
-     HAVING days_overdue >= 0 AND (p.snoozed_until IS NULL OR p.snoozed_until <= date(?))
+     HAVING days_overdue >= 0 AND (p.snoozed_until IS NULL OR p.snoozed_until <= ?)
      ORDER BY days_overdue DESC`,
     ts,
     ts,
-    ts
+    localDate(now)
   )
 }
 

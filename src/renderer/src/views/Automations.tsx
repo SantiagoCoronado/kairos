@@ -235,10 +235,14 @@ export function AutomationsView({
     void api.invoke('settings:get').then(setSettings)
   }, [])
 
-  // while this view is open, finished runs count as seen (no sidebar badge)
+  // while this view is open, finished runs count as seen (no sidebar badge).
+  // The active flag is a TTL in main (self-heals if we vanish without the
+  // unmount cleanup) — re-arm it periodically while mounted.
   useEffect(() => {
     void api.invoke('agentTasks:setViewActive', true)
+    const t = setInterval(() => void api.invoke('agentTasks:setViewActive', true), 60_000)
     return () => {
+      clearInterval(t)
       void api.invoke('agentTasks:setViewActive', false)
     }
   }, [])

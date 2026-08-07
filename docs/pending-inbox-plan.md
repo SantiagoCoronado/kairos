@@ -185,21 +185,32 @@ still-open composer).
 ### Stories
 
 **3.1 — Outbox items.** New repo accessor `listOutboxPending()` (`failed` +
-stuck `queued`/`sending` rows) — none exists today. Items get `tone: 'danger'`,
-subtitle = recipient + error. Row actions: Retry (reuse `comms:retryOutbox`
-path, generalized to work without composer state) and Discard. This closes a
-real data-loss hole independent of the inbox feature.
+stuck `queued`/`sending` rows past a 10-minute grace) — none existed. Failed
+rows are danger-tone with the error as subtitle; destination falls back
+thread title → to_json → provider. Row actions: Retry — `comms:retryOutbox`
+already re-drives purely from the DB row, but it is only offered for
+WhatsApp, mirroring the composer's gate (per-unit delivery tracking makes it
+duplicate-safe there; a gmail ambiguous accept would re-send) — and Discard
+(`comms:discardOutbox`, hard delete via commit-style undo; sent rows refuse).
+This closes a real data-loss hole independent of the inbox feature.
 
 **3.2 — Meeting errors.** `meetings` with `status='error'` (danger tone) and
-`ready` but never-summarized (muted tone) → deep-link to Meetings.
+`ready` with `summarized_at NULL` past a 15-minute grace (muted tone — a
+summarize failure leaves no other trace than this predicate) → deep-link
+focuses the meeting's day in Calendar; unsummarized rows get an inline
+`summarize` action (`meetings:summarize`).
 
-**3.3 — Agent runs needing review.** Finished runs unseen since last look.
-Source of truth becomes the overlay (`seen_at` per run key) instead of the
-`automationsSeenAt` settings cursor; `agentTasks:setViewActive` and
-`pending:setViewActive` both stamp overlay seen so the two badges can't
-disagree. Retire the settings cursor (one of the three divergent "unseen"
-mechanisms — terminal's in-memory one stays as-is, it's ephemeral by nature).
-Error runs get danger tone.
+**3.3 — Agent runs needing review.** Finished runs surface as items for a
+48-hour review window (then age out — they never accumulate), error runs
+danger, results accent, stopped muted. The unseen watermark is the overlay
+(`seen_at` per run key); the `automationsSeenAt` settings cursor is retired
+and `agentTasks:activity` computes `unseenFinished` from the same overlay, so
+the two badges can't disagree. Both views' `setViewActive` stamp scoped seen
+(`markAllSeen(db, now, 'agent_run')` for Automations — it must not touch
+other kinds' watermarks) and cross-notify the other badge only when something
+was actually stamped, so the broadcasts terminate. The Automations flag gets
+the same 90s TTL self-heal as Pending's. (Terminal's in-memory "unseen" stays
+as-is — ephemeral by nature.)
 
 **3.4 — Danger badge.** Sidebar badge switches to the `bg-danger/20` variant
 when any danger-tone item is pending, matching the terminal badge precedent.

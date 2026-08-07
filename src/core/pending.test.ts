@@ -7,13 +7,15 @@ import * as interactions from './repo/interactions'
 import * as tasks from './repo/tasks'
 import * as notes from './repo/notes'
 import * as comms from './repo/comms'
+import * as agentTasks from './repo/agent-tasks'
 import {
   pendingItems,
   snoozeItem,
   unsnoozeItem,
   dismissItem,
   undismissItem,
-  markAllSeen
+  markAllSeen,
+  unseenRunCount
 } from './repo/pending'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
@@ -340,5 +342,194 @@ describe('triage writes', () => {
       .sort()
     // gone: resolved + no snooze → deleted; parked: snooze still running → kept
     expect(keys).toEqual([`task:${live.id}`, `task:${parked.id}`].sort())
+  })
+})
+
+describe('failure-state sources', () => {
+  function seedOutbox(
+    id: string,
+    opts: {
+      status?: string
+      error?: string
+      provider?: string
+      threadId?: string
+      toJson?: string
+      createdAt?: string
+      body?: string
+    } = {}
+  ): void {
+    db.run(
+      `INSERT INTO comms_outbox (id, account_id, thread_id, provider, to_json, body_text, status, error, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'app', ?)`,
+      id,
+      accountId,
+      opts.threadId ?? null,
+      opts.provider ?? 'whatsapp',
+      opts.toJson ?? '{}',
+      opts.body ?? 'hola que tal',
+      opts.status ?? 'failed',
+      opts.error ?? null,
+      opts.createdAt ?? daysAgo(1).toISOString()
+    )
+  }
+
+  function seedMeeting(
+    id: string,
+    opts: { status?: string; error?: string; summarizedAt?: string; endedAt?: string } = {}
+  ): void {
+    db.run(
+      `INSERT INTO meetings (id, title, status, error, started_at, ended_at, summarized_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      `Meeting ${id}`,
+      opts.status ?? 'ready',
+      opts.error ?? null,
+      daysAgo(1).toISOString(),
+      opts.endedAt ?? daysAgo(1).toISOString(),
+      opts.summarizedAt ?? null,
+      T0.toISOString(),
+      T0.toISOString()
+    )
+  }
+
+  it('failed sends are danger items; fresh queued rows are not stuck yet', () => {
+    seedOutbox('ob-fail', { status: 'failed', error: 'socket closed', toJson: '{}' })
+    seedOutbox('ob-fresh', { status: 'queued', createdAt: T0.toISOString() })
+    seedOutbox('ob-stuck', { status: 'queued', createdAt: daysAgo(1).toISOString() })
+    seedOutbox('ob-sent', { status: 'sent' })
+    const items = pendingItems(db, T0).items.filter((i) => i.kind === 'outbox')
+    expect(items.map((i) => i.id).sort()).toEqual(['ob-fail', 'ob-stuck'])
+    const fail = items.find((i) => i.id === 'ob-fail')!
+    expect(fail.tone).toBe('danger')
+    expect(fail.subtitle).toBe('socket closed')
+    expect(fail.provider).toBe('whatsapp')
+    expect(pendingItems(db, T0).danger).toBe(1)
+  })
+
+  it('outbox items use the thread title, then to_json, then provider as destination', () => {
+    seedThread('th-dest')
+    seedOutbox('ob-1', { threadId: 'th-dest' })
+    seedOutbox('ob-2', { provider: 'gmail', toJson: '{"to":["ana@x.com"],"subject":"Q2"}' })
+    seedOutbox('ob-3', { toJson: '{}' })
+    const titles = pendingItems(db, T0)
+      .items.filter((i) => i.kind === 'outbox')
+      .map((i) => i.title)
+    expect(titles).toContain('Send failed — Thread th-dest')
+    expect(titles).toContain('Send failed — Q2')
+    expect(titles).toContain('Send failed — whatsapp')
+  })
+
+  it('deleteOutboxItem refuses sent rows', () => {
+    seedOutbox('ob-x', { status: 'failed' })
+    seedOutbox('ob-sent', { status: 'sent' })
+    expect(comms.deleteOutboxItem(db, 'ob-x')).toBe(true)
+    expect(comms.deleteOutboxItem(db, 'ob-sent')).toBe(false)
+    expect(db.all('SELECT id FROM comms_outbox')).toHaveLength(1)
+  })
+
+  it('errored meetings are danger; ready-unsummarized surfaces after the grace window', () => {
+    seedMeeting('m-err', { status: 'error', error: 'whisper died' })
+    seedMeeting('m-old', { status: 'ready' }) // ended yesterday, never summarized
+    seedMeeting('m-fresh', { status: 'ready', endedAt: new Date(T0.getTime() - 5 * 60_000).toISOString() })
+    seedMeeting('m-done', { status: 'ready', summarizedAt: T0.toISOString() })
+    const items = pendingItems(db, T0).items.filter((i) => i.kind === 'meeting')
+    expect(items.map((i) => i.id).sort()).toEqual(['m-err', 'm-old'])
+    expect(items.find((i) => i.id === 'm-err')!.tone).toBe('danger')
+    expect(items.find((i) => i.id === 'm-err')!.subtitle).toBe('whisper died')
+    expect(items.find((i) => i.id === 'm-old')!.tone).toBe('muted')
+  })
+
+  it('finished runs surface within the window with status tones; running and aged-out do not', () => {
+    const task = agentTasks.createAgentTask(db, { name: 'Daily digest', prompt: 'p' }, T0)
+    const ok = agentTasks.createRun(db, task.id, null, daysAgo(1))
+    agentTasks.finishRun(db, ok.id, { status: 'success', result: 'sent 3 emails' }, daysAgo(1))
+    const bad = agentTasks.createRun(db, task.id, null, daysAgo(1))
+    agentTasks.finishRun(db, bad.id, { status: 'error', error: 'rate limited' }, daysAgo(1))
+    const old = agentTasks.createRun(db, task.id, null, daysAgo(5))
+    agentTasks.finishRun(db, old.id, { status: 'success' }, daysAgo(5))
+    agentTasks.createRun(db, task.id, null, T0) // still running
+
+    const items = pendingItems(db, T0).items.filter((i) => i.kind === 'agent_run')
+    expect(items.map((i) => i.id).sort()).toEqual([bad.id, ok.id].sort())
+    expect(items.find((i) => i.id === ok.id)!.tone).toBe('accent')
+    expect(items.find((i) => i.id === ok.id)!.subtitle).toBe('sent 3 emails')
+    expect(items.find((i) => i.id === bad.id)!.tone).toBe('danger')
+    expect(items.find((i) => i.id === bad.id)!.subtitle).toBe('rate limited')
+    expect(items.find((i) => i.id === ok.id)!.title).toBe('Daily digest')
+  })
+
+  it('unseenRunCount matches the overlay and markAllSeen scoping leaves other kinds alone', () => {
+    const task = agentTasks.createAgentTask(db, { name: 't', prompt: 'p' }, T0)
+    const r1 = agentTasks.createRun(db, task.id, null, daysAgo(1))
+    agentTasks.finishRun(db, r1.id, { status: 'success' }, daysAgo(1))
+    tasks.createTask(db, { title: 'due', due_date: '2026-06-28' }, T0)
+
+    expect(unseenRunCount(db, T0)).toBe(1)
+    expect(pendingItems(db, T0).unseen).toBe(2)
+    markAllSeen(db, T0, 'agent_run')
+    expect(unseenRunCount(db, T0)).toBe(0)
+    // the task's watermark was NOT touched by the scoped stamp
+    expect(pendingItems(db, T0).unseen).toBe(1)
+  })
+
+  it('triage writes work on the new kinds (fingerprint resolves via fixedItems)', () => {
+    seedOutbox('ob-1', { status: 'failed', error: 'boom' })
+    dismissItem(db, 'outbox:ob-1', T0)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+    // a different failure reason is a renewed condition
+    db.run(`UPDATE comms_outbox SET error = 'other reason' WHERE id = 'ob-1'`)
+    expect(pendingItems(db, T0).items.map((i) => i.key)).toEqual(['outbox:ob-1'])
+  })
+})
+
+describe('review round: danger persistence and run cap', () => {
+  it('danger persists through markAllSeen — glancing is not fixing', () => {
+    db.run(
+      `INSERT INTO comms_outbox (id, account_id, provider, to_json, body_text, status, error, source, created_at)
+       VALUES ('ob-1', ?, 'whatsapp', '{}', 'hola', 'failed', 'boom', 'app', ?)`,
+      accountId,
+      daysAgo(1).toISOString()
+    )
+    expect(pendingItems(db, T0)).toMatchObject({ total: 1, unseen: 1, danger: 1 })
+    markAllSeen(db, T0)
+    // seen zeroes the unseen count but the failure stays actionable: the
+    // sidebar renders on unseen || danger, so the badge must stay lit
+    expect(pendingItems(db, T0)).toMatchObject({ total: 1, unseen: 0, danger: 1 })
+    const item = pendingItems(db, T0).items[0]
+    expect(item.status).toBe('failed')
+    expect(item.provider).toBe('whatsapp')
+  })
+
+  it('runs are capped, badge and list share the bound', () => {
+    const task = agentTasks.createAgentTask(db, { name: 't', prompt: 'p' }, T0)
+    for (let i = 0; i < 35; i++) {
+      const r = agentTasks.createRun(db, task.id, null, new Date(T0.getTime() - i * 60_000))
+      agentTasks.finishRun(db, r.id, { status: 'success' }, new Date(T0.getTime() - i * 60_000))
+    }
+    const payload = pendingItems(db, T0)
+    expect(payload.items.filter((i) => i.kind === 'agent_run')).toHaveLength(30)
+    expect(unseenRunCount(db, T0)).toBe(30)
+    markAllSeen(db, T0)
+    expect(unseenRunCount(db, T0)).toBe(0)
+  })
+})
+
+describe('review round 2: errors are un-croppable', () => {
+  it('a lone error survives 35 later successes crowding the run cap', () => {
+    const task = agentTasks.createAgentTask(db, { name: 't', prompt: 'p' }, T0)
+    const hoursAgo = (h: number): Date => new Date(T0.getTime() - h * 60 * 60_000)
+    const bad = agentTasks.createRun(db, task.id, null, hoursAgo(40))
+    agentTasks.finishRun(db, bad.id, { status: 'error', error: 'boom' }, hoursAgo(40))
+    for (let i = 0; i < 35; i++) {
+      const r = agentTasks.createRun(db, task.id, null, hoursAgo(30 - i / 2))
+      agentTasks.finishRun(db, r.id, { status: 'success' }, hoursAgo(30 - i / 2))
+    }
+    const payload = pendingItems(db, T0)
+    const runs = payload.items.filter((i) => i.kind === 'agent_run')
+    expect(runs).toHaveLength(30)
+    // the error floats above the cap line — 30 successes can never displace it
+    expect(runs[0].id).toBe(bad.id)
+    expect(runs[0].tone).toBe('danger')
+    expect(payload.danger).toBe(1)
   })
 })

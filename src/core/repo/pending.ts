@@ -1,7 +1,9 @@
 import type { DbDriver } from '../driver'
-import type { PendingItem, PendingPayload, Task } from '../types'
+import type { PendingItem, PendingKind, PendingPayload, Task } from '../types'
 import { localDate, nowIso } from '../ids'
 import { followupsDue } from './followups'
+import { listOutboxPending } from './comms'
+import { listMeetings } from './meetings'
 
 // The Pending inbox aggregator. Everything is computed live from the source
 // domains so items can never go stale; the pending_overlay table contributes
@@ -11,6 +13,21 @@ import { followupsDue } from './followups'
 
 /** unread threads shown before the "N more in Inbox" tail row */
 const THREAD_CAP = 15
+/** queued/sending outbox rows older than this count as stuck (the drain loop
+ *  normally empties in seconds; restart requeues sending → queued) */
+const STUCK_OUTBOX_MS = 10 * 60_000
+/** a ready meeting is allowed this long to get its summary before "ready —
+ *  not summarized" surfaces (the summarizer runs right after transcription) */
+const UNSUMMARIZED_GRACE_MS = 15 * 60_000
+/** finished agent runs surface for review this long, then age out */
+const RUN_WINDOW_MS = 48 * 60 * 60_000
+/** newest runs shown within the window — same "not a second mail client"
+ *  argument as THREAD_CAP; hourly automations would otherwise put hundreds
+ *  of rows here. All run paths (items, unseen count) share the bound, so
+ *  the badge and the list stay consistent. */
+const RUN_CAP = 30
+
+const snippet = (s: string | null): string => (s ?? '').replace(/\s+/g, ' ').trim().slice(0, 120)
 
 interface OverlayRow {
   item_key: string
@@ -153,10 +170,125 @@ function visibleThreadCount(db: DbDriver, ts: string, unseenOnly = false): numbe
   )
 }
 
-/** The non-thread sources, pre-overlay. */
-function fixedItems(db: DbDriver, now: Date): PendingItem[] {
-  const today = localDate(now)
-  return [...taskItems(db, today), ...followupItems(db, now), ...reminderItems(db, now)]
+/** Failed sends and stuck queue rows — work that is otherwise invisible
+ *  after a reload (only the still-open composer knows about a failure). */
+function outboxItems(db: DbDriver, now: Date): PendingItem[] {
+  return listOutboxPending(db, now, STUCK_OUTBOX_MS).map((o) => {
+    const failed = o.status === 'failed'
+    let dest = o.thread_title ?? ''
+    if (!dest) {
+      try {
+        const j = JSON.parse(o.to_json) as { to?: string[]; subject?: string }
+        dest = j.subject || (Array.isArray(j.to) ? j.to.join(', ') : '') || o.provider
+      } catch {
+        dest = o.provider
+      }
+    }
+    return {
+      key: `outbox:${o.id}`,
+      kind: 'outbox' as const,
+      id: o.id,
+      title: failed ? `Send failed — ${dest}` : `Send still queued — ${dest}`,
+      subtitle: failed ? (o.error ?? (snippet(o.body_text) || 'unknown error')) : snippet(o.body_text),
+      tone: failed ? ('danger' as const) : ('accent' as const),
+      at: o.created_at,
+      fingerprint: `${o.status}:${o.error ?? ''}`,
+      // retry is only duplicate-safe where delivered units are tracked
+      // per-message (WhatsApp); a gmail ambiguous accept would re-send
+      provider: o.provider,
+      status: o.status
+    }
+  })
+}
+
+function meetingItems(db: DbDriver, now: Date): PendingItem[] {
+  const errored = listMeetings(db, { status: 'error' }).map((m) => ({
+    key: `meeting:${m.id}`,
+    kind: 'meeting' as const,
+    id: m.id,
+    title: m.title || 'Meeting',
+    subtitle: m.error ?? 'processing failed',
+    tone: 'danger' as const,
+    at: m.started_at,
+    fingerprint: `${m.status}:${m.summarized_at ?? ''}`,
+    status: m.status
+  }))
+  // summarize failures leave status='ready' with summarized_at NULL and no
+  // error — this predicate is their only trace outside a warn log line
+  const grace = new Date(now.getTime() - UNSUMMARIZED_GRACE_MS).toISOString()
+  const unsummarized = listMeetings(db, { status: 'ready' })
+    .filter((m) => !m.summarized_at && m.ended_at != null && m.ended_at < grace)
+    .map((m) => ({
+      key: `meeting:${m.id}`,
+      kind: 'meeting' as const,
+      id: m.id,
+      title: m.title || 'Meeting',
+      subtitle: 'ready — not summarized',
+      tone: 'muted' as const,
+      at: m.started_at,
+      fingerprint: `${m.status}:${m.summarized_at ?? ''}`,
+      status: m.status
+    }))
+  return [...errored, ...unsummarized]
+}
+
+/** Finished runs from the review window: error runs loud, results quieter.
+ *  They age out after RUN_WINDOW_MS instead of accumulating forever. */
+function runItems(db: DbDriver, now: Date): PendingItem[] {
+  const cutoff = new Date(now.getTime() - RUN_WINDOW_MS).toISOString()
+  const rows = db.all<{
+    id: string
+    status: string
+    finished_at: string
+    error: string | null
+    result: string | null
+    task_name: string
+  }>(
+    `SELECT r.id, r.status, r.finished_at, r.error, r.result, t.name AS task_name
+     FROM agent_task_runs r JOIN agent_tasks t ON t.id = r.task_id
+     WHERE r.finished_at IS NOT NULL AND r.finished_at > ?
+     ORDER BY (r.status = 'error') DESC, r.finished_at DESC
+     LIMIT ${RUN_CAP}`,
+    cutoff
+  )
+  // errors float above the cap line so 30 successes can never displace one
+  // failure — bound the list on the axis you're willing to lose. Truncation
+  // is deliberately silent (no "N more" tail like threads): nothing below
+  // the line is danger-tone, and stale successes age out of the window anyway.
+  return rows.map((r) => ({
+    key: `agent_run:${r.id}`,
+    kind: 'agent_run' as const,
+    id: r.id,
+    title: r.task_name,
+    subtitle:
+      r.status === 'success' ? snippet(r.result) || 'finished' : (r.error ?? r.status),
+    tone:
+      r.status === 'error'
+        ? ('danger' as const)
+        : r.status === 'success'
+          ? ('accent' as const)
+          : ('muted' as const),
+    at: r.finished_at,
+    // a run is immutable once finished — dismissing one is final, and the
+    // row ages out of the window anyway
+    fingerprint: r.finished_at,
+    status: r.status
+  }))
+}
+
+/** The non-thread sources, pre-overlay. `only` scopes which sources are even
+ *  computed — the Automations hot path (agentTasks:activity fires per tool
+ *  call) must not pay for six queries it throws away. */
+function fixedItems(db: DbDriver, now: Date, only?: PendingKind): PendingItem[] {
+  const want = (k: PendingKind): boolean => !only || only === k
+  const out: PendingItem[] = []
+  if (want('outbox')) out.push(...outboxItems(db, now))
+  if (want('task')) out.push(...taskItems(db, localDate(now)))
+  if (want('followup')) out.push(...followupItems(db, now))
+  if (want('reminder')) out.push(...reminderItems(db, now))
+  if (want('meeting')) out.push(...meetingItems(db, now))
+  if (want('agent_run')) out.push(...runItems(db, now))
+  return out
 }
 
 function loadOverlays(db: DbDriver): Map<string, OverlayRow> {
@@ -192,8 +324,22 @@ export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPaylo
     items: [...visFixed, ...shownThreads],
     more_threads: threadTotal - shownThreads.length,
     total: visFixed.length + threadTotal,
-    unseen: visFixed.filter((i) => !seen(i)).length + visibleThreadCount(db, ts, true)
+    unseen: visFixed.filter((i) => !seen(i)).length + visibleThreadCount(db, ts, true),
+    // threads are never danger-tone, so the fixed set is the whole story
+    danger: visFixed.filter((i) => i.tone === 'danger').length
   }
+}
+
+/** Unseen finished runs for the Automations badge — same overlay watermarks
+ *  the Pending badge counts, so the two can never disagree. */
+export function unseenRunCount(db: DbDriver, now: Date = new Date()): number {
+  const ts = nowIso(now)
+  const overlays = loadOverlays(db)
+  return runItems(db, now).filter((it) => {
+    const o = overlays.get(it.key)
+    if (hiddenBy(o, it.fingerprint, ts)) return false
+    return !(o?.seen_at && o.fingerprint === it.fingerprint)
+  }).length
 }
 
 // ---------- triage writes ----------
@@ -279,28 +425,44 @@ export function undismissItem(db: DbDriver, key: string, now: Date = new Date())
 /** Stamp every currently-visible item as seen at its current fingerprint.
  *  Includes threads beyond the display cap: the badge counts them, so
  *  opening the view must clear them too. Rows already seen at the same
- *  fingerprint are skipped to avoid write churn on every view visit. */
-export function markAllSeen(db: DbDriver, now: Date = new Date()): void {
+ *  fingerprint are skipped to avoid write churn on every view visit.
+ *  `onlyKind` scopes the stamp — the Automations view marks agent_run items
+ *  seen without touching anyone else's watermarks. Returns the stamped keys
+ *  so callers can cross-notify exactly when something changed (e.g. Pending
+ *  stamping a run must refresh the Automations badge, and only then).
+ *
+ *  INVARIANT: cross-notify loop-safety rests on every fingerprint being
+ *  stable between writes — a stamp at fingerprint F must find nothing to
+ *  stamp on the next pass. A time-derived fingerprint (anything computed
+ *  from `now`) would re-stamp forever and turn the "only when stamped"
+ *  broadcast guard into an infinite loop. */
+export function markAllSeen(
+  db: DbDriver,
+  now: Date = new Date(),
+  onlyKind?: PendingKind
+): string[] {
   const ts = nowIso(now)
   const overlays = loadOverlays(db)
   const stamp: { key: string; fp: string }[] = []
 
-  for (const it of fixedItems(db, now)) {
+  for (const it of fixedItems(db, now, onlyKind)) {
     const o = overlays.get(it.key)
     if (hiddenBy(o, it.fingerprint, ts)) continue // not on screen, stays unseen
     if (o?.seen_at && o.fingerprint === it.fingerprint) continue
     stamp.push({ key: it.key, fp: it.fingerprint })
   }
-  const threads = db.all<{ id: string; fp: string }>(
-    `SELECT id, COALESCE(last_message_at, '') AS fp FROM comms_threads t
-     WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE} AND NOT ${THREAD_SEEN}`,
-    ts
-  )
-  for (const t of threads) stamp.push({ key: `thread:${t.id}`, fp: t.fp })
+  if (!onlyKind || onlyKind === 'thread') {
+    const threads = db.all<{ id: string; fp: string }>(
+      `SELECT id, COALESCE(last_message_at, '') AS fp FROM comms_threads t
+       WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE} AND NOT ${THREAD_SEEN}`,
+      ts
+    )
+    for (const t of threads) stamp.push({ key: `thread:${t.id}`, fp: t.fp })
+  }
 
   // steady state on an open view: everything already stamped — make the
   // common case free instead of paying fixedItems + GC on every pending:list
-  if (stamp.length === 0) return
+  if (stamp.length === 0) return []
 
   for (const s of stamp) {
     // visible ⇒ any snooze on the row lapsed and any dismissal mismatched;
@@ -321,11 +483,16 @@ export function markAllSeen(db: DbDriver, now: Date = new Date()): void {
     )
   }
   gcOverlay(db, now)
+  return stamp.map((s) => s.key)
 }
 
 /** Delete rows whose item is no longer pending at all and whose snooze has
  *  lapsed — nothing left to say; a re-pending item gets a fresh fingerprint.
- *  Runs on every triage write, never on read. */
+ *  Runs on every triage write, never on read.
+ *
+ *  The `live` set here must ALWAYS be global — never thread an `onlyKind`
+ *  scope through: a partial set would read every kind it didn't compute as
+ *  "gone" and silently wipe their snooze/dismiss state on each pass. */
 function gcOverlay(db: DbDriver, now: Date): void {
   const ts = nowIso(now)
   const live = new Set(fixedItems(db, now).map((i) => i.key))

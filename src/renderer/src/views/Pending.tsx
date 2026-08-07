@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { CheckSquare, Inbox, StickyNote, Users } from 'lucide-react'
+import { AudioLines, Bot, CheckSquare, Inbox, Send, StickyNote, Users } from 'lucide-react'
 import type { PendingItem, PendingKind } from '../../../core/types'
 import { localDate } from '../../../core/ids'
 import type { ViewId } from '../components/Sidebar'
 import { api, useInvoke } from '../lib/api'
 import { pushUndo } from '../lib/undo'
+import { toast } from '../lib/toast'
 import { EmptyState, cn } from '../components/ui'
 
 // The triage queue: everything Kairos knows needs attention, computed live in
@@ -16,20 +17,30 @@ const KIND_VIEW: Partial<Record<PendingKind, ViewId>> = {
   task: 'tasks',
   followup: 'people',
   reminder: 'notes',
-  thread: 'inbox'
+  thread: 'inbox',
+  outbox: 'inbox',
+  agent_run: 'automations'
+  // meeting rows route through onOpenCalendar (day focus), not a plain view
 }
 
 const KIND_ICON: Partial<Record<PendingKind, typeof CheckSquare>> = {
   task: CheckSquare,
   followup: Users,
   reminder: StickyNote,
-  thread: Inbox
+  thread: Inbox,
+  outbox: Send,
+  meeting: AudioLines,
+  agent_run: Bot
 }
 
+/** failures first — a failed send outranks a due task */
 const SECTIONS: { kind: PendingKind; title: string }[] = [
+  { kind: 'outbox', title: 'sends' },
   { kind: 'task', title: 'tasks due' },
   { kind: 'followup', title: 'follow-ups' },
   { kind: 'reminder', title: 'reminders' },
+  { kind: 'meeting', title: 'meetings' },
+  { kind: 'agent_run', title: 'automation runs' },
   { kind: 'thread', title: 'unread' }
 ]
 
@@ -67,15 +78,17 @@ function snoozePresets(now: Date, dayOnly: boolean): SnoozePreset[] {
 
 export function PendingView({
   onNavigate,
-  onOpenPerson
+  onOpenPerson,
+  onOpenCalendar
 }: {
   onNavigate: (v: ViewId) => void
   onOpenPerson: (id: string) => void
+  onOpenCalendar: (day: Date) => void
 }): React.JSX.Element {
   const { data: payload, reload } = useInvoke(
     'pending:list',
     [],
-    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms']
+    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms', 'meetings', 'agent_tasks']
   )
   const [snoozeKey, setSnoozeKey] = useState<string | null>(null)
 
@@ -106,7 +119,37 @@ export function PendingView({
 
   const open = (item: PendingItem): void => {
     if (item.kind === 'followup') onOpenPerson(item.id)
+    else if (item.kind === 'meeting') onOpenCalendar(item.at ? new Date(item.at) : new Date())
     else onNavigate(KIND_VIEW[item.kind] ?? 'today')
+  }
+
+  const retrySend = (item: PendingItem): void => {
+    void api
+      .invoke('comms:retryOutbox', item.id)
+      .then((res) => {
+        if (!res.ok)
+          toast({ variant: 'error', text: 'Retry failed', detail: res.message, timeoutMs: 6000 })
+      })
+      .catch(() => reload())
+  }
+
+  const discardSend = (item: PendingItem): void => {
+    // commit-style undo: the delete is deferred until the window closes,
+    // so ⌘Z simply cancels it — nothing to resurrect
+    pushUndo({
+      label: 'Send discarded',
+      commit: () => void api.invoke('comms:discardOutbox', item.id)
+    })
+  }
+
+  const summarize = (item: PendingItem): void => {
+    void api
+      .invoke('meetings:summarize', item.id)
+      .then((res) => {
+        if (!res.ok)
+          toast({ variant: 'error', text: 'Summarize failed', detail: res.message, timeoutMs: 6000 })
+      })
+      .catch(() => reload())
   }
 
   const dismiss = (item: PendingItem): void => {
@@ -209,6 +252,17 @@ export function PendingView({
                     )}
                     {item.kind === 'reminder' && (
                       <RowAction onClick={() => clearReminder(item)}>clear</RowAction>
+                    )}
+                    {item.kind === 'outbox' &&
+                      item.provider === 'whatsapp' &&
+                      item.status === 'failed' && (
+                        <RowAction onClick={() => retrySend(item)}>retry</RowAction>
+                      )}
+                    {item.kind === 'outbox' && (
+                      <RowAction onClick={() => discardSend(item)}>discard</RowAction>
+                    )}
+                    {item.kind === 'meeting' && item.status === 'ready' && (
+                      <RowAction onClick={() => summarize(item)}>summarize</RowAction>
                     )}
                     <RowAction onClick={() => setSnoozeKey(item.key)}>snooze</RowAction>
                     <RowAction onClick={() => dismiss(item)}>dismiss</RowAction>

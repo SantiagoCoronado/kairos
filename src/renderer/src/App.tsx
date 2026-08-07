@@ -247,7 +247,9 @@ export default function App(): React.JSX.Element {
         )}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {commonViews}
-          {view === 'pending' && <PendingView onNavigate={setView} onOpenPerson={openPerson} />}
+          {view === 'pending' && (
+            <PendingView onNavigate={setView} onOpenPerson={openPerson} onOpenCalendar={openCalendarAt} />
+          )}
           {view === 'tasks' && <TasksView />}
           {view === 'objectives' && <ObjectivesView />}
           {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}

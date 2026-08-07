@@ -667,6 +667,13 @@ export interface PendingItem {
   /** the timestamp that makes it pending (due date, remind_at, last message) */
   at: string | null
   fingerprint: string
+  /** outbox items only: send provider — gates the duplicate-safe Retry
+   *  (WhatsApp tracks delivered units; a gmail retry could re-send) */
+  provider?: string
+  /** source-domain status, carried explicitly for action gating (outbox
+   *  retry, meeting summarize) — never parse it out of the fingerprint,
+   *  whose composition is the aggregator's private business */
+  status?: string
 }
 
 export interface PendingPayload {
@@ -679,4 +686,7 @@ export interface PendingPayload {
    *  a renewed condition (new message, re-missed due date) counts as unseen
    *  again even if the item was seen before */
   unseen: number
+  /** visible danger-tone items (failed sends, errored meetings/runs) —
+   *  flips the sidebar badge to the danger variant */
+  danger: number
 }

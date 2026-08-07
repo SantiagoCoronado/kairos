@@ -450,16 +450,25 @@ export function registerIpc(): void {
   // user is literally looking at. The stamp deliberately does NOT broadcast:
   // pending:list runs on every 'pending' invalidation, so a broadcast here
   // would re-trigger itself forever. Clients converge on the next event.
-  let pendingViewActive = false
+  //
+  // The active flag is process-wide and remote clients dispatch to it too; a
+  // client that vanishes mid-view never sends its unmount `false`, so the
+  // flag is a TTL the open view re-arms from its own tick — it self-heals
+  // instead of pinning "seen" forever.
+  const PENDING_ACTIVE_TTL_MS = 90_000
+  let pendingViewActiveUntil = 0
+  const pendingViewActive = (): boolean => Date.now() < pendingViewActiveUntil
   handle('pending:list', () => {
-    if (pendingViewActive) markAllSeen(db)
+    if (pendingViewActive()) markAllSeen(db)
     return pendingItems(db)
   })
   handle('pending:setViewActive', (active) => {
-    pendingViewActive = active
+    const was = pendingViewActive()
+    pendingViewActiveUntil = active ? Date.now() + PENDING_ACTIVE_TTL_MS : 0
     // both transitions: everything visible up to this moment counts as seen
     markAllSeen(db)
-    broadcast('db:changed', { entity: 'pending' })
+    // transition-only broadcast — a periodic re-arm must not cause a reload storm
+    if (was !== active) broadcast('db:changed', { entity: 'pending' })
   })
   handle('pending:snooze', (key, untilIso) => {
     snoozeItem(db, key, untilIso)

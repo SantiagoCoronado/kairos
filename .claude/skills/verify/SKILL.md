@@ -28,8 +28,12 @@ require('/abs/path/to/kairos-app/out/main/index.js')
 ```
 
 ```bash
+PORT=$((9200 + RANDOM % 300))   # per-session: a fixed port collides with
+                                # parallel sessions' instances, and CDP will
+                                # silently connect you to THEIR app
+lsof -nP -iTCP:$PORT -sTCP:LISTEN && echo "port taken, reroll" 
 HOME=$SCRATCH/vhome KAIROS_TEST_BASE=$SCRATCH/vhome \
-  npx electron $SCRATCH/test-main.js --remote-debugging-port=9223
+  npx electron $SCRATCH/test-main.js --remote-debugging-port=$PORT
 ```
 
 `DATA_DIR` (src/main/db.ts) is `join(homedir(), 'Kairos')` and Node's
@@ -54,7 +58,7 @@ threads with NULL `last_message_at`.
 `npm i playwright-core` in a scratch dir (no browser download needed):
 
 ```js
-const browser = await chromium.connectOverCDP('http://localhost:9223')
+const browser = await chromium.connectOverCDP(`http://localhost:${PORT}`)
 // two pages exist: capture.html (hidden quick-capture) and index.html (main)
 const page = pages.find((p) => p.url().includes('index.html'))
 ```
@@ -62,7 +66,7 @@ const page = pages.find((p) => p.url().includes('index.html'))
 Gotchas that will burn you:
 - **Real key presses get eaten** (Electron menu accelerators / focus). Use
   in-page dispatch: `page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', metaKey: true })))`.
-  Cmd+1..N maps to `VIEW_ORDER` in App.tsx (2 = inbox).
+  Cmd+1..N maps to `VIEW_ORDER` in components/Sidebar.tsx (2 = inbox).
 - **The frameless-window drag strip** (`.drag-region`, top 24px) swallows
   synthetic pointer clicks even with `force: true` — anything near the top
   (sidebar header, first rail row) needs a programmatic DOM `.click()` via

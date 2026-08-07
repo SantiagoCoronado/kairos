@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CheckSquare, Inbox, StickyNote, Users } from 'lucide-react'
 import type { PendingItem, PendingKind } from '../../../core/types'
+import { localDate } from '../../../core/ids'
 import type { ViewId } from '../components/Sidebar'
 import { api, useInvoke } from '../lib/api'
 import { pushUndo } from '../lib/undo'
@@ -79,9 +80,14 @@ export function PendingView({
   const [snoozeKey, setSnoozeKey] = useState<string | null>(null)
 
   // due-ness moves with the clock even when nothing writes to the db — a
-  // reminder crossing its remind_at must appear without a db:changed ping
+  // reminder crossing its remind_at must appear without a db:changed ping.
+  // The same tick re-arms the active TTL (main expires it if we vanish
+  // without the unmount cleanup — e.g. a remote client dropping).
   useEffect(() => {
-    const t = setInterval(reload, 60_000)
+    const t = setInterval(() => {
+      reload()
+      void api.invoke('pending:setViewActive', true)
+    }, 60_000)
     return () => clearInterval(t)
   }, [reload])
 
@@ -91,13 +97,20 @@ export function PendingView({
     return () => void api.invoke('pending:setViewActive', false)
   }, [])
 
+  // a triage write can lose the race with the item resolving for real
+  // (automation completes the task, sync marks the thread read) — 'not
+  // pending' is the outcome the user wanted, so refresh instead of erroring
+  const triage = (p: Promise<unknown>, done: () => void): void => {
+    p.then(done).catch(() => reload())
+  }
+
   const open = (item: PendingItem): void => {
     if (item.kind === 'followup') onOpenPerson(item.id)
     else onNavigate(KIND_VIEW[item.kind] ?? 'today')
   }
 
   const dismiss = (item: PendingItem): void => {
-    void api.invoke('pending:dismiss', item.key).then(() =>
+    triage(api.invoke('pending:dismiss', item.key), () =>
       pushUndo({
         label: 'Dismissed — resurfaces if it renews',
         revert: () => void api.invoke('pending:undismiss', item.key)
@@ -108,18 +121,17 @@ export function PendingView({
   const snooze = (item: PendingItem, preset: SnoozePreset): void => {
     setSnoozeKey(null)
     if (item.kind === 'followup') {
-      // domain snooze: the People view shows the same parked state
-      void api
-        .invoke('followups:snooze', item.id, preset.until.toISOString().slice(0, 10))
-        .then(() =>
-          pushUndo({
-            label: `Follow-up snoozed until ${preset.label}`,
-            revert: () => void api.invoke('followups:clearSnooze', item.id)
-          })
-        )
+      // domain snooze: the People view shows the same parked state.
+      // snoozed_until is a LOCAL day — never toISOString().slice
+      triage(api.invoke('followups:snooze', item.id, localDate(preset.until)), () =>
+        pushUndo({
+          label: `Follow-up snoozed until ${preset.label}`,
+          revert: () => void api.invoke('followups:clearSnooze', item.id)
+        })
+      )
       return
     }
-    void api.invoke('pending:snooze', item.key, preset.until.toISOString()).then(() =>
+    triage(api.invoke('pending:snooze', item.key, preset.until.toISOString()), () =>
       pushUndo({
         label: `Snoozed until ${preset.label}`,
         revert: () => void api.invoke('pending:unsnooze', item.key)
@@ -128,7 +140,7 @@ export function PendingView({
   }
 
   const completeTask = (item: PendingItem): void => {
-    void api.invoke('tasks:update', item.id, { status: 'done' }).then(() =>
+    triage(api.invoke('tasks:update', item.id, { status: 'done' }), () =>
       pushUndo({
         label: 'Task completed',
         revert: () => void api.invoke('tasks:update', item.id, { status: 'todo' })
@@ -138,7 +150,7 @@ export function PendingView({
 
   const clearReminder = (item: PendingItem): void => {
     const prev = item.at
-    void api.invoke('notes:update', item.id, { remind_at: null }).then(() =>
+    triage(api.invoke('notes:update', item.id, { remind_at: null }), () =>
       pushUndo({
         label: 'Reminder cleared',
         revert: () => void api.invoke('notes:update', item.id, { remind_at: prev })
@@ -184,7 +196,7 @@ export function PendingView({
                   />
                   <button
                     onClick={() => open(item)}
-                    className="text-[13px] truncate hover:text-accent text-left"
+                    className="text-[13px] truncate min-w-0 hover:text-accent text-left"
                   >
                     {item.title}
                   </button>

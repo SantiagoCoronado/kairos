@@ -1,6 +1,7 @@
 import type { DbDriver, SqlValue } from '../driver'
 import type { Note, NoteItem, NoteFilter, NewNote, NotePatch } from '../types'
 import { newId, nowIso } from '../ids'
+import { advanceReminder } from '../schedule'
 
 /** raw row: items is a JSON string in SQLite */
 type NoteRow = Omit<Note, 'items'> & { items: string }
@@ -171,6 +172,34 @@ export function listDueReminders(db: DbDriver, now: Date = new Date()): Note[] {
     nowIso(now)
   )
   return rows.map(parseRow)
+}
+
+/** Reminder-fired bookkeeping: recurring notes advance remind_at and re-arm,
+ *  one-shot notes stamp reminder_fired_at (the restart-safe re-fire dedupe).
+ *  Lives in core — pure of delivery concerns — so the scheduler's
+ *  notification path can never corrupt the bookkeeping, and so this branch
+ *  is actually testable (a 3-placeholder/2-param bug hid here for a month).
+ *  Returns the next occurrence, or null for one-shot. */
+export function markReminderFired(db: DbDriver, note: Note, now: Date = new Date()): string | null {
+  const next = advanceReminder(note.remind_at!, note.repeat, now)
+  db.transaction(() => {
+    if (next) {
+      db.run(
+        'UPDATE notes SET remind_at = ?, reminder_fired_at = NULL, updated_at = ? WHERE id = ?',
+        next,
+        nowIso(now),
+        note.id
+      )
+    } else {
+      db.run(
+        'UPDATE notes SET reminder_fired_at = ?, updated_at = ? WHERE id = ?',
+        nowIso(now),
+        nowIso(now),
+        note.id
+      )
+    }
+  })
+  return next
 }
 
 /** notes whose reminder falls in [startIso, endIso) — calendar overlay chips */

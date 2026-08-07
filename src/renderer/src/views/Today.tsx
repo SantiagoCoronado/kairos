@@ -4,6 +4,7 @@ import { AudioLines, CalendarDays, Loader2, RefreshCw, Sparkles, Square, Volume2
 import type { ClaudeLimits } from '../../../shared/ipc-contract'
 import type { Task } from '../../../core/types'
 import { stoicForDate } from '../../../core/stoic'
+import { localDate } from '../../../core/ids'
 import { api, useInvoke } from '../lib/api'
 import { Chip, cn } from '../components/ui'
 import { PushBell } from '../components/PushBell'
@@ -137,7 +138,8 @@ export function TodayView({
                 onClick={() => {
                   const d = new Date()
                   d.setDate(d.getDate() + 7)
-                  void api.invoke('followups:snooze', f.id, d.toISOString().slice(0, 10))
+                  // snoozed_until is a LOCAL day, not a UTC slice
+                  void api.invoke('followups:snooze', f.id, localDate(d))
                 }}
               >
                 snooze 1w

@@ -262,6 +262,21 @@ describe('triage writes', () => {
     expect(pendingItems(db, T0).items).toHaveLength(1)
   })
 
+  it('normalizes offset-form ISO snoozes to UTC so string compares stay sound', () => {
+    // 9pm Denver: a valid offset-form timestamp one hour in the future would
+    // sort BEFORE nowIso() if stored verbatim — a silent no-op snooze
+    const t = tasks.createTask(db, { title: 'later', due_date: '2026-06-28' }, T0)
+    snoozeItem(db, `task:${t.id}`, '2026-07-01T07:00:00-06:00', T0) // = T0 + 1h
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+    expect(pendingItems(db, later(2)).items).toHaveLength(1)
+  })
+
+  it('rejects unparseable snooze timestamps instead of storing garbage', () => {
+    const t = tasks.createTask(db, { title: 'later', due_date: '2026-06-28' }, T0)
+    expect(() => snoozeItem(db, `task:${t.id}`, 'mañana', T0)).toThrow(/bad snooze timestamp/)
+    expect(pendingItems(db, T0).items).toHaveLength(1)
+  })
+
   it('writes on a resolved item throw', () => {
     expect(() => dismissItem(db, 'task:nope', T0)).toThrow(/not pending/)
     seedThread('read', { unread: 0 })

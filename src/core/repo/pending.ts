@@ -163,6 +163,15 @@ function loadOverlays(db: DbDriver): Map<string, OverlayRow> {
   return new Map(db.all<OverlayRow>('SELECT * FROM pending_overlay').map((r) => [r.item_key, r]))
 }
 
+/** JS twin of THREAD_VISIBLE, for the fixed sources — the one place the
+ *  overlay-visibility rule lives outside SQL. */
+function hiddenBy(o: OverlayRow | undefined, fingerprint: string, ts: string): boolean {
+  if (!o) return false
+  if (o.snoozed_until && o.snoozed_until > ts) return true
+  if (o.dismissed_at && o.fingerprint === fingerprint) return true
+  return false
+}
+
 export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPayload {
   const ts = nowIso(now)
 
@@ -170,13 +179,7 @@ export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPaylo
   // threads apply the overlay in SQL (THREAD_VISIBLE); only the small fixed
   // sources need the JS pass
   const overlays = loadOverlays(db)
-  const visible = (it: PendingItem): boolean => {
-    const o = overlays.get(it.key)
-    if (!o) return true
-    if (o.snoozed_until && o.snoozed_until > ts) return false
-    if (o.dismissed_at && o.fingerprint === it.fingerprint) return false
-    return true
-  }
+  const visible = (it: PendingItem): boolean => !hiddenBy(overlays.get(it.key), it.fingerprint, ts)
   const seen = (it: PendingItem): boolean => {
     const o = overlays.get(it.key)
     return Boolean(o?.seen_at && o.fingerprint === it.fingerprint)
@@ -243,7 +246,13 @@ function writeOverlay(
 }
 
 export function snoozeItem(db: DbDriver, key: string, untilIso: string, now: Date = new Date()): void {
-  writeOverlay(db, key, { snoozed_until: untilIso, dismissed_at: null }, now)
+  // normalize to UTC …Z form: both comparison sites are lexicographic string
+  // compares against nowIso(), which is only sound if every stored value uses
+  // the same form — MCP callers hand us local-offset ISO all the time, and
+  // stored verbatim it sorts as already-lapsed (a silent no-op snooze)
+  const until = new Date(untilIso)
+  if (Number.isNaN(until.getTime())) throw new Error(`bad snooze timestamp: ${untilIso}`)
+  writeOverlay(db, key, { snoozed_until: until.toISOString(), dismissed_at: null }, now)
 }
 
 export function dismissItem(db: DbDriver, key: string, now: Date = new Date()): void {
@@ -278,8 +287,7 @@ export function markAllSeen(db: DbDriver, now: Date = new Date()): void {
 
   for (const it of fixedItems(db, now)) {
     const o = overlays.get(it.key)
-    if (o && ((o.snoozed_until && o.snoozed_until > ts) || (o.dismissed_at && o.fingerprint === it.fingerprint)))
-      continue // hidden — not on screen, stays unseen
+    if (hiddenBy(o, it.fingerprint, ts)) continue // not on screen, stays unseen
     if (o?.seen_at && o.fingerprint === it.fingerprint) continue
     stamp.push({ key: it.key, fp: it.fingerprint })
   }
@@ -289,6 +297,10 @@ export function markAllSeen(db: DbDriver, now: Date = new Date()): void {
     ts
   )
   for (const t of threads) stamp.push({ key: `thread:${t.id}`, fp: t.fp })
+
+  // steady state on an open view: everything already stamped — make the
+  // common case free instead of paying fixedItems + GC on every pending:list
+  if (stamp.length === 0) return
 
   for (const s of stamp) {
     // visible ⇒ any snooze on the row lapsed and any dismissal mismatched;

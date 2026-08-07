@@ -1,11 +1,11 @@
-import { Notification, powerMonitor, app } from 'electron'
+import { Notification, powerMonitor } from 'electron'
 import type { DbDriver } from '../core/driver'
 import type { Note } from '../core/types'
 import type { AgentTaskRunner } from './chat/task-runner'
 import * as notes from '../core/repo/notes'
 import * as agentTasks from '../core/repo/agent-tasks'
 import { broadcast } from './ipc'
-import { createMainWindow } from './windows/main-window'
+import { openWithDeepLink } from './windows/main-window'
 import { getSettings } from './settings'
 import { logLine } from './logger'
 
@@ -105,14 +105,7 @@ export class Scheduler {
       return
     }
     const n = new Notification({ title, body, silent: false })
-    n.on('click', () => {
-      const win = createMainWindow()
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-      app.focus({ steal: true })
-      broadcast('nav:goto', { view: 'notes', id: note.id })
-    })
+    n.on('click', () => openWithDeepLink({ view: 'notes', id: note.id }))
     n.show()
   }
 }

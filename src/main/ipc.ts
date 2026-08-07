@@ -38,6 +38,8 @@ import { composeBriefing } from '../core/briefing'
 import { DEFAULT_VOICE_ID, listVoices, synthesize, transcribe } from './tts/elevenlabs'
 import { executeCapture } from '../core/capture'
 import { hideCaptureWindow } from './windows/capture-window'
+import { openWithDeepLink } from './windows/main-window'
+import { claimDeepLink } from './deeplink'
 import * as comms from '../core/repo/comms'
 import * as calendarRepo from '../core/repo/calendar'
 import * as meetingsRepo from '../core/repo/meetings'
@@ -180,6 +182,12 @@ async function getTranscriber(onProgress: (received: number, total: number) => v
 export function registerIpc(): void {
   const db = getDb()
 
+  // Deliberately raw ipcMain.handle, NOT the shared handle(): the claim is
+  // desktop-only by construction. A notification click on the Mac is desktop
+  // intent — a remote client that could claim it would navigate the phone
+  // because something was clicked on the desktop.
+  ipcMain.handle('nav:claim', () => claimDeepLink())
+
   // MCP-twin writes (dist-mcp shares the WAL db from another process) never
   // pass through these handlers, so nothing broadcasts for them. SQLite's
   // data_version bumps only when a DIFFERENT connection commits — poll it
@@ -261,7 +269,7 @@ export function registerIpc(): void {
   const runner = new AgentTaskRunner(
     db,
     (entity) => broadcast('db:changed', { entity }),
-    (view, id) => broadcast('nav:goto', { view, id }),
+    (view, id) => openWithDeepLink({ view, id }),
     { respondInvite }
   )
   taskRunner = runner
@@ -672,7 +680,7 @@ export function registerIpc(): void {
       if (!Notification.isSupported()) return
       const n = new Notification({ title, body, silent: true })
       // id rides along so the renderer can focus the meeting's day
-      n.on('click', () => broadcast('nav:goto', { view: 'calendar', id: meetingId }))
+      n.on('click', () => openWithDeepLink({ view: 'calendar', id: meetingId }))
       n.show()
     },
     log: (level, message) => logLine(level, 'meetings', message),
@@ -888,7 +896,7 @@ export function registerIpc(): void {
   handle('terminal:setViewActive', (active) => terminals.setViewActive(active))
   handle('terminal:attentionCount', () => terminals.attentionCount())
 
-  const notifier = new CommsNotifier(db, (view, id) => broadcast('nav:goto', { view, id }))
+  const notifier = new CommsNotifier(db, (view, id) => openWithDeepLink({ view, id }))
   const manager = new CommsSyncManager(
     db,
     (event) => broadcast('comms:event', event),

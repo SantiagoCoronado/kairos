@@ -1,5 +1,5 @@
 import { query, type Query } from '@anthropic-ai/claude-agent-sdk'
-import { Notification, app } from 'electron'
+import { Notification } from 'electron'
 import type { DbDriver } from '../../core/driver'
 import type { AgentTask, AgentTaskDraft, DbEntity } from '../../core/types'
 import * as agentTasks from '../../core/repo/agent-tasks'
@@ -7,7 +7,6 @@ import { newId, nowIso } from '../../core/ids'
 import { DATA_DIR } from '../db'
 import { getSettings } from '../settings'
 import { logLine } from '../logger'
-import { createMainWindow } from '../windows/main-window'
 import { buildKairosSdkServer, buildChildEnv, resolveClaudeBinary, DISALLOWED_TOOLS } from './agent'
 
 const TASK_SYSTEM_PROMPT = `You are running as a scheduled background task inside Kairos, Santiago's personal local CRM + task manager + objective tracker.
@@ -210,19 +209,12 @@ export class AgentTaskRunner {
       title: `${ok ? '✓' : '✗'} ${task.name}`,
       body: detail.trim().slice(0, 300) || (ok ? 'finished' : 'failed')
     })
-    n.on('click', () => {
-      const win = createMainWindow()
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-      app.focus({ steal: true })
-      // Pending is the better landing than Automations: the finished run is
-      // there for review, failures carry danger context, and everything else
-      // awaiting triage is in frame. The item key keeps the link DEEP — runs
-      // are the 7th section and errors sort above fresh successes, so without
-      // a focus target "it's in there somewhere" would be the actual UX.
-      this.onNavigate('pending', `agent_run:${runId}`)
-    })
+    // Pending is the better landing than Automations: the finished run is
+    // there for review, failures carry danger context, and everything else
+    // awaiting triage is in frame. The item key keeps the link DEEP — runs
+    // are the 7th section and errors sort above fresh successes, so without
+    // a focus target "it's in there somewhere" would be the actual UX.
+    n.on('click', () => this.onNavigate('pending', `agent_run:${runId}`))
     n.show()
   }
 }

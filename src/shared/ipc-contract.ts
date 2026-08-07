@@ -177,9 +177,9 @@ export interface IpcApi {
 
   'today:get': () => TodayPayload
 
+  /** the Pending view AND the sidebar badge (via .total) — one computation,
+   *  so the two can never disagree about what counts as pending */
   'pending:list': () => PendingPayload
-  /** sidebar badge */
-  'pending:count': () => number
 
   'calendar:today': () => Promise<CalendarResult>
 

@@ -7,7 +7,7 @@ import * as interactions from './repo/interactions'
 import * as tasks from './repo/tasks'
 import * as notes from './repo/notes'
 import * as comms from './repo/comms'
-import { pendingItems, pendingCount } from './repo/pending'
+import { pendingItems } from './repo/pending'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
 const daysAgo = (n: number, from: Date = T0): Date =>
@@ -114,6 +114,16 @@ describe('sources', () => {
     expect(reminders[0].title).toBe('water plants')
   })
 
+  it('keeps a reminder pending after the scheduler fires its notification', () => {
+    // delivery is not resolution: the scheduler's fired watermark silences
+    // the OS notification, not the triage item
+    const n = notes.createNote(db, { title: 'water plants', remind_at: '2026-07-01T09:00:00Z' }, T0)
+    db.run(`UPDATE notes SET reminder_fired_at = '2026-07-01T09:00:05Z' WHERE id = ?`, n.id)
+    const reminders = pendingItems(db, T0).items.filter((i) => i.kind === 'reminder')
+    expect(reminders).toHaveLength(1)
+    expect(reminders[0].id).toBe(n.id)
+  })
+
   it('collects unread threads only from synced, unarchived threads', () => {
     seedThread('a')
     seedThread('read', { unread: 0 })
@@ -145,7 +155,6 @@ describe('sources', () => {
     expect(payload.items.filter((i) => i.kind === 'thread')).toHaveLength(15)
     expect(payload.more_threads).toBe(3)
     expect(payload.total).toBe(18)
-    expect(pendingCount(db, T0)).toBe(18)
   })
 })
 
@@ -170,13 +179,34 @@ describe('overlay', () => {
     expect(items.map((i) => i.key)).toEqual(['thread:a'])
   })
 
-  it('garbage-collects rows for resolved items, keeps live and still-snoozed rows', () => {
-    const t = tasks.createTask(db, { title: 'live', due_date: '2026-06-28' }, T0)
-    overlayRow(`task:${t.id}`, 'x') // live item → kept
-    overlayRow('task:gone', 'x') // resolved, no snooze → deleted
-    overlayRow('task:gone-snoozed', 'x', { snoozed_until: '2026-07-09T00:00:00Z' }) // waiting out snooze → kept
-    pendingItems(db, T0)
-    const keys = db.all<{ item_key: string }>('SELECT item_key FROM pending_overlay').map((r) => r.item_key)
-    expect(keys.sort()).toEqual([`task:${t.id}`, 'task:gone-snoozed'])
+  it('excludes overlay-hidden threads from total and more_threads (SQL count path)', () => {
+    seedThread('kept', { lastMessageAt: '2026-06-30T10:00:00Z' })
+    seedThread('dismissed', { lastMessageAt: '2026-06-29T10:00:00Z' })
+    seedThread('snoozed', { lastMessageAt: '2026-06-28T10:00:00Z' })
+    overlayRow('thread:dismissed', '2026-06-29T10:00:00Z', { dismissed_at: T0.toISOString() })
+    overlayRow('thread:snoozed', 'whatever', { snoozed_until: '2026-07-09T00:00:00Z' })
+    const payload = pendingItems(db, T0)
+    expect(payload.items.map((i) => i.id)).toEqual(['kept'])
+    expect(payload.total).toBe(1)
+    expect(payload.more_threads).toBe(0)
+  })
+
+  it('a dismissed follow-up stays hidden until an interaction lands (documented guarantee)', () => {
+    const p = people.upsertPerson(db, { name: 'Anna', cadence_days: 14 }, daysAgo(100))
+    const fp = pendingItems(db, T0).items.find((i) => i.kind === 'followup')!.fingerprint
+    overlayRow(`followup:${p.id}`, fp, { dismissed_at: T0.toISOString() })
+    // still overdue two weeks later — dismissal holds because nothing can
+    // renew the fingerprint while the person is still due
+    expect(
+      pendingItems(db, new Date('2026-07-15T12:00:00Z')).items.filter((i) => i.kind === 'followup')
+    ).toHaveLength(0)
+    // an interaction resolves the item the domain way (and would reset the
+    // fingerprint for the next time the cadence lapses)
+    interactions.logInteraction(
+      db,
+      { person_id: p.id, summary: 'lunch', occurred_at: T0.toISOString() },
+      T0
+    )
+    expect(pendingItems(db, T0).items.filter((i) => i.kind === 'followup')).toHaveLength(0)
   })
 })

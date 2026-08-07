@@ -68,7 +68,19 @@ CREATE TABLE pending_overlay (
   - agent_run → run id (immutable → dismiss is effectively permanent, correct for runs)
   - invite → event `updated` timestamp
 - **Garbage collection:** overlay rows whose item no longer appears in the
-  computed set and whose snooze has lapsed are deleted opportunistically on read.
+  computed set and whose snooze has lapsed are deleted by the triage write
+  paths (phase 2) — reads stay pure, since the badge, the view, and the MCP
+  tool all share the read path.
+- **Delivery is not resolution.** A note reminder whose OS notification
+  already fired (`reminder_fired_at` set) is still pending — the scheduler's
+  watermark silences the notification, not the triage item. Pending queries
+  due reminders regardless of the fired flag; `notes:dueCount` keeps the
+  scheduler's predicate (they answer different questions).
+- **Follow-up dismissals are stronger than the other kinds** (documented,
+  intentional): the fingerprint is the last interaction, and nothing can renew
+  it while the person is still due — so dismissing means "quiet until we
+  actually talk". Tasks/threads/reminders all have renewal signals that expire
+  a dismissal; follow-ups resolve the domain way (log an interaction).
 
 ### Aggregator (`src/core/repo/pending.ts`)
 
@@ -92,24 +104,31 @@ type, new `DbEntity` member `'pending'`.
 **1.2 — Aggregator with core four sources.** `src/core/repo/pending.ts`:
 - Tasks: overdue + due today (reuse `today.ts` queries).
 - Followups: `followupsDue()` (already respects `people.snoozed_until`).
-- Note reminders: due via the `remind_at <= now AND (fired IS NULL OR fired < remind_at)` rule (`repo/notes.ts`).
+- Note reminders: due (`remind_at <= now`), unarchived, regardless of the
+  scheduler's fired watermark (see "delivery is not resolution" above).
 - Comms: unread, non-archived, `sync_enabled` threads. Threads labeled
   `action-needed` get elevated placement; since `autoLabel` defaults off,
   plain unread is the baseline signal. Cap at ~15 with an "open Inbox" tail row
   so Pending doesn't become a second mail client.
-- Overlay filtering + GC per the semantics above (table exists; writes come in Phase 2).
+- Overlay filtering per the semantics above (table exists; writes and GC come
+  in Phase 2). Thread materialization is bounded (LIMIT 50); totals come from
+  SQL `COUNT`s so large mailboxes never fully materialize.
 - Co-located `pending.test.ts`: every source, ordering, cap, fingerprint values.
 
-**1.3 — IPC + MCP surface.** `pending:list` and `pending:count` in
+**1.3 — IPC + MCP surface.** A single `pending:list` channel in
 `ipc-contract.ts` + `ipc.ts` (registered via `handle()` so remote/mobile gets
-them free). MCP tool `pending_inbox` appended to `tooldefs.ts` (read-only,
-sync handler, calls the repo directly) — this is what lets Claude answer
-"what's pending?".
+it free); the sidebar badge derives from `.total` of the same payload so badge
+and view can never disagree. MCP tool `pending_inbox` appended to
+`tooldefs.ts` (read-only, sync handler, calls the repo directly) — this is
+what lets Claude answer "what's pending?".
 
 **1.4 — Pending view + navigation.** `views/Pending.tsx` modeled on Today's
 section-card layout (`Section` / `Chip` / right-aligned mono actions,
-`text-[13px]` body conventions). Touch points: `Sidebar.tsx` (`ViewId`, `NAV`,
-badge from `pending:count`), `App.tsx` (`VIEW_ORDER` ⌘-slot, render),
+`text-[13px]` body conventions). Pending sits second in the sidebar but is
+*appended* to `VIEW_ORDER` — the existing ⌘2–⌘9 muscle memory keeps its
+slots, and Pending has no ⌘ shortcut (sidebar/palette reach it). Touch
+points: `Sidebar.tsx` (`ViewId`, `NAV`, badge from `pending:list.total`,
+`VIEW_ORDER` now lives here), `App.tsx` (render),
 `CommandPalette.tsx`, `NavView` union in `ipc-contract.ts`. **Not** in
 `MobileTabBar` (5 tabs is the fit limit) — mobile reachability deferred to
 Phase 5 decision. Rows navigate via the same mechanism as `nav:goto`.
@@ -131,8 +150,10 @@ Branch `feat/pending-inbox-triage`.
 **2.1 — Overlay writes.** `pending:snooze {key, until}`, `pending:dismiss {key}`,
 `pending:setViewActive` (stamps `seen_at` for visible items — the badge then
 counts only unseen, same idea as `agentTasks:setViewActive`). All broadcast
-`db:changed {entity:'pending'}`. Repo functions with tests covering
-fingerprint-resurfacing (dismiss → renew condition → item returns).
+`db:changed {entity:'pending'}`. The write paths also own overlay garbage
+collection (rows whose item resolved and snooze lapsed). Repo functions with
+tests covering fingerprint-resurfacing (dismiss → renew condition → item
+returns).
 
 **2.2 — Row actions in the view.** Hover/swipe actions per row: Snooze
 (popover with 1h / this evening / tomorrow / next week — **`bg-overlay`**, the

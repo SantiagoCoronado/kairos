@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Sidebar, SidebarToggle, type ViewId } from './components/Sidebar'
+import { Sidebar, SidebarToggle, VIEW_ORDER, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
 import { useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
@@ -27,19 +27,6 @@ import { undoLast } from './lib/undo'
 const promptToasts = new Map<string, number>()
 
 const SIDEBAR_KEY = 'kairos.sidebarHidden'
-const VIEW_ORDER: ViewId[] = [
-  'today',
-  'pending',
-  'inbox',
-  'people',
-  'tasks',
-  'notes',
-  'calendar',
-  'objectives',
-  'automations',
-  'chat',
-  'terminal'
-]
 
 /** views the phone shell can host: the tabs plus People, which stays
  *  reachable through person links on Today/Inbox even without its own tab.

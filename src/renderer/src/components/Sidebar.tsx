@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Bell } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useResizableWidth, ResizeHandle } from './ResizeHandle'
@@ -43,6 +43,24 @@ export function SidebarToggle({
 const SIDEBAR_W_KEY = 'kairos.sidebar.w'
 const SIDEBAR_W = { def: 208, min: 160, max: 320 }
 
+/** ⌘1–⌘9 slots (drives App's key handler AND the tooltips here). Pending is
+ *  deliberately appended, not inserted at its sidebar position: the
+ *  long-standing slots (⌘2 Inbox, ⌘3 People, …) keep their muscle memory,
+ *  and anything past ⌘9 simply has no shortcut. */
+export const VIEW_ORDER: ViewId[] = [
+  'today',
+  'inbox',
+  'people',
+  'tasks',
+  'notes',
+  'calendar',
+  'objectives',
+  'automations',
+  'chat',
+  'terminal',
+  'pending'
+]
+
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
   { id: 'pending', label: 'Pending', icon: Bell },
@@ -68,11 +86,18 @@ export function Sidebar({
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
-  const { data: pendingTotal } = useInvoke(
-    'pending:count',
+  const { data: pending, reload: reloadPending } = useInvoke(
+    'pending:list',
     [],
     ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms']
   )
+  // due-ness moves with the clock — same tick the Pending view runs, so the
+  // badge can't lag the list when a reminder crosses its remind_at
+  useEffect(() => {
+    const t = setInterval(reloadPending, 60_000)
+    return () => clearInterval(t)
+  }, [reloadPending])
+  const pendingTotal = pending?.total
   const { data: dueNotes } = useInvoke('notes:dueCount', [], ['notes'])
   const { data: autoActivity } = useInvoke('agentTasks:activity', [], ['agent_tasks'])
   // terminal is denied over remote access unless the user opted in — don't
@@ -91,11 +116,13 @@ export function Sidebar({
         <SidebarToggle hidden={false} onToggle={onHide} />
       </div>
       <nav className="flex-1 px-2 py-2 space-y-0.5">
-        {nav.map(({ id, label, icon: Icon }, i) => (
+        {nav.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             onClick={() => onNavigate(id)}
-            title={`${label} (⌘${i + 1})`}
+            title={
+              VIEW_ORDER.indexOf(id) < 9 ? `${label} (⌘${VIEW_ORDER.indexOf(id) + 1})` : label
+            }
             className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-left transition-colors ${
               view === id ? 'bg-raised text-text' : 'text-muted hover:text-text hover:bg-raised/50'
             }`}

@@ -2,15 +2,19 @@ import type { DbDriver } from '../driver'
 import type { PendingItem, PendingPayload, Task } from '../types'
 import { localDate, nowIso } from '../ids'
 import { followupsDue } from './followups'
-import { listDueReminders } from './notes'
 
 // The Pending inbox aggregator. Everything is computed live from the source
 // domains so items can never go stale; the pending_overlay table contributes
 // only visibility (snooze/dismiss) and, later, seen state. Sources appear in
-// section order: tasks, followups, note reminders, unread threads.
+// section order: tasks, followups, note reminders, unread threads. Reads are
+// pure — overlay garbage collection belongs to the triage write paths.
 
 /** unread threads shown before the "N more in Inbox" tail row */
 const THREAD_CAP = 15
+/** materialization bound: headroom over the cap so overlay-hidden rows can't
+ *  starve the visible list; the badge total never depends on this (it's a
+ *  SQL COUNT), only which rows are available for display does */
+const THREAD_FETCH = 50
 
 interface OverlayRow {
   item_key: string
@@ -51,13 +55,30 @@ function followupItems(db: DbDriver, now: Date): PendingItem[] {
         : `${f.days_overdue}d overdue · every ${f.cadence_days}d`,
     tone: 'accent' as const,
     at: f.last_interaction_at,
-    // last interaction is what resets the cadence, so it is the renewal signal
+    // Last interaction is what resets the cadence, so it is the renewal
+    // signal. Deliberate consequence, unlike the other sources: nothing can
+    // renew this fingerprint while the person is still due (logging an
+    // interaction also resolves the item), so dismissing a follow-up means
+    // "quiet until we actually talk" — stronger than the date-bound domain
+    // snooze, and the row stays until an interaction lands.
     fingerprint: f.last_interaction_at ?? 'never',
   }))
 }
 
 function reminderItems(db: DbDriver, now: Date): PendingItem[] {
-  return listDueReminders(db, now).map((n) => ({
+  // NOT notes.listDueReminders: its predicate excludes fired reminders
+  // because it answers "what should the scheduler still notify about". For
+  // triage, delivery is not resolution — a reminder that already produced
+  // its notification stays pending until dismissed here or resolved in
+  // Notes. A repeating note advances remind_at, so the fingerprint renews
+  // and a dismissal expires on the next occurrence.
+  const rows = db.all<{ id: string; title: string; content: string; remind_at: string }>(
+    `SELECT id, title, content, remind_at FROM notes
+     WHERE archived = 0 AND remind_at IS NOT NULL AND remind_at <= ?
+     ORDER BY remind_at`,
+    nowIso(now)
+  )
+  return rows.map((n) => ({
     key: `reminder:${n.id}`,
     kind: 'reminder' as const,
     id: n.id,
@@ -65,11 +86,14 @@ function reminderItems(db: DbDriver, now: Date): PendingItem[] {
     subtitle: 'reminder',
     tone: 'accent' as const,
     at: n.remind_at,
-    fingerprint: n.remind_at ?? '',
+    fingerprint: n.remind_at
   }))
 }
 
-/** All unread, sync-enabled, unarchived threads — action-needed ones first. */
+const UNREAD_THREAD = `sync_enabled = 1 AND is_archived = 0 AND unread_count > 0`
+
+/** Unread, sync-enabled, unarchived threads — action-needed first. Bounded:
+ *  only THREAD_FETCH rows are materialized; totals come from SQL counts. */
 function threadItems(db: DbDriver): PendingItem[] {
   const rows = db.all<{
     id: string
@@ -79,10 +103,11 @@ function threadItems(db: DbDriver): PendingItem[] {
     labels: string
   }>(
     `SELECT id, title, snippet, last_message_at, labels FROM comms_threads
-     WHERE sync_enabled = 1 AND is_archived = 0 AND unread_count > 0
-     ORDER BY last_message_at DESC`
+     WHERE ${UNREAD_THREAD}
+     ORDER BY instr(',' || labels || ',', ',action-needed,') > 0 DESC, last_message_at DESC
+     LIMIT ${THREAD_FETCH}`
   )
-  const items = rows.map((r) => {
+  return rows.map((r) => {
     const actionNeeded = r.labels.split(',').includes('action-needed')
     return {
       key: `thread:${r.id}`,
@@ -94,13 +119,28 @@ function threadItems(db: DbDriver): PendingItem[] {
       // and the classifier's action-needed verdict is the elevation
       tone: actionNeeded ? ('accent' as const) : ('muted' as const),
       at: r.last_message_at,
-      fingerprint: r.last_message_at ?? '',
-      actionNeeded
+      fingerprint: r.last_message_at ?? ''
     }
   })
-  return items
-    .sort((a, b) => Number(b.actionNeeded) - Number(a.actionNeeded))
-    .map(({ actionNeeded: _actionNeeded, ...item }) => item)
+}
+
+/** Exact count of unread threads the overlay is not hiding — the predicate
+ *  must mirror `visible()` below; keep them in lockstep. */
+function visibleThreadCount(db: DbDriver, ts: string): number {
+  return (
+    db.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM comms_threads t
+       WHERE ${UNREAD_THREAD}
+         AND NOT EXISTS (
+           SELECT 1 FROM pending_overlay o
+           WHERE o.item_key = 'thread:' || t.id
+             AND ((o.snoozed_until IS NOT NULL AND o.snoozed_until > ?)
+               OR (o.dismissed_at IS NOT NULL
+                   AND o.fingerprint = COALESCE(t.last_message_at, '')))
+         )`,
+      ts
+    )?.n ?? 0
+  )
 }
 
 export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPayload {
@@ -121,27 +161,12 @@ export function pendingItems(db: DbDriver, now: Date = new Date()): PendingPaylo
     return true
   }
 
-  // GC: overlay rows whose item is no longer pending at all and whose snooze
-  // has lapsed have nothing left to say — a resolved item that becomes
-  // pending again gets a fresh fingerprint anyway.
-  const liveKeys = new Set([...fixed, ...threads].map((i) => i.key))
-  for (const o of overlays.values()) {
-    if (!liveKeys.has(o.item_key) && (!o.snoozed_until || o.snoozed_until <= ts)) {
-      db.run('DELETE FROM pending_overlay WHERE item_key = ?', o.item_key)
-    }
-  }
-
   const visFixed = fixed.filter(visible)
-  const visThreads = threads.filter(visible)
-  const shownThreads = visThreads.slice(0, THREAD_CAP)
+  const shownThreads = threads.filter(visible).slice(0, THREAD_CAP)
+  const threadTotal = visibleThreadCount(db, ts)
   return {
     items: [...visFixed, ...shownThreads],
-    more_threads: visThreads.length - shownThreads.length,
-    total: visFixed.length + visThreads.length
+    more_threads: threadTotal - shownThreads.length,
+    total: visFixed.length + threadTotal
   }
-}
-
-/** sidebar badge */
-export function pendingCount(db: DbDriver, now: Date = new Date()): number {
-  return pendingItems(db, now).total
 }

@@ -634,7 +634,8 @@ ALTER TABLE comms_outbox ADD COLUMN delivered_json TEXT;
   // the fingerprint captured at dismiss time — when the underlying condition
   // renews (new inbound message, due date pushed and missed again) the
   // fingerprints stop matching and the item resurfaces. Rows whose item is
-  // gone and whose snooze has lapsed are garbage-collected on read.
+  // gone and whose snooze has lapsed are garbage-collected by the triage
+  // write paths — reads stay pure.
   `
 CREATE TABLE pending_overlay (
   item_key      TEXT PRIMARY KEY,

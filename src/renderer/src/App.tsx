@@ -102,23 +102,39 @@ export default function App(): React.JSX.Element {
     []
   )
 
-  // deep links from main-process notifications (reminder clicks). A
-  // calendar goto carrying a meeting id also focuses that meeting's day; a
-  // pending goto carrying an item key scrolls to and highlights that row.
-  useEffect(
-    () =>
-      api.on('nav:goto', ({ view: v, id }) => {
-        if (v === 'calendar' && id) {
-          void api
-            .invoke('meetings:get', id)
-            .then(({ meeting }) => setCalendarFocus(new Date(meeting.started_at)))
-            .catch(() => {})
-        }
-        if (v === 'pending' && id) setPendingFocus(id)
-        setView(v)
-      }),
-    []
-  )
+  // Deep links from main-process notifications (reminder clicks). A calendar
+  // goto carrying a meeting id also focuses that meeting's day; a pending
+  // goto carrying an item key scrolls to and highlights that row.
+  //
+  // Delivery is a handshake (issue #99): a nav:goto sent into a freshly
+  // constructed window is LOST — React mounts after the load event, so no
+  // main-side deferral can reliably land. Main stashes every notification
+  // link; the mount effect below claims it (cold-window path), and the live
+  // nav:goto handler claims-to-discard as an ack so a stashed copy of an
+  // already-delivered link can't replay on the next mount. Electron only —
+  // remote clients must not consume a Mac notification's intent.
+  useEffect(() => {
+    const applyNav = ({ view: v, id }: { view: ViewId; id?: string }): void => {
+      if (v === 'calendar' && id) {
+        void api
+          .invoke('meetings:get', id)
+          .then(({ meeting }) => setCalendarFocus(new Date(meeting.started_at)))
+          .catch(() => {})
+      }
+      if (v === 'pending' && id) setPendingFocus(id)
+      setView(v)
+    }
+    if (window.api) {
+      void api
+        .invoke('nav:claim')
+        .then((link) => link && applyNav(link))
+        .catch(() => {})
+    }
+    return api.on('nav:goto', (link) => {
+      applyNav(link)
+      if (window.api) void api.invoke('nav:claim').catch(() => {}) // ack: consume the stashed copy
+    })
+  }, [])
 
   const toggleSidebar = (): void => {
     setSidebarHidden((h) => {

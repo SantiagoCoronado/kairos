@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { getTerminalManager } from '../ipc'
+import { deliverDeepLink, type DeepLink } from '../deeplink'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -68,4 +69,19 @@ export function createMainWindow(): BrowserWindow {
   }
 
   return mainWindow
+}
+
+/**
+ * The one way a notification click navigates the app: raise (or construct)
+ * the window, then deliver through the stash-and-claim handshake — a send
+ * into a freshly constructed window is lost (React mounts after the load
+ * event; see deeplink.ts), so the mounted renderer claims the stash instead.
+ */
+export function openWithDeepLink(link: DeepLink): void {
+  const win = createMainWindow()
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+  app.focus({ steal: true })
+  deliverDeepLink(win, link)
 }

@@ -86,6 +86,13 @@ export interface IpcApi {
   'app:ping': () => string
   /** append a renderer-side event to ~/Kairos/logs/app.log */
   'log:renderer': (level: 'info' | 'warn' | 'error', message: string) => void
+  /** Mount-claim half of the notification deep-link handshake: a nav:goto
+   *  sent into a freshly constructed window is lost (React mounts after the
+   *  load event), so main stashes the link and the renderer claims it here on
+   *  mount. One-shot. Electron-only — registered raw on ipcMain, never on the
+   *  remote dispatch, because a Mac notification click must not navigate a
+   *  connected phone. */
+  'nav:claim': () => { view: NavView; id?: string } | null
 
   'tasks:list': (f: TaskFilter) => Task[]
   'tasks:create': (input: NewTask) => Task

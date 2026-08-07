@@ -117,12 +117,16 @@ export function PendingView({
   useEffect(() => {
     if (!focusKey || !payload) return
     const el = document.querySelector(`[data-pending-key="${CSS.escape(focusKey)}"]`)
-    if (el) {
-      el.scrollIntoView({ block: 'center' })
-      setHighlightKey(focusKey)
-      setTimeout(() => setHighlightKey(null), 2500)
+    if (!el) {
+      // item resolved before we landed — the deep link's job is done anyway
+      onFocusConsumed?.()
+      return
     }
+    el.scrollIntoView({ block: 'center' })
+    setHighlightKey(focusKey)
+    const t = setTimeout(() => setHighlightKey(null), 2500)
     onFocusConsumed?.()
+    return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusKey, payload])
 

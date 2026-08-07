@@ -10,12 +10,11 @@
 // Guardrails: suppressed while an app window is focused; only messages newer
 // than RECENT_WINDOW_MS (a first sync/backfill can't storm); at most
 // MAX_PER_BATCH individual banners per event, the rest coalesce into one.
-import { Notification, BrowserWindow, app } from 'electron'
+import { Notification, BrowserWindow } from 'electron'
 import type { DbDriver } from '../../core/driver'
 import type { NavView } from '../../shared/ipc-contract'
 import type { CommsProvider, CommsThreadListItem } from '../../core/comms-types'
 import * as repo from '../../core/repo/comms'
-import { createMainWindow } from '../windows/main-window'
 import { getSettings } from '../settings'
 import { sendPushAll } from '../remote/push'
 import { logLine } from '../logger'
@@ -132,14 +131,7 @@ export class CommsNotifier {
     // banner (window unfocused ≈ away from the desk), no-op with no devices.
     sendPushAll({ title, body, threadId })
     const n = new Notification({ title, body, silent: false })
-    n.on('click', () => {
-      const win = createMainWindow()
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-      app.focus({ steal: true })
-      this.onNavigate('inbox', threadId)
-    })
+    n.on('click', () => this.onNavigate('inbox', threadId))
     n.show()
   }
 }

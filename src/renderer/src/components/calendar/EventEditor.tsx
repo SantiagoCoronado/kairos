@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Repeat, Trash2, Video, X } from 'lucide-react'
-import type { CalendarAttendee, CalendarCalendar, CalendarEventRecord } from '../../../../core/types'
+import type {
+  CalendarAttendee,
+  CalendarCalendar,
+  CalendarEventRecord,
+  RsvpResponse
+} from '../../../../core/types'
+import { selfAttendee } from '../../../../core/repo/calendar'
 import type { AttendeeSuggestion } from '../../../../shared/ipc-contract'
 import { api } from '../../lib/api'
 import { MeetingSection } from '../meeting/MeetingSection'
@@ -62,12 +68,51 @@ export function EventEditor({
   const [wantMeet, setWantMeet] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [rsvpBusy, setRsvpBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [meetUrl, setMeetUrl] = useState<string | null>(null)
 
   const calendar = calendars.find((c) => c.id === calendarId)
   const isGoogle = Boolean(calendar?.account_id)
   const canMove = !existing?.google_event_id
+
+  // the account email feeds selfAttendee() — the SAME rule detection and the
+  // write path use (self flag, else email match), so the response row can
+  // never exist in Pending but be missing here for flag-less feeds
+  const [accountEmail, setAccountEmail] = useState('')
+  useEffect(() => {
+    const accountId = existing?.google_event_id
+      ? calendars.find((c) => c.id === existing.calendar_id)?.account_id
+      : null
+    if (!accountId) return
+    void api.invoke('calendar:accounts').then((accounts) => {
+      setAccountEmail(accounts.find((a) => a.id === accountId)?.external_id ?? '')
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // present on Google-synced events where we're a guest; organizer-owned
+  // events list us as accepted and the buttons just show that state
+  const selfEntry = existing?.google_event_id ? selfAttendee(attendees, accountEmail) : undefined
+
+  const rsvp = (response: RsvpResponse): void => {
+    if (!existing) return
+    setRsvpBusy(true)
+    setError(null)
+    void api
+      .invoke('calendar:respond', existing.id, response)
+      .then(() => {
+        // update the entry selfAttendee() resolved, not the flag — a
+        // flag-less feed's entry was matched by email
+        setAttendees((prev) =>
+          prev.map((a) => (a === selfEntry ? { ...a, responseStatus: response } : a))
+        )
+        setRsvpBusy(false)
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err))
+        setRsvpBusy(false)
+      })
+  }
 
   const addAttendee = (email: string, displayName?: string): void => {
     const clean = email.trim().replace(/,$/, '')
@@ -423,6 +468,33 @@ export function EventEditor({
             </p>
           )}
         </div>
+
+        {/* our answer to an invitation — works on recurring instances too
+            (it answers the whole series), so not gated by readOnlyRecurring */}
+        {selfEntry && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-faint mr-1">
+              Your response{readOnlyRecurring ? ' (whole series)' : ''}
+            </span>
+            {(
+              [
+                ['accepted', 'Accept'],
+                ['tentative', 'Maybe'],
+                ['declined', 'Decline']
+              ] as const
+            ).map(([value, label]) => (
+              <Button
+                key={value}
+                variant={selfEntry.responseStatus === value ? 'accent' : 'ghost'}
+                className="text-[11.5px]"
+                disabled={rsvpBusy}
+                onClick={() => selfEntry.responseStatus !== value && rsvp(value)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        )}
 
         {/* conferencing */}
         <div className="flex items-center gap-1.5">

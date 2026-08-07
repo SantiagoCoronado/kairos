@@ -7,7 +7,8 @@ import type {
   CalendarEventPatch,
   CalendarEventRecord,
   CalendarEventStatus,
-  NewCalendarEvent
+  NewCalendarEvent,
+  RsvpResponse
 } from '../types'
 import { newId, nowIso } from '../ids'
 
@@ -520,6 +521,80 @@ export function applyRemoteEvent(
     ts,
     ts
   )
+}
+
+/** The attendee entry that is us on this copy of the event: Google stamps
+ *  `self` on the calendar-owner's entry; the email match is the fallback for
+ *  feeds that omit the flag. */
+export function selfAttendee(
+  attendees: CalendarAttendee[],
+  accountEmail: string
+): CalendarAttendee | undefined {
+  return attendees.find((a) => a.self || a.email?.toLowerCase() === accountEmail)
+}
+
+/**
+ * Attendee list with the self entry's responseStatus replaced — the body of an
+ * RSVP patch. Google replaces the whole attendees array on patch, so everyone
+ * else must be carried through unchanged or their RSVPs reset to needsAction.
+ * Returns undefined when no self entry exists (we are not invited).
+ *
+ * Entries deliberately pass through whole (others by reference, self by
+ * spread): the wire objects carry fields beyond CalendarAttendee's five —
+ * optional, resource, comment, additionalGuests — and rebuilding entries
+ * field-by-field, rowToGoogleBody-style, would silently strip those flags
+ * from every guest on each RSVP. Do not "tidy" this into a reconstruction.
+ */
+export function applyRsvp(
+  attendees: CalendarAttendee[],
+  accountEmail: string,
+  response: RsvpResponse
+): CalendarAttendee[] | undefined {
+  const self = selfAttendee(attendees, accountEmail)
+  if (!self) return undefined
+  return attendees.map((a) => (a === self ? { ...a, responseStatus: response } : a))
+}
+
+/**
+ * Reflect a series-level RSVP (patched on the recurring parent, which Kairos
+ * never stores) onto every local expanded instance. Like setEventConferencing
+ * this must NOT dirty the rows — the change already lives on Google, and a
+ * pending_update here would push full instance bodies at a series we only
+ * answered. Instance etags went stale the moment the parent patch landed, so
+ * they are cleared; the next pull's applyRemoteEvent refreshes them.
+ */
+export function applySelfResponseToSeries(
+  db: DbDriver,
+  calendarId: string,
+  recurringEventId: string,
+  accountEmail: string,
+  response: RsvpResponse,
+  now: Date = new Date()
+): number {
+  const rows = db.all<{ id: string; attendees: string }>(
+    'SELECT id, attendees FROM calendar_events WHERE calendar_id = ? AND recurring_event_id = ?',
+    calendarId,
+    recurringEventId
+  )
+  let changed = 0
+  for (const row of rows) {
+    let attendees: CalendarAttendee[]
+    try {
+      attendees = JSON.parse(row.attendees) as CalendarAttendee[]
+    } catch {
+      continue
+    }
+    const next = applyRsvp(attendees, accountEmail, response)
+    if (!next) continue
+    db.run(
+      'UPDATE calendar_events SET attendees = ?, etag = NULL, updated_at = ? WHERE id = ?',
+      JSON.stringify(next),
+      nowIso(now),
+      row.id
+    )
+    changed++
+  }
+  return changed
 }
 
 /** Distinct attendee emails seen on past events matching `q` — autocomplete

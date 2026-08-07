@@ -223,24 +223,45 @@ Pending agree on unseen runs.
 
 ## Phase 4 — Calendar invites + RSVP
 
-Branch `feat/pending-inbox-rsvp`. Greenfield: nothing today detects
-"needs my response", and RSVP is read-only everywhere.
+Branch `feat/pending-inbox-rsvp`. Greenfield: nothing detected
+"needs my response" before this, and RSVP was read-only everywhere.
 
 ### Stories
 
-**4.1 — Detection (read-only).** Identify the self-attendee by matching
-account email against `attendees[].email`; surface events where self
-`responseStatus === 'needsAction'` and the event is in the future. Deep-link
-to Calendar. Fingerprint = event `updated`.
+**4.1 — Detection.** The self-attendee is found by Google's `self` flag
+first, account-email match as fallback — the same `selfAttendee()` rule the
+write path uses, so detect and respond can never disagree about who "we"
+are. Surface events where self is `needsAction` and `end_at > now` (an
+invite for a meeting in progress is still answerable; all-day date-only
+strings compare correctly against ISO now, same trick as the range query).
+A recurring series collapses to its earliest upcoming instance — one
+question, not N expanded rows; when that occurrence passes the key rolls
+forward and any dismissal expires with it, the repeating-reminder
+renewed-nag semantics. Fingerprint = `etag`, not Google's `updated` (never
+stored locally); etag changes on every remote modification, so a dismissal
+survives exactly until the invite changes. Deep-link focuses the event's day
+in Calendar.
 
 **4.2 — RSVP actions.** `calendar:respond {eventId, response}` →
-`events.patch` updating only the self-attendee's `responseStatus`
-(with `sendUpdates`), in `gcal/api.ts` — taking care to preserve the existing
-"don't reset other attendees' status" behavior. Accept / Decline / Tentative
-buttons on the pending row and in `EventEditor`. MCP tool `calendar_respond`.
+`CalendarSyncManager.respond()`: a direct get-then-patch (NOT the dirty-row
+drain, which pushes full event bodies) — fetch the fresh remote copy, swap
+only our `responseStatus` via `applyRsvp()` (a patch replaces the whole
+attendees array, so everyone else is carried through current), patch with
+the fresh etag and `sendUpdates` so the organizer is notified. A recurring
+instance patches the **parent** event — answering the whole series, like
+Google's own UI — then `applySelfResponseToSeries()` reflects it onto local
+instances without dirtying them (etags cleared; next pull reconciles).
+accept / maybe / decline on the pending row (no undo — outward-facing; the
+answer is changeable any time), Accept / Maybe / Decline in `EventEditor`
+(not gated by the recurring read-only banner). MCP `calendar_respond` runs
+through a new optional `ToolCtx.respondInvite` hook wired only by Electron
+main — in-app chat gets full RSVP; the stdio twin says plainly that it needs
+the app (it has no Google session). Side fix: both tool-server wrappers now
+`await` handlers, which async tool handlers needed.
 
-**4.3 — InviteCard upgrade (stretch, cuttable).** Email `.ics` invite cards in
-comms gain RSVP buttons alongside "Add to calendar", reusing 4.2's plumbing.
+**4.3 — InviteCard upgrade (stretch, cuttable).** Not built this phase.
+Email `.ics` invite cards in comms would gain RSVP buttons reusing 4.2's
+plumbing.
 
 **Acceptance:** an unanswered Google Calendar invite appears in Pending;
 accepting from the row updates Google and the item clears on next sync.

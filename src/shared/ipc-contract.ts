@@ -39,6 +39,7 @@ import type {
   CalendarEventRecord,
   NewCalendarEvent,
   CalendarEventPatch,
+  RsvpResponse,
   Meeting,
   MeetingFilter,
   MeetingTranscript,
@@ -211,6 +212,9 @@ export interface IpcApi {
   'calendarEvents:delete': (id: string) => void
   /** attach a Google Meet link (writable google-calendar events only) */
   'calendarEvents:addMeet': (id: string) => Promise<CalendarEventRecord>
+  /** answer an invitation (self-attendee responseStatus, pushed to Google
+   *  immediately; a recurring instance answers the whole series) */
+  'calendar:respond': (eventId: string, response: RsvpResponse) => Promise<void>
   'calendar:calendars': () => CalendarCalendar[]
   'calendar:setVisible': (calendarId: string, visible: boolean) => void
   'calendar:accounts': () => CalendarAccount[]

@@ -81,21 +81,27 @@ type SessionRow = {
   origin: 'chat' | 'automation'
 }
 
+/** main-process capabilities the shared tool list can't reach from core —
+ *  wired lazily by ipc.ts (the managers don't exist yet when the chat stack
+ *  is constructed) */
+export type ToolHooks = Pick<import('../../core/tooldefs').ToolCtx, 'respondInvite'>
+
 /** The kairos tool server + allowlist, shared by the chat panel and the
  *  scheduled-task runner so both expose the exact same tool surface. */
 export function buildKairosSdkServer(
   db: DbDriver,
-  onMutate: (entity: import('../../core/types').DbEntity) => void
+  onMutate: (entity: import('../../core/types').DbEntity) => void,
+  hooks: ToolHooks = {}
 ): { server: ReturnType<typeof createSdkMcpServer>; allowedTools: string[] } {
   // agent-made writes fire automation event triggers just like user actions
-  const defs = buildToolDefs(db, { dataDir: DATA_DIR, onMutate, onEvent: emitAppEvent })
+  const defs = buildToolDefs(db, { dataDir: DATA_DIR, onMutate, onEvent: emitAppEvent, ...hooks })
   const server = createSdkMcpServer({
     name: 'kairos',
     version: '0.1.0',
     tools: defs.map((d) =>
       tool(d.name, d.description, d.schema, async (args) => {
         try {
-          const result = d.handler(args)
+          const result = await d.handler(args)
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(result ?? null, null, 2) }]
           }
@@ -142,12 +148,13 @@ export class ChatManager {
   constructor(
     db: DbDriver,
     emit: (event: ChatStreamEvent) => void,
-    onMutate: (entity: import('../../core/types').DbEntity) => void
+    onMutate: (entity: import('../../core/types').DbEntity) => void,
+    hooks: ToolHooks = {}
   ) {
     this.db = db
     this.emit = emit
 
-    const { server, allowedTools } = buildKairosSdkServer(db, onMutate)
+    const { server, allowedTools } = buildKairosSdkServer(db, onMutate, hooks)
     this.server = server
     this.allowedTools = allowedTools
   }

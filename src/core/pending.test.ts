@@ -8,6 +8,8 @@ import * as tasks from './repo/tasks'
 import * as notes from './repo/notes'
 import * as comms from './repo/comms'
 import * as agentTasks from './repo/agent-tasks'
+import * as cal from './repo/calendar'
+import type { CalendarAttendee } from './types'
 import {
   pendingItems,
   snoozeItem,
@@ -531,5 +533,162 @@ describe('review round 2: errors are un-croppable', () => {
     expect(runs[0].id).toBe(bad.id)
     expect(runs[0].tone).toBe('danger')
     expect(payload.danger).toBe(1)
+  })
+})
+
+describe('invitation source', () => {
+  const SELF = 'me@gmail.com'
+
+  function googleCalendar(opts: { visible?: boolean } = {}): string {
+    const account = cal.upsertCalendarAccount(db, { external_id: SELF, display_name: SELF }, T0)
+    const c = cal.upsertCalendarFromGoogle(
+      db,
+      account.id,
+      {
+        google_calendar_id: SELF,
+        summary: 'Personal',
+        color: null,
+        is_primary: true,
+        is_writable: true
+      },
+      T0
+    )
+    if (opts.visible === false) cal.setCalendarVisible(db, c.id, false, T0)
+    return c.id
+  }
+
+  const inHours = (h: number): string => new Date(T0.getTime() + h * 60 * 60_000).toISOString()
+
+  /** insert through the same path the sync pull uses; returns the local id */
+  function seedInvite(
+    calendarId: string,
+    gid: string,
+    opts: {
+      start?: string
+      end?: string
+      attendees?: CalendarAttendee[]
+      etag?: string
+      recurringEventId?: string
+      allDay?: boolean
+      title?: string
+    } = {}
+  ): string {
+    cal.applyRemoteEvent(
+      db,
+      calendarId,
+      {
+        google_event_id: gid,
+        etag: opts.etag ?? `etag-${gid}`,
+        recurring_event_id: opts.recurringEventId ?? null,
+        title: opts.title ?? `Event ${gid}`,
+        description: null,
+        location: null,
+        start_at: opts.start ?? inHours(24),
+        end_at: opts.end ?? inHours(25),
+        all_day: opts.allDay ?? false,
+        timezone: null,
+        color: null,
+        attendees: opts.attendees ?? [
+          { email: 'boss@example.com', organizer: true, responseStatus: 'accepted' },
+          { email: SELF, self: true, responseStatus: 'needsAction' }
+        ],
+        conferencing_url: null,
+        status: 'confirmed'
+      },
+      T0
+    )
+    return db.get<{ id: string }>(
+      'SELECT id FROM calendar_events WHERE calendar_id = ? AND google_event_id = ?',
+      calendarId,
+      gid
+    )!.id
+  }
+
+  const invites = (now = T0): ReturnType<typeof pendingItems>['items'] =>
+    pendingItems(db, now).items.filter((i) => i.kind === 'invite')
+
+  it('an unanswered future invite surfaces; answered and finished ones do not', () => {
+    const calId = googleCalendar()
+    const open = seedInvite(calId, 'g-open')
+    seedInvite(calId, 'g-answered', {
+      attendees: [
+        { email: 'boss@example.com', organizer: true, responseStatus: 'accepted' },
+        { email: SELF, self: true, responseStatus: 'accepted' }
+      ]
+    })
+    seedInvite(calId, 'g-past', { start: inHours(-3), end: inHours(-2) })
+    const items = invites()
+    expect(items).toHaveLength(1)
+    expect(items[0].key).toBe(`invite:${open}`)
+    expect(items[0].tone).toBe('accent')
+    expect(items[0].subtitle).toContain('boss@example.com')
+  })
+
+  it('finds us by email match when the feed omits the self flag', () => {
+    const calId = googleCalendar()
+    seedInvite(calId, 'g-email', {
+      attendees: [{ email: 'Me@Gmail.com', responseStatus: 'needsAction' }]
+    })
+    expect(invites()).toHaveLength(1)
+  })
+
+  it("someone else's needsAction is not our pending item", () => {
+    const calId = googleCalendar()
+    seedInvite(calId, 'g-other', {
+      attendees: [
+        { email: SELF, self: true, responseStatus: 'accepted' },
+        { email: 'slow@example.com', responseStatus: 'needsAction' }
+      ]
+    })
+    expect(invites()).toHaveLength(0)
+  })
+
+  it('a recurring series collapses to its earliest upcoming instance', () => {
+    const calId = googleCalendar()
+    const soon = seedInvite(calId, 'g-w2', {
+      recurringEventId: 'rec-1',
+      start: inHours(24),
+      end: inHours(25)
+    })
+    seedInvite(calId, 'g-w3', { recurringEventId: 'rec-1', start: inHours(192), end: inHours(193) })
+    seedInvite(calId, 'g-w4', { recurringEventId: 'rec-1', start: inHours(360), end: inHours(361) })
+    const items = invites()
+    expect(items).toHaveLength(1)
+    expect(items[0].id).toBe(soon)
+    expect(pendingItems(db, T0).total).toBe(1)
+  })
+
+  it('in-progress and all-day-today invites still surface; hidden calendars do not', () => {
+    const visible = googleCalendar()
+    seedInvite(visible, 'g-now', { start: inHours(-1), end: inHours(1) })
+    // T0 is 2026-07-01T12:00Z — the all-day invite covers that day (exclusive end)
+    seedInvite(visible, 'g-allday', { allDay: true, start: '2026-07-01', end: '2026-07-02' })
+    expect(invites()).toHaveLength(2)
+
+    cal.setCalendarVisible(db, visible, false, T0)
+    expect(invites()).toHaveLength(0)
+  })
+
+  it('dismissal is scoped to the etag — a remote change resurfaces the invite', () => {
+    const calId = googleCalendar()
+    const id = seedInvite(calId, 'g-dis')
+    dismissItem(db, `invite:${id}`, T0)
+    expect(invites()).toHaveLength(0)
+
+    // organizer reschedules: same google event, new etag through the pull path
+    seedInvite(calId, 'g-dis', { etag: 'etag-2', start: inHours(48), end: inHours(49) })
+    expect(invites()).toHaveLength(1)
+  })
+
+  it('invites participate in snooze and the seen watermark', () => {
+    const calId = googleCalendar()
+    const id = seedInvite(calId, 'g-seen')
+    expect(pendingItems(db, T0).unseen).toBe(1)
+    markAllSeen(db, T0)
+    expect(pendingItems(db, T0).unseen).toBe(0)
+
+    snoozeItem(db, `invite:${id}`, inHours(4), T0)
+    expect(invites()).toHaveLength(0)
+    expect(invites(new Date(T0.getTime() + 5 * 60 * 60_000))).toHaveLength(1)
   })
 })

@@ -89,7 +89,17 @@ export function Sidebar({
   const { data: pending, reload: reloadPending } = useInvoke(
     'pending:list',
     [],
-    ['pending', 'tasks', 'people', 'interactions', 'notes', 'comms', 'meetings', 'agent_tasks']
+    [
+      'pending',
+      'tasks',
+      'people',
+      'interactions',
+      'notes',
+      'comms',
+      'meetings',
+      'agent_tasks',
+      'calendar_events'
+    ]
   )
   // due-ness moves with the clock — same tick the Pending view runs, so the
   // badge can't lag the list when a reminder crosses its remind_at

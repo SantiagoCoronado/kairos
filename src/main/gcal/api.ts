@@ -148,6 +148,9 @@ export async function connectGcal(db: DbDriver): Promise<CalendarAccount> {
   if (!info.email) throw new Error('Google profile did not include an email')
 
   const account = repo.upsertCalendarAccount(db, {
+    // lowercased by contract: the invite-detection SQL (repo/pending.ts) and
+    // selfAttendee() both compare lowercased attendee emails against this
+    // value VERBATIM — neither lowercases the account side again
     external_id: info.email.toLowerCase(),
     display_name: info.email
   })

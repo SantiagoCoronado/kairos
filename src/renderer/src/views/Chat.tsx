@@ -7,6 +7,7 @@ import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Button, cn } from '../components/ui'
 import { MicButton } from '../components/MicButton'
 import { Linkified } from '../components/Linkify'
+import { Markdown } from '../components/Markdown'
 
 /** remote client: file bytes travel over HTTP into the Mac's staging dir —
  *  the native dialog and pathForFile only exist inside Electron */
@@ -405,7 +406,10 @@ export function ChatView({
           <div key={i} className={cn('flex', b.role === 'user' ? 'justify-end' : 'justify-start')}>
             <div
               className={cn(
-                'max-w-[85%] rounded-lg px-3.5 py-2.5 text-[13px] whitespace-pre-wrap leading-relaxed',
+                'max-w-[85%] rounded-lg px-3.5 py-2.5 text-[13px] leading-relaxed',
+                // Markdown puts pre-wrap on its own paragraph blocks (incl. the
+                // parse-failure fallback), so newlines survive without it here
+                b.role !== 'assistant' && 'whitespace-pre-wrap',
                 b.role === 'user' && 'bg-raised border border-border',
                 b.role === 'assistant' && 'bg-panel border border-border',
                 b.role === 'error' && 'bg-danger/10 border border-danger/40 text-danger'
@@ -423,7 +427,7 @@ export function ChatView({
                   ))}
                 </div>
               )}
-              <Linkified text={b.text} />
+              {b.role === 'assistant' ? <Markdown text={b.text} /> : <Linkified text={b.text} />}
             </div>
           </div>
         ))}

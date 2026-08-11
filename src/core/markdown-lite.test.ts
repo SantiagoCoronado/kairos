@@ -155,6 +155,29 @@ describe('markdown-lite blocks', () => {
     expect((blocks[0] as { items: unknown[] }).items).toHaveLength(2)
   })
 
+  it('keeps blank-line-separated numbered steps as one list', () => {
+    const blocks = parseMarkdown('Steps:\n\n1. First\n\n2. Second\n\n3. Third')
+    expect(blocks).toHaveLength(2)
+    expect(blocks[1]).toMatchObject({ kind: 'list', ordered: true, start: 1 })
+    expect((blocks[1] as { items: unknown[] }).items).toHaveLength(3)
+  })
+
+  it('a blank line with no item after it still ends the list', () => {
+    const blocks = parseMarkdown('- one\n- two\n\nplain text')
+    expect(blocks.map((b) => b.kind)).toEqual(['list', 'paragraph'])
+  })
+
+  it('an ordered list keeps its starting number', () => {
+    const blocks = parseMarkdown('3. third\n4. fourth')
+    expect(blocks[0]).toMatchObject({ kind: 'list', ordered: true, start: 3 })
+  })
+
+  it('records indent levels so sublists can nest', () => {
+    const blocks = parseMarkdown('- parent\n  - child\n\t- tab child\n- parent2')
+    const items = (blocks[0] as { items: { indent: number }[] }).items
+    expect(items.map((it) => it.indent)).toEqual([0, 1, 1, 0])
+  })
+
   it('parses quotes and pipe tables', () => {
     const blocks = parseMarkdown('> heads up\n\n| a | b |\n|---|---|\n| 1 | 2 |')
     expect(blocks[0]).toMatchObject({ kind: 'quote' })

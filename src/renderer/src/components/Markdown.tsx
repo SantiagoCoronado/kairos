@@ -1,7 +1,7 @@
 // Renders markdown-lite blocks (agent output: automation results, summaries).
 // External links go through the window-open handler → default browser.
 import { useMemo } from 'react'
-import { parseMarkdown, type MdBlock, type MdInline } from '../../../core/markdown-lite'
+import { parseMarkdown, type MdBlock, type MdInline, type MdListItem } from '../../../core/markdown-lite'
 // (MdBlock is also the fallback shape when parsing throws)
 import { cn } from './ui'
 
@@ -37,7 +37,7 @@ function Inline({ nodes }: { nodes: MdInline[] }): React.JSX.Element {
                 href={n.href}
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent hover:underline"
+                className="text-accent hover:underline break-all"
               >
                 <Inline nodes={n.children} />
               </a>
@@ -45,6 +45,40 @@ function Inline({ nodes }: { nodes: MdInline[] }): React.JSX.Element {
         }
       })}
     </>
+  )
+}
+
+/** Items arrive flat with an indent level; runs of deeper indent become a
+ *  sublist inside the preceding item, so `- a / (2sp) - b` actually nests. */
+function List({
+  items,
+  ordered,
+  start
+}: {
+  items: MdListItem[]
+  ordered: boolean
+  start?: number
+}): React.JSX.Element {
+  const base = items[0]?.indent ?? 0
+  const lis: React.JSX.Element[] = []
+  let k = 0
+  while (k < items.length) {
+    let j = k + 1
+    while (j < items.length && items[j].indent > base) j++
+    lis.push(
+      <li key={k}>
+        <Inline nodes={items[k].children} />
+        {j > k + 1 && <List items={items.slice(k + 1, j)} ordered={ordered} />}
+      </li>
+    )
+    k = j
+  }
+  return ordered ? (
+    <ol start={start} className="list-decimal pl-5 space-y-0.5">
+      {lis}
+    </ol>
+  ) : (
+    <ul className="list-disc pl-5 space-y-0.5">{lis}</ul>
   )
 }
 
@@ -75,23 +109,7 @@ function Block({ block }: { block: MdBlock }): React.JSX.Element {
         </pre>
       )
     case 'list':
-      return block.ordered ? (
-        <ol className="list-decimal pl-5 space-y-0.5">
-          {block.items.map((item, i) => (
-            <li key={i}>
-              <Inline nodes={item} />
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <ul className="list-disc pl-5 space-y-0.5">
-          {block.items.map((item, i) => (
-            <li key={i}>
-              <Inline nodes={item} />
-            </li>
-          ))}
-        </ul>
-      )
+      return <List items={block.items} ordered={block.ordered} start={block.start} />
     case 'quote':
       return (
         <blockquote className="border-l-2 border-border-strong pl-2.5 text-faint">

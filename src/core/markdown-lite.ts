@@ -11,11 +11,13 @@ export type MdInline =
   | { kind: 'italic'; children: MdInline[] }
   | { kind: 'link'; href: string; children: MdInline[] }
 
+export type MdListItem = { indent: number; children: MdInline[] }
+
 export type MdBlock =
   | { kind: 'heading'; level: number; children: MdInline[] }
   | { kind: 'paragraph'; children: MdInline[] }
   | { kind: 'code'; lang: string; text: string }
-  | { kind: 'list'; ordered: boolean; items: MdInline[][] }
+  | { kind: 'list'; ordered: boolean; start: number; items: MdListItem[] }
   | { kind: 'quote'; children: MdInline[] }
   | { kind: 'rule' }
   | { kind: 'table'; header: MdInline[][]; rows: MdInline[][][] }
@@ -106,8 +108,16 @@ export function parseInline(text: string, depth = 0, autolink = true): MdInline[
   return out
 }
 
-const UL_RE = /^\s*[-*+]\s+(.*)$/
-const OL_RE = /^\s*\d+[.)]\s+(.*)$/
+const UL_RE = /^(\s*)[-*+]\s+(.*)$/
+const OL_RE = /^(\s*)(\d+)[.)]\s+(.*)$/
+
+/** nesting level from leading whitespace — models indent sublists by 2 (or 4)
+ *  spaces or a tab; anything deeper than 5 levels is noise, not structure */
+function indentLevel(ws: string): number {
+  let cols = 0
+  for (const ch of ws) cols += ch === '\t' ? 2 : 1
+  return Math.min(Math.floor(cols / 2), 5)
+}
 const BLOCK_START_RE = /^(#{1,6}\s|```|\s*[-*+]\s+\S|\s*\d+[.)]\s|\s*>)/
 const TABLE_ROW_RE = /^\s*\|.*\|\s*$/
 const TABLE_SEP_RE = /^\s*\|[\s:|-]+\|\s*$/
@@ -161,14 +171,24 @@ export function parseMarkdown(text: string): MdBlock[] {
     if (UL_RE.test(line) || OL_RE.test(line)) {
       const ordered = OL_RE.test(line)
       const re = ordered ? OL_RE : UL_RE
-      const items: MdInline[][] = []
+      const start = ordered ? parseInt(OL_RE.exec(line)![2], 10) : 1
+      const items: MdListItem[] = []
       while (i < lines.length) {
         const m = re.exec(lines[i])
-        if (!m) break
-        items.push(parseInline(m[1]))
+        if (!m) {
+          // a single blank line continues the list when another item follows —
+          // models routinely put blank lines between numbered steps, and
+          // splitting there restarts every fragment at "1."
+          if (/^\s*$/.test(lines[i]) && i + 1 < lines.length && re.test(lines[i + 1])) {
+            i++
+            continue
+          }
+          break
+        }
+        items.push({ indent: indentLevel(m[1]), children: parseInline(m[ordered ? 3 : 2]) })
         i++
       }
-      blocks.push({ kind: 'list', ordered, items })
+      blocks.push({ kind: 'list', ordered, start, items })
       continue
     }
 

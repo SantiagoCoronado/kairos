@@ -407,8 +407,8 @@ export function ChatView({
             <div
               className={cn(
                 'max-w-[85%] rounded-lg px-3.5 py-2.5 text-[13px] leading-relaxed',
-                // Markdown lays out its own blocks; pre-wrap on the bubble would
-                // double every blank line between them
+                // Markdown puts pre-wrap on its own paragraph blocks (incl. the
+                // parse-failure fallback), so newlines survive without it here
                 b.role !== 'assistant' && 'whitespace-pre-wrap',
                 b.role === 'user' && 'bg-raised border border-border',
                 b.role === 'assistant' && 'bg-panel border border-border',

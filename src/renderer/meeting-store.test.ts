@@ -417,6 +417,15 @@ describe('splitCaptureError', () => {
     })
   })
 
+  it('splits on the last separator so an em dash in the detail stays in the headline', () => {
+    expect(
+      splitCaptureError(`system audio capture failed (NotAllowedError — denied) — ${SYSTEM_AUDIO_HINT}`)
+    ).toEqual({
+      headline: 'system audio capture failed (NotAllowedError — denied)',
+      hint: SYSTEM_AUDIO_HINT
+    })
+  })
+
   it('passes a hint-less message through whole', () => {
     expect(splitCaptureError('a meeting is already recording')).toEqual({
       headline: 'a meeting is already recording',

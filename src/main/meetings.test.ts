@@ -212,7 +212,6 @@ describe('resolveDisplayMedia', () => {
       resolveDisplayMedia({ frame: null, videoRequested: true, audioRequested: true })
     ).toEqual({})
   })
-
 })
 
 describe('makeDisplayMediaHandler', () => {

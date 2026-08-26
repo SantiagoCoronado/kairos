@@ -48,7 +48,10 @@ const CHANNEL_CAPTURE = {
 /** headline + actionable hint, kept separable so the UI can render the
  *  hint on its own line instead of burying it in a truncated one-liner */
 export function splitCaptureError(message: string): { headline: string; hint: string | null } {
-  const at = message.indexOf(' — ')
+  // the hint is always the trailing segment (neither hint contains the
+  // separator), so split on the last one — a detail carrying an em dash
+  // must not leak raw error text into the guidance slot
+  const at = message.lastIndexOf(' — ')
   if (at < 0) return { headline: message, hint: null }
   return { headline: message.slice(0, at), hint: message.slice(at + 3) }
 }
@@ -156,9 +159,11 @@ function sendChunk(
   track(invoke('meetings:chunk', meetingId, channel, kind, bytesToBase64(bytes)))
 }
 
-function flushPcm(invoke: Invoke, meetingId: string, channel: MeetingChannel): void {
-  const rig = rigs[channel]
-  if (!rig || rig.pcmPendingSamples === 0) return
+/** drains the rig it's handed, never a lookup — a rig that finished
+ *  opening after a cancel lives outside `rigs`, and must not alias the
+ *  current recording's buffer */
+function flushPcm(invoke: Invoke, meetingId: string, channel: MeetingChannel, rig: ChannelRig): void {
+  if (rig.pcmPendingSamples === 0) return
   const merged = new Int16Array(rig.pcmPendingSamples)
   let off = 0
   for (const part of rig.pcmPending) {
@@ -232,7 +237,7 @@ async function openRig(
     rig.tap = await media.makeTap(stream, (frames) => {
       rig.pcmPending.push(floatTo16BitPcm(frames))
       rig.pcmPendingSamples += frames.length
-      if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel)
+      if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel, rig)
     })
     recorder.start(WEBM_TIMESLICE_MS)
     return rig
@@ -350,7 +355,7 @@ export async function stopRecording(): Promise<Meeting | null> {
   for (const [channel, rig] of Object.entries(rigs) as [MeetingChannel, ChannelRig][]) {
     rig.tap.stop()
     await rig.recorder.stop() // final webm chunk delivered before we move on
-    flushPcm(invoke, meetingId, channel)
+    flushPcm(invoke, meetingId, channel, rig)
     stopTracks(rig.stream)
   }
   rigs = {}

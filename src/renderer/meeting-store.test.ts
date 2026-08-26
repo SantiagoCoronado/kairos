@@ -12,8 +12,12 @@ import {
   recoverActiveRecording,
   getSnapshot,
   subscribe,
+  cancelStarting,
+  splitCaptureError,
   SYSTEM_STREAM_TIMEOUT_MS,
+  MIC_STREAM_TIMEOUT_MS,
   SYSTEM_AUDIO_HINT,
+  MIC_HINT,
   type CaptureMedia,
   type StreamLike,
   type TrackLike,
@@ -242,6 +246,78 @@ describe('startRecording', () => {
     }
   })
 
+  it('a getUserMedia that never settles is bounded too — generously, the mic prompt is slow', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveLate: (s: StreamLike) => void = () => {}
+      rig.media.getMicStream = () =>
+        new Promise<StreamLike>((resolve) => void (resolveLate = resolve))
+
+      const pending = startRecording()
+      await vi.advanceTimersByTimeAsync(SYSTEM_STREAM_TIMEOUT_MS + 1)
+      expect(getSnapshot().phase).toBe('starting') // the system bound must not apply here
+      await vi.advanceTimersByTimeAsync(MIC_STREAM_TIMEOUT_MS - SYSTEM_STREAM_TIMEOUT_MS)
+      const m = await pending
+
+      expect(m).toBeNull()
+      const snap = getSnapshot()
+      expect(snap.phase).toBe('error')
+      if (snap.phase === 'error') {
+        expect(snap.message).toMatch(/microphone capture timed out/)
+        expect(snap.message).toContain(MIC_HINT)
+      }
+      expect(invokeCalls('meetings:delete')).toEqual([['m1']])
+      // the store is usable again — a wedged mic must not kill recording for the session
+      expect(getSnapshot().phase).not.toBe('starting')
+
+      const late = makeStream(['audio'])
+      resolveLate(late)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(late.tracks.every((t) => t.stopped)).toBe(true)
+      expect(rig.recorders).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancelStarting backs out of a pending start: idle, rig released, row dropped', async () => {
+    let resolveLate: (s: StreamLike) => void = () => {}
+    rig.media.getSystemStream = () =>
+      new Promise<StreamLike>((resolve) => void (resolveLate = resolve))
+
+    const pending = startRecording()
+    await vi.waitFor(() => expect(rig.recorders).toHaveLength(1)) // mic rig is open
+    expect(getSnapshot().phase).toBe('starting')
+    cancelStarting()
+    const m = await pending
+
+    expect(m).toBeNull()
+    expect(getSnapshot().phase).toBe('idle') // a cancel is not an error
+    expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(rig.taps.every((t) => t.stopped)).toBe(true)
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(invokeCalls('meetings:delete')).toEqual([['m1']])
+
+    // the system rig that finishes opening after the cancel is released on arrival
+    const late = makeStream(['audio', 'video'])
+    resolveLate(late)
+    await vi.waitFor(() => expect(late.tracks.every((t) => t.stopped)).toBe(true))
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(rig.taps.every((t) => t.stopped)).toBe(true)
+
+    // and a fresh start works
+    rig.media.getSystemStream = async () => makeStream(['audio', 'video'])
+    expect((await startRecording())?.id).toBe('m1')
+  })
+
+  it('cancelStarting is a no-op outside the starting phase', async () => {
+    cancelStarting()
+    expect(getSnapshot().phase).toBe('idle')
+    await startRecording()
+    cancelStarting()
+    expect(getSnapshot().phase).toBe('recording')
+  })
+
   it('releases a stream acquired inside a failing openRig (worklet-CSP shape)', async () => {
     rig.failTapOn = rig.systemStream // mic opens fine; system tap explodes
 
@@ -330,5 +406,21 @@ describe('recoverActiveRecording', () => {
   it('does nothing when no meeting is live', async () => {
     await recoverActiveRecording()
     expect(invokeCalls('meetings:stop')).toHaveLength(0)
+  })
+})
+
+describe('splitCaptureError', () => {
+  it('separates the headline from the actionable hint', () => {
+    expect(splitCaptureError(`Couldn't start capture: system audio unavailable — ${SYSTEM_AUDIO_HINT}`)).toEqual({
+      headline: "Couldn't start capture: system audio unavailable",
+      hint: SYSTEM_AUDIO_HINT
+    })
+  })
+
+  it('passes a hint-less message through whole', () => {
+    expect(splitCaptureError('a meeting is already recording')).toEqual({
+      headline: 'a meeting is already recording',
+      hint: null
+    })
   })
 })

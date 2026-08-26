@@ -29,10 +29,33 @@ const WEBM_TIMESLICE_MS = 3000
  *  skipped callback once left the mic rig streaming with no indicator and
  *  no Stop for a whole meeting. */
 export const SYSTEM_STREAM_TIMEOUT_MS = 15_000
+/** getUserMedia legitimately waits on the macOS microphone prompt, so the
+ *  bound is generous — but a wedged input device must not park the store
+ *  in 'starting' for the rest of the session */
+export const MIC_STREAM_TIMEOUT_MS = 60_000
 /** macOS gates SCK loopback on the Screen Recording grant, which every
  *  ad-hoc rebuild resets — the one thing the user can actually fix */
 export const SYSTEM_AUDIO_HINT =
   'allow Kairos under System Settings → Privacy & Security → Screen & System Audio Recording, then relaunch'
+export const MIC_HINT =
+  'answer the microphone prompt, or allow Kairos under System Settings → Privacy & Security → Microphone'
+
+const CHANNEL_CAPTURE = {
+  mic: { label: 'microphone', timeoutMs: MIC_STREAM_TIMEOUT_MS, hint: MIC_HINT },
+  system: { label: 'system audio', timeoutMs: SYSTEM_STREAM_TIMEOUT_MS, hint: SYSTEM_AUDIO_HINT }
+} as const
+
+/** headline + actionable hint, kept separable so the UI can render the
+ *  hint on its own line instead of burying it in a truncated one-liner */
+export function splitCaptureError(message: string): { headline: string; hint: string | null } {
+  const at = message.indexOf(' — ')
+  if (at < 0) return { headline: message, hint: null }
+  return { headline: message.slice(0, at), hint: message.slice(at + 3) }
+}
+
+/** thrown through the start pipeline when the user cancels a pending
+ *  start — rolled back like any failure, but lands on 'idle', not 'error' */
+const CANCELLED = new Error('recording start cancelled')
 
 // ---- injectable media layer -------------------------------------------------
 
@@ -151,16 +174,18 @@ function stopTracks(stream: StreamLike): void {
   for (const t of stream.getTracks()) t.stop()
 }
 
-/** resolve the loopback stream or fail within SYSTEM_STREAM_TIMEOUT_MS; a
- *  stream that lands after the deadline is released, never leaked */
-function acquireSystemStream(media: CaptureMedia): Promise<StreamLike> {
+/** resolve a channel's stream or fail within its timeout; a stream that
+ *  lands after the deadline is released, never leaked */
+function acquireStream(media: CaptureMedia, channel: MeetingChannel): Promise<StreamLike> {
+  const { label, timeoutMs, hint } = CHANNEL_CAPTURE[channel]
   return new Promise<StreamLike>((resolve, reject) => {
     let settled = false
     const timer = setTimeout(() => {
       settled = true
-      reject(new Error(`system audio capture timed out — ${SYSTEM_AUDIO_HINT}`))
-    }, SYSTEM_STREAM_TIMEOUT_MS)
-    media.getSystemStream().then(
+      reject(new Error(`${label} capture timed out — ${hint}`))
+    }, timeoutMs)
+    const pending = channel === 'mic' ? media.getMicStream() : media.getSystemStream()
+    pending.then(
       (stream) => {
         if (settled) return stopTracks(stream)
         settled = true
@@ -172,10 +197,16 @@ function acquireSystemStream(media: CaptureMedia): Promise<StreamLike> {
         settled = true
         clearTimeout(timer)
         const detail = err instanceof Error ? err.message : String(err)
-        reject(new Error(`system audio capture failed (${detail}) — ${SYSTEM_AUDIO_HINT}`))
+        reject(new Error(`${label} capture failed (${detail}) — ${hint}`))
       }
     )
   })
+}
+
+function releaseRig(rig: ChannelRig): void {
+  rig.tap.stop()
+  void rig.recorder.stop().catch(() => {})
+  stopTracks(rig.stream)
 }
 
 async function openRig(
@@ -184,7 +215,7 @@ async function openRig(
   meetingId: string,
   channel: MeetingChannel
 ): Promise<ChannelRig> {
-  const stream = channel === 'mic' ? await media.getMicStream() : await acquireSystemStream(media)
+  const stream = await acquireStream(media, channel)
   try {
     if (channel === 'system') {
       // Chromium refuses video:false on getDisplayMedia — take the track, kill it
@@ -213,6 +244,31 @@ async function openRig(
   }
 }
 
+/** rejects when the user cancels the pending start; the capture APIs
+ *  themselves can't be aborted, so a rig that finishes opening after the
+ *  cancel is released on arrival instead */
+let cancelPending: (() => void) | null = null
+
+export function cancelStarting(): void {
+  if (state.phase === 'starting') cancelPending?.()
+}
+
+async function openRigOrCancel(
+  media: CaptureMedia,
+  invoke: Invoke,
+  meetingId: string,
+  channel: MeetingChannel,
+  cancelled: Promise<never>
+): Promise<ChannelRig> {
+  const opening = openRig(media, invoke, meetingId, channel)
+  try {
+    return await Promise.race([opening, cancelled])
+  } catch (err) {
+    if (err === CANCELLED) opening.then(releaseRig, () => {})
+    throw err
+  }
+}
+
 export async function startRecording(opts: {
   calendarEventId?: string | null
   title?: string
@@ -220,6 +276,14 @@ export async function startRecording(opts: {
   if (state.phase === 'recording' || state.phase === 'starting') return null
   const { media, invoke } = getDeps()
   setState({ phase: 'starting' })
+  let cancelRequested = false
+  const cancelled = new Promise<never>((_, reject) => {
+    cancelPending = (): void => {
+      cancelRequested = true
+      reject(CANCELLED)
+    }
+  })
+  cancelled.catch(() => {}) // observed via race; never unhandled on its own
 
   let meeting: Meeting
   try {
@@ -228,25 +292,23 @@ export async function startRecording(opts: {
       title: opts.title ?? ''
     })
   } catch (err) {
+    cancelPending = null
     setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
     return null
   }
 
   try {
+    if (cancelRequested) throw CANCELLED
     // sequential, assigning as we go — a system-capture failure must still
     // see (and release) the already-open mic rig
     rigs = {}
-    rigs.mic = await openRig(media, invoke, meeting.id, 'mic')
-    rigs.system = await openRig(media, invoke, meeting.id, 'system')
+    rigs.mic = await openRigOrCancel(media, invoke, meeting.id, 'mic', cancelled)
+    rigs.system = await openRigOrCancel(media, invoke, meeting.id, 'system', cancelled)
   } catch (err) {
+    cancelPending = null
     // half-open capture: release the whole rig (tap's AudioContext and
     // recorder included — tracks alone leak both), drop the started row
-    for (const rig of Object.values(rigs)) {
-      if (!rig) continue
-      rig.tap.stop()
-      void rig.recorder.stop().catch(() => {})
-      stopTracks(rig.stream)
-    }
+    for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
     rigs = {}
     sends = [] // in-flight chunk sends belong to the dead rig
     try {
@@ -260,13 +322,16 @@ export async function startRecording(opts: {
         `meetings: rollback delete failed for ${meeting.id}: ${String(deleteErr)}`
       ).catch(() => {})
     }
-    setState({
-      phase: 'error',
-      message: `Couldn't start capture: ${err instanceof Error ? err.message : String(err)}`
-    })
+    if (err === CANCELLED) setState({ phase: 'idle' })
+    else
+      setState({
+        phase: 'error',
+        message: `Couldn't start capture: ${err instanceof Error ? err.message : String(err)}`
+      })
     return null
   }
 
+  cancelPending = null
   setState({
     phase: 'recording',
     meetingId: meeting.id,

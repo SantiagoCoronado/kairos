@@ -44,7 +44,7 @@ import * as comms from '../core/repo/comms'
 import * as calendarRepo from '../core/repo/calendar'
 import * as meetingsRepo from '../core/repo/meetings'
 import { MeetingManager } from './meetings'
-import { resolveDisplayMedia } from './display-media'
+import { makeDisplayMediaHandler } from './display-media'
 import { ensureModelFile, isModelPresent, VAD_MODEL, WHISPER_MODELS } from './models'
 import { WhisperServer } from './whisper'
 import { MeetingProcessor, type Transcriber } from './meeting-processor'
@@ -615,17 +615,11 @@ export function registerIpc(): void {
   // origin gate — fine while every page is first-party, but must be
   // revisited if a <webview>/embedded origin ever lands in this session.
   session.defaultSession.setDisplayMediaRequestHandler(
-    (request, callback) => {
-      // SCK loopback needs the Screen Recording grant — surface its state
-      // next to any "system audio missing" report
-      if (process.platform === 'darwin')
-        logLine(
-          'info',
-          'meetings',
-          `display-media request (screen permission: ${systemPreferences.getMediaAccessStatus('screen')})`
-        )
-      callback(resolveDisplayMedia(request))
-    },
+    makeDisplayMediaHandler({
+      screenPermission: () =>
+        process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : null,
+      log: (message) => logLine('info', 'meetings', message)
+    }),
     { useSystemPicker: false }
   )
   const meetMgr = new MeetingManager(db, join(DATA_DIR, 'recordings'), () =>

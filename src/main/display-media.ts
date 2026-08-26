@@ -35,3 +35,26 @@ export function resolveDisplayMedia<Frame>(
   if (!request.frame) return {}
   return { video: request.frame, ...audio }
 }
+
+export interface DisplayMediaHandlerDeps {
+  /** null off macOS — the grant only exists there */
+  screenPermission(): string | null
+  log(message: string): void
+}
+
+/** the bound handler shape: synchronous, and the callback runs on every
+ *  path — the exact property whose absence caused the bug */
+export function makeDisplayMediaHandler<Frame>(
+  deps: DisplayMediaHandlerDeps
+): (
+  request: DisplayMediaRequestLike<Frame>,
+  callback: (streams: DisplayMediaResponse<Frame>) => void
+) => void {
+  return (request, callback) => {
+    // SCK loopback needs the Screen Recording grant — surface its state
+    // next to any "system audio missing" report
+    const status = deps.screenPermission()
+    if (status !== null) deps.log(`display-media request (screen permission: ${status})`)
+    callback(resolveDisplayMedia(request))
+  }
+}

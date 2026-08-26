@@ -20,7 +20,18 @@ export function RecordingChip(): React.JSX.Element | null {
     return () => clearInterval(iv)
   }, [rec.phase])
 
-  if (rec.phase === 'idle' || rec.phase === 'starting') return null
+  if (rec.phase === 'idle') return null
+
+  // capture is being negotiated (permission prompts included) — the user
+  // must see that something is happening before the timer appears
+  if (rec.phase === 'starting') {
+    return (
+      <div className="fixed top-3 right-4 z-[60] flex items-center gap-2 bg-overlay border border-border-strong rounded-full px-3 py-1 shadow-lg">
+        <span className="w-2 h-2 rounded-full bg-danger animate-pulse" />
+        <span className="text-[11.5px] text-muted">Starting…</span>
+      </div>
+    )
+  }
 
   if (rec.phase === 'error') {
     return (

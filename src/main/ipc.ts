@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, desktopCapturer, session } from 'electron'
+import { ipcMain, BrowserWindow, session, systemPreferences } from 'electron'
 import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
@@ -607,16 +607,24 @@ export function registerIpc(): void {
     }
   })
   // Meeting capture: system audio arrives via getDisplayMedia loopback —
-  // the handler resolves audio-only requests to pure loopback (Notion's
-  // shape); the renderer streams recorded chunks back over meetings:chunk.
-  // NOTE: this grants loopback to ANY audio-only request in defaultSession
-  // with no origin gate — fine while every page is first-party, but must be
+  // the handler answers every request synchronously (a skipped callback
+  // leaves getDisplayMedia pending forever; see display-media.ts) with the
+  // requesting frame as the throwaway video source; the renderer streams
+  // recorded chunks back over meetings:chunk.
+  // NOTE: this grants loopback to ANY request in defaultSession with no
+  // origin gate — fine while every page is first-party, but must be
   // revisited if a <webview>/embedded origin ever lands in this session.
   session.defaultSession.setDisplayMediaRequestHandler(
     (request, callback) => {
-      void resolveDisplayMedia(request, async () =>
-        desktopCapturer.getSources({ types: ['screen'] })
-      ).then(callback)
+      // SCK loopback needs the Screen Recording grant — surface its state
+      // next to any "system audio missing" report
+      if (process.platform === 'darwin')
+        logLine(
+          'info',
+          'meetings',
+          `display-media request (screen permission: ${systemPreferences.getMediaAccessStatus('screen')})`
+        )
+      callback(resolveDisplayMedia(request))
     },
     { useSystemPicker: false }
   )

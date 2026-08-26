@@ -24,6 +24,15 @@ export type MeetingRecState =
 /** ~1s of 16k mono — the PCM flush threshold */
 const PCM_FLUSH_SAMPLES = 16000
 const WEBM_TIMESLICE_MS = 3000
+/** getDisplayMedia is answered synchronously by main's handler, so a
+ *  pending request is a bug, not a prompt — bound it. Without this, a
+ *  skipped callback once left the mic rig streaming with no indicator and
+ *  no Stop for a whole meeting. */
+export const SYSTEM_STREAM_TIMEOUT_MS = 15_000
+/** macOS gates SCK loopback on the Screen Recording grant, which every
+ *  ad-hoc rebuild resets — the one thing the user can actually fix */
+export const SYSTEM_AUDIO_HINT =
+  'allow Kairos under System Settings → Privacy & Security → Screen & System Audio Recording, then relaunch'
 
 // ---- injectable media layer -------------------------------------------------
 
@@ -142,16 +151,49 @@ function stopTracks(stream: StreamLike): void {
   for (const t of stream.getTracks()) t.stop()
 }
 
+/** resolve the loopback stream or fail within SYSTEM_STREAM_TIMEOUT_MS; a
+ *  stream that lands after the deadline is released, never leaked */
+function acquireSystemStream(media: CaptureMedia): Promise<StreamLike> {
+  return new Promise<StreamLike>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      settled = true
+      reject(new Error(`system audio capture timed out — ${SYSTEM_AUDIO_HINT}`))
+    }, SYSTEM_STREAM_TIMEOUT_MS)
+    media.getSystemStream().then(
+      (stream) => {
+        if (settled) return stopTracks(stream)
+        settled = true
+        clearTimeout(timer)
+        resolve(stream)
+      },
+      (err: unknown) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        const detail = err instanceof Error ? err.message : String(err)
+        reject(new Error(`system audio capture failed (${detail}) — ${SYSTEM_AUDIO_HINT}`))
+      }
+    )
+  })
+}
+
 async function openRig(
   media: CaptureMedia,
   invoke: Invoke,
   meetingId: string,
   channel: MeetingChannel
 ): Promise<ChannelRig> {
-  const stream = channel === 'mic' ? await media.getMicStream() : await media.getSystemStream()
+  const stream = channel === 'mic' ? await media.getMicStream() : await acquireSystemStream(media)
   try {
-    // Chromium refuses video:false on getDisplayMedia — take the track, kill it
-    if (channel === 'system') for (const t of stream.getVideoTracks()) t.stop()
+    if (channel === 'system') {
+      // Chromium refuses video:false on getDisplayMedia — take the track, kill it
+      for (const t of stream.getVideoTracks()) t.stop()
+      // a loopback grant that came back video-only would record silence
+      // for the whole meeting — fail now, while the user can still act
+      if (stream.getAudioTracks().length === 0)
+        throw new Error(`system audio unavailable — ${SYSTEM_AUDIO_HINT}`)
+    }
     const recorder = media.makeRecorder(stream, (bytes) =>
       sendChunk(invoke, meetingId, channel, 'webm', bytes)
     )

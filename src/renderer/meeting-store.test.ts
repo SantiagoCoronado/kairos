@@ -12,6 +12,8 @@ import {
   recoverActiveRecording,
   getSnapshot,
   subscribe,
+  SYSTEM_STREAM_TIMEOUT_MS,
+  SYSTEM_AUDIO_HINT,
   type CaptureMedia,
   type StreamLike,
   type TrackLike,
@@ -171,6 +173,73 @@ describe('startRecording', () => {
     expect(rig.recorders.every((r) => r.stopped)).toBe(true)
     expect(invokeCalls('meetings:delete')).toEqual([['m1']])
     expect(invokeCalls('meetings:stop')).toHaveLength(0)
+  })
+
+  it('a system stream without an audio track fails loudly instead of recording silence', async () => {
+    // the shape of a loopback grant refused by macOS: video only
+    rig.systemStream = makeStream(['video'])
+
+    const m = await startRecording()
+
+    expect(m).toBeNull()
+    const snap = getSnapshot()
+    expect(snap.phase).toBe('error')
+    if (snap.phase === 'error') {
+      expect(snap.message).toMatch(/system audio unavailable/)
+      expect(snap.message).toContain(SYSTEM_AUDIO_HINT)
+    }
+    expect(rig.systemStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(rig.taps.every((t) => t.stopped)).toBe(true)
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(invokeCalls('meetings:delete')).toEqual([['m1']])
+  })
+
+  it('a system-channel failure carries the permission hint', async () => {
+    rig.failSystem = new Error('NotAllowedError: Permission denied')
+
+    await startRecording()
+
+    const snap = getSnapshot()
+    expect(snap.phase).toBe('error')
+    if (snap.phase === 'error') {
+      expect(snap.message).toMatch(/Permission denied/)
+      expect(snap.message).toContain(SYSTEM_AUDIO_HINT)
+    }
+  })
+
+  it('a getDisplayMedia that never settles is bounded, and a late stream is released', async () => {
+    // the 2026-08-25 shape: main's handler never called back, so the mic rig
+    // streamed for a whole meeting with no indicator and no Stop
+    vi.useFakeTimers()
+    try {
+      let resolveLate: (s: StreamLike) => void = () => {}
+      rig.media.getSystemStream = () =>
+        new Promise<StreamLike>((resolve) => void (resolveLate = resolve))
+
+      const pending = startRecording()
+      await vi.advanceTimersByTimeAsync(SYSTEM_STREAM_TIMEOUT_MS - 1)
+      expect(getSnapshot().phase).toBe('starting')
+      await vi.advanceTimersByTimeAsync(1)
+      const m = await pending
+
+      expect(m).toBeNull()
+      const snap = getSnapshot()
+      expect(snap.phase).toBe('error')
+      if (snap.phase === 'error') expect(snap.message).toMatch(/timed out/)
+      expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
+      expect(rig.taps.every((t) => t.stopped)).toBe(true)
+      expect(invokeCalls('meetings:delete')).toEqual([['m1']])
+
+      // the stream that finally lands belongs to nobody — its capture must stop
+      const late = makeStream(['audio', 'video'])
+      resolveLate(late)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(late.tracks.every((t) => t.stopped)).toBe(true)
+      expect(rig.recorders).toHaveLength(1) // mic only — no rig was opened on it
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('releases a stream acquired inside a failing openRig (worklet-CSP shape)', async () => {

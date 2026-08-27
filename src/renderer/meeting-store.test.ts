@@ -482,7 +482,11 @@ describe('pauseRecording / resumeRecording', () => {
     const snap = getSnapshot()
     expect(snap.phase).toBe('error')
     if (snap.phase !== 'error') throw new Error('unreachable')
-    expect(snap.message).toMatch(/Recording lost — couldn't pause: meeting not recording/)
+    // the mock's meetings:stop resolves: main was still live, the row is
+    // finalized and queued — the banner must point at it, not call it lost
+    expect(snap.message).toMatch(
+      /Capture ended early — couldn't pause: meeting not recording.*was saved/
+    )
     // the whole rig is released — a paused-looking UI over a dead row would
     // keep the mic open with no way to close it
     expect(rig.taps.every((t) => t.stopped)).toBe(true)
@@ -503,7 +507,10 @@ describe('pauseRecording / resumeRecording', () => {
       return undefined
     })
     await pauseRecording()
-    expect(getSnapshot().phase).toBe('error')
+    const snap = getSnapshot()
+    expect(snap.phase).toBe('error')
+    if (snap.phase !== 'error') throw new Error('unreachable')
+    expect(snap.message).toMatch(/^Recording lost — couldn't pause/)
     expect(invokeCalls('meetings:stop')).toEqual([['m1']])
   })
 

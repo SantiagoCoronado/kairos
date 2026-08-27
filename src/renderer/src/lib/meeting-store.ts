@@ -391,11 +391,17 @@ async function abandonLive(meetingId: string, what: string, err: unknown): Promi
   rigs = {}
   resetLevels()
   sends = []
-  setState({
-    phase: 'error',
-    message: `Recording lost — couldn't ${what}: ${err instanceof Error ? err.message : String(err)}`
-  })
-  await invoke('meetings:stop', meetingId).catch(() => {})
+  const detail = err instanceof Error ? err.message : String(err)
+  // say something immediately; the wording is corrected once the stop
+  // settles — when it lands, the user has a complete, queued recording of
+  // everything up to this moment, and "lost" would send them nowhere
+  setState({ phase: 'error', message: `Recording lost — couldn't ${what}: ${detail}` })
+  const saved = await invoke('meetings:stop', meetingId).catch(() => null)
+  if (saved && state.phase === 'error')
+    setState({
+      phase: 'error',
+      message: `Capture ended early — couldn't ${what}: ${detail}. The recording up to that point was saved.`
+    })
 }
 
 /** hold both channels: recorders pause, tap frames drop, and whatever PCM

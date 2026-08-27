@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, desktopCapturer, session } from 'electron'
+import { ipcMain, BrowserWindow, session, systemPreferences } from 'electron'
 import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type { IpcApi, IpcEvents } from '../shared/ipc-contract'
@@ -44,7 +44,7 @@ import * as comms from '../core/repo/comms'
 import * as calendarRepo from '../core/repo/calendar'
 import * as meetingsRepo from '../core/repo/meetings'
 import { MeetingManager } from './meetings'
-import { resolveDisplayMedia } from './display-media'
+import { makeDisplayMediaHandler } from './display-media'
 import { ensureModelFile, isModelPresent, VAD_MODEL, WHISPER_MODELS } from './models'
 import { WhisperServer } from './whisper'
 import { MeetingProcessor, type Transcriber } from './meeting-processor'
@@ -607,17 +607,19 @@ export function registerIpc(): void {
     }
   })
   // Meeting capture: system audio arrives via getDisplayMedia loopback —
-  // the handler resolves audio-only requests to pure loopback (Notion's
-  // shape); the renderer streams recorded chunks back over meetings:chunk.
-  // NOTE: this grants loopback to ANY audio-only request in defaultSession
-  // with no origin gate — fine while every page is first-party, but must be
+  // the handler answers every request synchronously (a skipped callback
+  // leaves getDisplayMedia pending forever; see display-media.ts) with the
+  // requesting frame as the throwaway video source; the renderer streams
+  // recorded chunks back over meetings:chunk.
+  // NOTE: this grants loopback to ANY request in defaultSession with no
+  // origin gate — fine while every page is first-party, but must be
   // revisited if a <webview>/embedded origin ever lands in this session.
   session.defaultSession.setDisplayMediaRequestHandler(
-    (request, callback) => {
-      void resolveDisplayMedia(request, async () =>
-        desktopCapturer.getSources({ types: ['screen'] })
-      ).then(callback)
-    },
+    makeDisplayMediaHandler({
+      screenPermission: () =>
+        process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : null,
+      log: (message) => logLine('info', 'meetings', message)
+    }),
     { useSystemPicker: false }
   )
   const meetMgr = new MeetingManager(db, join(DATA_DIR, 'recordings'), () =>

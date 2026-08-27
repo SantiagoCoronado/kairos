@@ -4,7 +4,7 @@ import { openNodeSqliteDb } from '../core/drivers/node-sqlite'
 import { migrate } from '../core/migrations'
 import * as meetings from '../core/repo/meetings'
 import { MeetingManager, PCM_SAMPLE_RATE, type MeetingFs } from './meetings'
-import { resolveDisplayMedia } from './display-media'
+import { resolveDisplayMedia, makeDisplayMediaHandler } from './display-media'
 import { WAV_HEADER_BYTES } from '../core/audio'
 
 const T0 = new Date('2026-07-28T12:00:00Z')
@@ -184,29 +184,65 @@ describe('MeetingManager', () => {
 })
 
 describe('resolveDisplayMedia', () => {
-  const sources = async (): Promise<string[]> => ['screen-1', 'screen-2']
+  // the requesting frame stands in for a screen source — meeting capture
+  // throws the video track away, and screen enumeration is what failed
+  // ("Failed to get sources.") on 2026-08-25 and hung getDisplayMedia
+  const frame = { id: 'frame-1' }
 
-  it('audio-only requests resolve to pure loopback', async () => {
-    await expect(
-      resolveDisplayMedia({ videoRequested: false, audioRequested: true }, sources)
-    ).resolves.toEqual({ audio: 'loopback' })
+  it('video requests are answered with the requesting frame plus loopback', () => {
+    expect(
+      resolveDisplayMedia({ frame, videoRequested: true, audioRequested: true })
+    ).toEqual({ video: frame, audio: 'loopback' })
   })
 
-  it('video requests get the primary screen plus loopback', async () => {
-    await expect(
-      resolveDisplayMedia({ videoRequested: true, audioRequested: true }, sources)
-    ).resolves.toEqual({ video: 'screen-1', audio: 'loopback' })
+  it('audio-only requests resolve to pure loopback', () => {
+    expect(
+      resolveDisplayMedia({ frame, videoRequested: false, audioRequested: true })
+    ).toEqual({ audio: 'loopback' })
   })
 
-  it('video without audio omits loopback', async () => {
-    await expect(
-      resolveDisplayMedia({ videoRequested: true, audioRequested: false }, sources)
-    ).resolves.toEqual({ video: 'screen-1' })
+  it('video without audio omits loopback', () => {
+    expect(
+      resolveDisplayMedia({ frame, videoRequested: true, audioRequested: false })
+    ).toEqual({ video: frame })
   })
 
-  it('no screens available denies the request', async () => {
-    await expect(
-      resolveDisplayMedia({ videoRequested: true, audioRequested: true }, async () => [])
-    ).resolves.toEqual({})
+  it('a gone frame denies a video request instead of leaving it pending', () => {
+    expect(
+      resolveDisplayMedia({ frame: null, videoRequested: true, audioRequested: true })
+    ).toEqual({})
+  })
+})
+
+describe('makeDisplayMediaHandler', () => {
+  const frame = { id: 'frame-1' }
+
+  it('invokes the callback synchronously, before the handler returns', () => {
+    const handler = makeDisplayMediaHandler({ screenPermission: () => 'granted', log: () => {} })
+    const callback = vi.fn()
+    handler({ frame, videoRequested: true, audioRequested: true }, callback)
+    expect(callback).toHaveBeenCalledWith({ video: frame, audio: 'loopback' })
+  })
+
+  it('still answers when the frame is gone', () => {
+    const handler = makeDisplayMediaHandler({ screenPermission: () => 'denied', log: () => {} })
+    const callback = vi.fn()
+    handler({ frame: null, videoRequested: true, audioRequested: true }, callback)
+    expect(callback).toHaveBeenCalledWith({})
+  })
+
+  it('logs the Screen Recording grant state on macOS, nothing elsewhere', () => {
+    const log = vi.fn()
+    makeDisplayMediaHandler({ screenPermission: () => 'denied', log })(
+      { frame, videoRequested: true, audioRequested: true },
+      () => {}
+    )
+    expect(log).toHaveBeenCalledWith('display-media request (screen permission: denied)')
+    log.mockClear()
+    makeDisplayMediaHandler({ screenPermission: () => null, log })(
+      { frame, videoRequested: true, audioRequested: true },
+      () => {}
+    )
+    expect(log).not.toHaveBeenCalled()
   })
 })

@@ -24,6 +24,41 @@ export type MeetingRecState =
 /** ~1s of 16k mono — the PCM flush threshold */
 const PCM_FLUSH_SAMPLES = 16000
 const WEBM_TIMESLICE_MS = 3000
+/** getDisplayMedia is answered synchronously by main's handler, so a
+ *  pending request is a bug, not a prompt — bound it. Without this, a
+ *  skipped callback once left the mic rig streaming with no indicator and
+ *  no Stop for a whole meeting. */
+export const SYSTEM_STREAM_TIMEOUT_MS = 15_000
+/** getUserMedia legitimately waits on the macOS microphone prompt, so the
+ *  bound is generous — but a wedged input device must not park the store
+ *  in 'starting' for the rest of the session */
+export const MIC_STREAM_TIMEOUT_MS = 60_000
+/** macOS gates SCK loopback on the Screen Recording grant, which every
+ *  ad-hoc rebuild resets — the one thing the user can actually fix */
+export const SYSTEM_AUDIO_HINT =
+  'allow Kairos under System Settings → Privacy & Security → Screen & System Audio Recording, then relaunch'
+export const MIC_HINT =
+  'answer the microphone prompt, or allow Kairos under System Settings → Privacy & Security → Microphone'
+
+const CHANNEL_CAPTURE = {
+  mic: { label: 'microphone', timeoutMs: MIC_STREAM_TIMEOUT_MS, hint: MIC_HINT },
+  system: { label: 'system audio', timeoutMs: SYSTEM_STREAM_TIMEOUT_MS, hint: SYSTEM_AUDIO_HINT }
+} as const
+
+/** headline + actionable hint, kept separable so the UI can render the
+ *  hint on its own line instead of burying it in a truncated one-liner */
+export function splitCaptureError(message: string): { headline: string; hint: string | null } {
+  // the hint is always the trailing segment (neither hint contains the
+  // separator), so split on the last one — a detail carrying an em dash
+  // must not leak raw error text into the guidance slot
+  const at = message.lastIndexOf(' — ')
+  if (at < 0) return { headline: message, hint: null }
+  return { headline: message.slice(0, at), hint: message.slice(at + 3) }
+}
+
+/** thrown through the start pipeline when the user cancels a pending
+ *  start — rolled back like any failure, but lands on 'idle', not 'error' */
+const CANCELLED = new Error('recording start cancelled')
 
 // ---- injectable media layer -------------------------------------------------
 
@@ -124,9 +159,11 @@ function sendChunk(
   track(invoke('meetings:chunk', meetingId, channel, kind, bytesToBase64(bytes)))
 }
 
-function flushPcm(invoke: Invoke, meetingId: string, channel: MeetingChannel): void {
-  const rig = rigs[channel]
-  if (!rig || rig.pcmPendingSamples === 0) return
+/** drains the rig it's handed, never a lookup — a rig that finished
+ *  opening after a cancel lives outside `rigs`, and must not alias the
+ *  current recording's buffer */
+function flushPcm(invoke: Invoke, meetingId: string, channel: MeetingChannel, rig: ChannelRig): void {
+  if (rig.pcmPendingSamples === 0) return
   const merged = new Int16Array(rig.pcmPendingSamples)
   let off = 0
   for (const part of rig.pcmPending) {
@@ -142,16 +179,57 @@ function stopTracks(stream: StreamLike): void {
   for (const t of stream.getTracks()) t.stop()
 }
 
+/** resolve a channel's stream or fail within its timeout; a stream that
+ *  lands after the deadline is released, never leaked */
+function acquireStream(media: CaptureMedia, channel: MeetingChannel): Promise<StreamLike> {
+  const { label, timeoutMs, hint } = CHANNEL_CAPTURE[channel]
+  return new Promise<StreamLike>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      settled = true
+      reject(new Error(`${label} capture timed out — ${hint}`))
+    }, timeoutMs)
+    const pending = channel === 'mic' ? media.getMicStream() : media.getSystemStream()
+    pending.then(
+      (stream) => {
+        if (settled) return stopTracks(stream)
+        settled = true
+        clearTimeout(timer)
+        resolve(stream)
+      },
+      (err: unknown) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        const detail = err instanceof Error ? err.message : String(err)
+        reject(new Error(`${label} capture failed (${detail}) — ${hint}`))
+      }
+    )
+  })
+}
+
+function releaseRig(rig: ChannelRig): void {
+  rig.tap.stop()
+  void rig.recorder.stop().catch(() => {})
+  stopTracks(rig.stream)
+}
+
 async function openRig(
   media: CaptureMedia,
   invoke: Invoke,
   meetingId: string,
   channel: MeetingChannel
 ): Promise<ChannelRig> {
-  const stream = channel === 'mic' ? await media.getMicStream() : await media.getSystemStream()
+  const stream = await acquireStream(media, channel)
   try {
-    // Chromium refuses video:false on getDisplayMedia — take the track, kill it
-    if (channel === 'system') for (const t of stream.getVideoTracks()) t.stop()
+    if (channel === 'system') {
+      // Chromium refuses video:false on getDisplayMedia — take the track, kill it
+      for (const t of stream.getVideoTracks()) t.stop()
+      // a loopback grant that came back video-only would record silence
+      // for the whole meeting — fail now, while the user can still act
+      if (stream.getAudioTracks().length === 0)
+        throw new Error(`system audio unavailable — ${SYSTEM_AUDIO_HINT}`)
+    }
     const recorder = media.makeRecorder(stream, (bytes) =>
       sendChunk(invoke, meetingId, channel, 'webm', bytes)
     )
@@ -159,7 +237,7 @@ async function openRig(
     rig.tap = await media.makeTap(stream, (frames) => {
       rig.pcmPending.push(floatTo16BitPcm(frames))
       rig.pcmPendingSamples += frames.length
-      if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel)
+      if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel, rig)
     })
     recorder.start(WEBM_TIMESLICE_MS)
     return rig
@@ -171,6 +249,31 @@ async function openRig(
   }
 }
 
+/** rejects when the user cancels the pending start; the capture APIs
+ *  themselves can't be aborted, so a rig that finishes opening after the
+ *  cancel is released on arrival instead */
+let cancelPending: (() => void) | null = null
+
+export function cancelStarting(): void {
+  if (state.phase === 'starting') cancelPending?.()
+}
+
+async function openRigOrCancel(
+  media: CaptureMedia,
+  invoke: Invoke,
+  meetingId: string,
+  channel: MeetingChannel,
+  cancelled: Promise<never>
+): Promise<ChannelRig> {
+  const opening = openRig(media, invoke, meetingId, channel)
+  try {
+    return await Promise.race([opening, cancelled])
+  } catch (err) {
+    if (err === CANCELLED) opening.then(releaseRig, () => {})
+    throw err
+  }
+}
+
 export async function startRecording(opts: {
   calendarEventId?: string | null
   title?: string
@@ -178,6 +281,14 @@ export async function startRecording(opts: {
   if (state.phase === 'recording' || state.phase === 'starting') return null
   const { media, invoke } = getDeps()
   setState({ phase: 'starting' })
+  let cancelRequested = false
+  const cancelled = new Promise<never>((_, reject) => {
+    cancelPending = (): void => {
+      cancelRequested = true
+      reject(CANCELLED)
+    }
+  })
+  cancelled.catch(() => {}) // observed via race; never unhandled on its own
 
   let meeting: Meeting
   try {
@@ -186,25 +297,23 @@ export async function startRecording(opts: {
       title: opts.title ?? ''
     })
   } catch (err) {
+    cancelPending = null
     setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
     return null
   }
 
   try {
+    if (cancelRequested) throw CANCELLED
     // sequential, assigning as we go — a system-capture failure must still
     // see (and release) the already-open mic rig
     rigs = {}
-    rigs.mic = await openRig(media, invoke, meeting.id, 'mic')
-    rigs.system = await openRig(media, invoke, meeting.id, 'system')
+    rigs.mic = await openRigOrCancel(media, invoke, meeting.id, 'mic', cancelled)
+    rigs.system = await openRigOrCancel(media, invoke, meeting.id, 'system', cancelled)
   } catch (err) {
+    cancelPending = null
     // half-open capture: release the whole rig (tap's AudioContext and
     // recorder included — tracks alone leak both), drop the started row
-    for (const rig of Object.values(rigs)) {
-      if (!rig) continue
-      rig.tap.stop()
-      void rig.recorder.stop().catch(() => {})
-      stopTracks(rig.stream)
-    }
+    for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
     rigs = {}
     sends = [] // in-flight chunk sends belong to the dead rig
     try {
@@ -218,13 +327,16 @@ export async function startRecording(opts: {
         `meetings: rollback delete failed for ${meeting.id}: ${String(deleteErr)}`
       ).catch(() => {})
     }
-    setState({
-      phase: 'error',
-      message: `Couldn't start capture: ${err instanceof Error ? err.message : String(err)}`
-    })
+    if (err === CANCELLED) setState({ phase: 'idle' })
+    else
+      setState({
+        phase: 'error',
+        message: `Couldn't start capture: ${err instanceof Error ? err.message : String(err)}`
+      })
     return null
   }
 
+  cancelPending = null
   setState({
     phase: 'recording',
     meetingId: meeting.id,
@@ -243,7 +355,7 @@ export async function stopRecording(): Promise<Meeting | null> {
   for (const [channel, rig] of Object.entries(rigs) as [MeetingChannel, ChannelRig][]) {
     rig.tap.stop()
     await rig.recorder.stop() // final webm chunk delivered before we move on
-    flushPcm(invoke, meetingId, channel)
+    flushPcm(invoke, meetingId, channel, rig)
     stopTracks(rig.stream)
   }
   rigs = {}

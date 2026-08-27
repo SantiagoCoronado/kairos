@@ -624,9 +624,14 @@ export function registerIpc(): void {
   )
   // the Dock is the one place that stays visible with Kairos in the
   // background — a live mic must never be a surprise on Cmd+Tab
+  // cosmetic: must never be able to fail the state transition it follows
   const showRecordingBadge = (): void => {
     if (process.platform !== 'darwin') return
-    app.dock?.setBadge(meetMgr.activeMeetingId ? (meetMgr.paused ? 'PAUSED' : 'REC') : '')
+    try {
+      app.dock?.setBadge(meetMgr.activeMeetingId ? (meetMgr.paused ? 'PAUSED' : 'REC') : '')
+    } catch (err) {
+      logLine('warn', 'meetings', `dock badge failed: ${String(err)}`)
+    }
   }
   const meetMgr = new MeetingManager(db, join(DATA_DIR, 'recordings'), () => {
     broadcast('db:changed', { entity: 'meetings' })

@@ -95,10 +95,12 @@ export function RecordingBar(): React.JSX.Element | null {
         {fmtElapsed(recordedMs(rec, nowMs))}
       </span>
       {/* live input per channel — the proof we're actually hearing both
-          sides, not just that a recorder exists */}
+          sides, not just that a recorder exists. Incompressible (~330px),
+          so a narrow column drops them rather than overflowing the band:
+          the title is the only thing that can shrink. */}
       <span
         className={cn(
-          'inline-flex items-center gap-3 ml-1',
+          'hidden @min-[760px]:inline-flex items-center gap-3 ml-1',
           paused ? 'text-accent/60' : 'text-danger'
         )}
       >
@@ -139,7 +141,7 @@ function Band({
         // native drag region; z above every modal scrim (z-50) and the
         // toast stack (z-60) — a hot mic stays visible with Settings or
         // the command palette open
-        'no-drag relative z-[70] shrink-0 flex gap-2.5 px-4 py-1.5 border-b',
+        'no-drag @container relative z-[70] shrink-0 flex gap-2.5 px-4 py-1.5 border-b',
         align === 'center' ? 'items-center' : 'items-start',
         tone === 'danger' ? 'bg-danger/10 border-danger/30' : 'bg-accent/10 border-accent/30'
       )}

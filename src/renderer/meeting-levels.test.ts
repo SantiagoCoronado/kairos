@@ -52,10 +52,14 @@ describe('level store', () => {
     expect(getLevels().mic).toBeCloseTo(0.9, 5)
   })
 
-  it('resetLevels flattens both meters', () => {
+  it('resetLevels flattens both meters in place — a held reference stays live', () => {
+    const held = getLevels()
     noteFrames('mic', new Float32Array(128).fill(1))
     noteFrames('system', new Float32Array(128).fill(1))
     resetLevels()
-    expect(getLevels()).toEqual({ mic: 0, system: 0 })
+    expect(held).toEqual({ mic: 0, system: 0 })
+    noteFrames('mic', new Float32Array(128).fill(1))
+    expect(held.mic).toBe(1)
+    expect(getLevels()).toBe(held)
   })
 })

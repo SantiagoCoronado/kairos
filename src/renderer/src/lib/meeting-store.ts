@@ -375,13 +375,18 @@ export async function startRecording(opts: {
   return meeting
 }
 
-/** main refused a live-state transition (pause/resume) — it no longer
- *  considers this meeting live (deleted from a list, finalized by an
- *  orphan sweep or shutdown), so every chunk from here on is refused too.
- *  Tear the rig down and say so; a paused-looking UI over a dead row
- *  would overcount the duration main eventually writes. */
-function abandonLive(meetingId: string, what: string, err: unknown): void {
+/** main refused a live-state transition (pause/resume). Usually it no
+ *  longer considers this meeting live (deleted from a list, finalized by
+ *  an orphan sweep or shutdown) and every chunk from here on is refused
+ *  too — but the rejection can also come from after the transition
+ *  succeeded, with main still live. Either way: tear the rig down, say
+ *  so, and send a best-effort stop — it finalizes the row (audio already
+ *  on disk becomes reachable now, not at the next launch's orphan sweep)
+ *  and clears main's activeId so the next recording can start; when main
+ *  wasn't live it's a harmless refusal. */
+async function abandonLive(meetingId: string, what: string, err: unknown): Promise<void> {
   if (state.phase !== 'recording' || state.meetingId !== meetingId) return
+  const { invoke } = getDeps()
   for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
   rigs = {}
   resetLevels()
@@ -390,6 +395,7 @@ function abandonLive(meetingId: string, what: string, err: unknown): void {
     phase: 'error',
     message: `Recording lost — couldn't ${what}: ${err instanceof Error ? err.message : String(err)}`
   })
+  await invoke('meetings:stop', meetingId).catch(() => {})
 }
 
 /** hold both channels: recorders pause, tap frames drop, and whatever PCM
@@ -410,7 +416,7 @@ export async function pauseRecording(): Promise<void> {
   try {
     await invoke('meetings:pause', meetingId)
   } catch (err) {
-    abandonLive(meetingId, 'pause', err)
+    await abandonLive(meetingId, 'pause', err)
   }
 }
 
@@ -418,7 +424,7 @@ export async function resumeRecording(): Promise<void> {
   if (state.phase !== 'recording' || state.pausedAtMs === null) return
   const { invoke } = getDeps()
   const { meetingId } = state
-  for (const [, rig] of Object.entries(rigs) as [MeetingChannel, ChannelRig][]) {
+  for (const rig of Object.values(rigs) as ChannelRig[]) {
     rig.paused = false
     rig.recorder.resume()
   }
@@ -430,7 +436,7 @@ export async function resumeRecording(): Promise<void> {
   try {
     await invoke('meetings:resume', meetingId)
   } catch (err) {
-    abandonLive(meetingId, 'resume', err)
+    await abandonLive(meetingId, 'resume', err)
   }
 }
 

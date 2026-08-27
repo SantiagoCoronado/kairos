@@ -489,7 +489,22 @@ describe('pauseRecording / resumeRecording', () => {
     expect(rig.recorders.every((r) => r.stopped)).toBe(true)
     expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
     expect(rig.systemStream.tracks.every((t) => t.stopped)).toBe(true)
+    // best-effort stop went out: finalizes the row (and clears main's
+    // activeId) when main was in fact still live; a no-op refusal otherwise
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
     expect(await stopRecording()).toBeNull() // nothing live to stop
+  })
+
+  it('abandoning survives a refused stop too', async () => {
+    await startRecording()
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'meetings:pause' || channel === 'meetings:stop')
+        throw new Error('meeting not recording: m1')
+      return undefined
+    })
+    await pauseRecording()
+    expect(getSnapshot().phase).toBe('error')
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
   })
 
   it('a refused meetings:resume abandons the recording too', async () => {
@@ -502,6 +517,7 @@ describe('pauseRecording / resumeRecording', () => {
     await resumeRecording()
     expect(getSnapshot().phase).toBe('error')
     expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
   })
 })
 

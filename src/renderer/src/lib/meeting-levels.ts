@@ -31,7 +31,9 @@ export function envelope(previous: number, next: number): number {
   return next >= previous ? next : Math.max(next, previous * DECAY)
 }
 
-let levels: Levels = { mic: 0, system: 0 }
+/** one identity for the lifetime of the module — reset mutates in place,
+ *  so a holder of getLevels() never ends up watching a stale object */
+const levels: Levels = { mic: 0, system: 0 }
 
 /** called per tap block (~125 Hz per channel); the meter polls getLevels()
  *  once per animation frame, so there is no listener fan-out to pay */
@@ -41,7 +43,8 @@ export function noteFrames(channel: MeetingChannel, frames: Float32Array): void 
 
 /** paused / stopped: nothing is being heard, and the meter must say so */
 export function resetLevels(): void {
-  levels = { mic: 0, system: 0 }
+  levels.mic = 0
+  levels.system = 0
 }
 
 export function getLevels(): Readonly<Levels> {

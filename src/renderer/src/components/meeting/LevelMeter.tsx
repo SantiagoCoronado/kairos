@@ -38,11 +38,13 @@ export function LevelMeter({
     const ctx = canvas.getContext('2d')
     if (!ctx) return undefined
     ctx.scale(dpr, dpr)
+    // the meter inherits the bar's tone from CSS; the tone only changes
+    // with `active`, which re-runs this effect — read it once, never
+    // inside the frame loop (a forced style recalc per frame per meter)
+    ctx.fillStyle = getComputedStyle(canvas).color
 
     const paint = (): void => {
       ctx.clearRect(0, 0, WIDTH, HEIGHT)
-      // currentColor: the meter inherits the bar's tone from CSS
-      ctx.fillStyle = getComputedStyle(canvas).color
       history.current.forEach((level, i) => {
         // a live-but-silent channel still shows a hairline, so "flat" reads
         // as quiet rather than missing

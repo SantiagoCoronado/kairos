@@ -397,7 +397,9 @@ async function abandonLive(meetingId: string, what: string, err: unknown): Promi
   // everything up to this moment, and "lost" would send them nowhere
   setState({ phase: 'error', message: `Recording lost — couldn't ${what}: ${detail}` })
   const saved = await invoke('meetings:stop', meetingId).catch(() => null)
-  if (saved && state.phase === 'error')
+  // re-read: `state` was narrowed to 'recording' above, and the user may
+  // have dismissed the error (or started anew) while the stop was in flight
+  if (saved && getSnapshot().phase === 'error')
     setState({
       phase: 'error',
       message: `Capture ended early — couldn't ${what}: ${detail}. The recording up to that point was saved.`

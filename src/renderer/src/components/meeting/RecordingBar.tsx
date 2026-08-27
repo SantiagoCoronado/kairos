@@ -140,7 +140,11 @@ function Band({
         // column's absolute drag strip; `no-drag` carves it out of the
         // native drag region; z above every modal scrim (z-50) and the
         // toast stack (z-60) — a hot mic stays visible with Settings or
-        // the command palette open
+        // the command palette open. `@container` (for the meters'
+        // breakpoint) adds layout containment: the band becomes the
+        // containing block for any position:fixed descendant, so a
+        // popover added inside it would be trapped — nothing positioned
+        // lives here today; keep it that way or portal it out.
         'no-drag @container relative z-[70] shrink-0 flex gap-2.5 px-4 py-1.5 border-b',
         align === 'center' ? 'items-center' : 'items-start',
         tone === 'danger' ? 'bg-danger/10 border-danger/30' : 'bg-accent/10 border-accent/30'

@@ -476,6 +476,7 @@ describe('pauseRecording / resumeRecording', () => {
     await startRecording()
     invoke.mockImplementation(async (channel: string) => {
       if (channel === 'meetings:pause') throw new Error('meeting not recording: m1')
+      if (channel === 'meetings:stop') return { ...MEETING, status: 'ready' }
       return undefined
     })
     await pauseRecording()

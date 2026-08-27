@@ -10,6 +10,7 @@ import {
   useMeetingRecording
 } from '../../lib/meeting-store'
 import { fmtElapsed, recordedMs } from '../../lib/meeting-ui'
+import { LevelMeter } from './LevelMeter'
 import { cn } from '../ui'
 
 /** Recording banner — a full-width band at the top of the main column
@@ -92,6 +93,17 @@ export function RecordingBar(): React.JSX.Element | null {
       )}
       <span className="text-[12px] text-text tabular-nums shrink-0">
         {fmtElapsed(recordedMs(rec, nowMs))}
+      </span>
+      {/* live input per channel — the proof we're actually hearing both
+          sides, not just that a recorder exists */}
+      <span
+        className={cn(
+          'inline-flex items-center gap-3 ml-1',
+          paused ? 'text-accent/60' : 'text-danger'
+        )}
+      >
+        <LevelMeter channel="mic" label="you" active={!paused} />
+        <LevelMeter channel="system" label="them" active={!paused} />
       </span>
       <div className="flex-1" />
       {paused ? (

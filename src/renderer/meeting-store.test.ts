@@ -27,6 +27,7 @@ import {
   type TapLike
 } from './src/lib/meeting-store'
 import type { Meeting } from '../core/types'
+import { getLevels } from './src/lib/meeting-levels'
 
 const MEETING: Meeting = {
   id: 'm1',
@@ -383,6 +384,7 @@ describe('stopRecording', () => {
 
     expect(m?.status).toBe('ready')
     expect(getSnapshot().phase).toBe('idle')
+    expect(getLevels()).toEqual({ mic: 0, system: 0 })
     expect(rig.taps.every((t) => t.stopped)).toBe(true)
     expect(rig.recorders.every((r) => r.stopped)).toBe(true)
     expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
@@ -422,9 +424,12 @@ describe('pauseRecording / resumeRecording', () => {
       expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(1)
       expect(invokeCalls('meetings:pause')).toEqual([['m1']])
 
-      // frames arriving while paused are dropped, not buffered
+      // frames arriving while paused are dropped, not buffered — and the
+      // level meter is flat, not frozen on the last block
+      expect(getLevels()).toEqual({ mic: 0, system: 0 })
       micTap.onFrames(new Float32Array(16000).fill(0.5))
       expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(1)
+      expect(getLevels().mic).toBe(0)
 
       await pauseRecording() // idempotent
       expect(invokeCalls('meetings:pause')).toHaveLength(1)
@@ -440,9 +445,10 @@ describe('pauseRecording / resumeRecording', () => {
       await resumeRecording() // idempotent
       expect(invokeCalls('meetings:resume')).toHaveLength(1)
 
-      // capture flows again
+      // capture flows again, and the meter hears it
       micTap.onFrames(new Float32Array(16000).fill(0.5))
       expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(2)
+      expect(getLevels().mic).toBeGreaterThan(0.8)
     } finally {
       vi.useRealTimers()
     }

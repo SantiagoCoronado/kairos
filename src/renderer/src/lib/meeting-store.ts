@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react'
 import { api } from './api'
 import { floatTo16BitPcm } from '../../../core/audio'
+import { noteFrames, resetLevels } from './meeting-levels'
 import type { Meeting } from '../../../core/types'
 
 export type MeetingChannel = 'mic' | 'system'
@@ -259,6 +260,7 @@ async function openRig(
     }
     rig.tap = await media.makeTap(stream, (frames) => {
       if (rig.paused) return
+      noteFrames(channel, frames)
       rig.pcmPending.push(floatTo16BitPcm(frames))
       rig.pcmPendingSamples += frames.length
       if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel, rig)
@@ -339,6 +341,7 @@ export async function startRecording(opts: {
     // recorder included — tracks alone leak both), drop the started row
     for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
     rigs = {}
+    resetLevels()
     sends = [] // in-flight chunk sends belong to the dead rig
     try {
       await invoke('meetings:delete', meeting.id)
@@ -381,6 +384,7 @@ function abandonLive(meetingId: string, what: string, err: unknown): void {
   if (state.phase !== 'recording' || state.meetingId !== meetingId) return
   for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
   rigs = {}
+  resetLevels()
   sends = []
   setState({
     phase: 'error',
@@ -401,6 +405,7 @@ export async function pauseRecording(): Promise<void> {
     rig.recorder.pause()
     flushPcm(invoke, meetingId, channel, rig)
   }
+  resetLevels()
   setState({ ...state, pausedAtMs: Date.now() })
   try {
     await invoke('meetings:pause', meetingId)
@@ -442,6 +447,7 @@ export async function stopRecording(): Promise<Meeting | null> {
     stopTracks(rig.stream)
   }
   rigs = {}
+  resetLevels()
   await Promise.all(sends)
   sends = []
 

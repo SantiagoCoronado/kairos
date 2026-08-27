@@ -395,11 +395,14 @@ async function abandonLive(meetingId: string, what: string, err: unknown): Promi
   // say something immediately; the wording is corrected once the stop
   // settles — when it lands, the user has a complete, queued recording of
   // everything up to this moment, and "lost" would send them nowhere
-  setState({ phase: 'error', message: `Recording lost — couldn't ${what}: ${detail}` })
+  const provisional = `Recording lost — couldn't ${what}: ${detail}`
+  setState({ phase: 'error', message: provisional })
   const saved = await invoke('meetings:stop', meetingId).catch(() => null)
-  // re-read: `state` was narrowed to 'recording' above, and the user may
-  // have dismissed the error (or started anew) while the stop was in flight
-  if (saved && getSnapshot().phase === 'error')
+  // re-read: `state` was narrowed to 'recording' above. Correct only OUR
+  // banner — the user may have dismissed it, or a newer failure may own
+  // the slot, while the stop was in flight
+  const current = getSnapshot()
+  if (saved && current.phase === 'error' && current.message === provisional)
     setState({
       phase: 'error',
       message: `Capture ended early — couldn't ${what}: ${detail}. The recording up to that point was saved.`

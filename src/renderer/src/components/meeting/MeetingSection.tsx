@@ -48,7 +48,7 @@ export function MeetingSection({
                 variant="ghost"
                 className="!py-1 text-[11.5px]"
                 title="Pause recording"
-                onClick={pauseRecording}
+                onClick={() => void pauseRecording()}
               >
                 <span className="inline-flex items-center gap-1">
                   <Pause size={11} fill="currentColor" /> Pause
@@ -59,7 +59,7 @@ export function MeetingSection({
                 variant="ghost"
                 className="!py-1 text-[11.5px] text-accent"
                 title="Resume recording"
-                onClick={resumeRecording}
+                onClick={() => void resumeRecording()}
               >
                 <span className="inline-flex items-center gap-1">
                   <Play size={11} fill="currentColor" /> Resume

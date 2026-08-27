@@ -10,6 +10,7 @@ import { getSettings, saveSettings } from '../settings'
 import { stageBuffer } from '../chat/uploads'
 import { getVapidPublicKey, addPushSubscription, removePushSubscription, sendPushAll } from './push'
 import { logLine } from '../logger'
+import { isDeniedChannel } from './policy'
 
 /**
  * Remote-access server: lets a phone/browser run the same renderer bundle
@@ -23,24 +24,8 @@ import { logLine } from '../logger'
  * is a viewer of this app, not a terminal on this machine.
  */
 
-// capture:* window management is never remotely useful — except capture:submit,
-// which is a plain DB write that the phone's voice capture rides. terminal:* is
-// a shell on this machine — refused unless the user explicitly opts in
-// (Settings → remote access → allow terminal).
-// meetings mutations stay local-only: the Mac owns the live capture rig, and
-// a remote client must never start/stop/pause/feed/delete a recording it can't
-// see — nor trigger paid model calls (summarize). Reads (list/get/active/
-// audioData) and the scoped undo remain available for phone use.
-const ALWAYS_DENIED = [
-  /^capture:(?!submit$|smart$)/,
-  /^meetings:(start|stop|pause|resume|chunk|delete|summarize)$/
-]
-const TERMINAL = /^terminal:/
-
 function isDenied(channel: string): boolean {
-  if (ALWAYS_DENIED.some((rx) => rx.test(channel))) return true
-  if (TERMINAL.test(channel) && !getSettings().remoteTerminal) return true
-  return false
+  return isDeniedChannel(channel, { remoteTerminal: getSettings().remoteTerminal })
 }
 /** invoke payloads are mostly JSON control traffic (attachments ride base64
  *  data URLs in *responses*) — but stt:transcribe carries a base64 voice memo

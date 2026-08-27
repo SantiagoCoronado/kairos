@@ -411,7 +411,7 @@ describe('pauseRecording / resumeRecording', () => {
       micTap.onFrames(new Float32Array(100).fill(0.25)) // buffered, sub-threshold
 
       vi.setSystemTime(1_030_000)
-      pauseRecording()
+      await pauseRecording()
       let snap = getSnapshot()
       expect(snap.phase).toBe('recording')
       if (snap.phase !== 'recording') throw new Error('unreachable')
@@ -426,18 +426,18 @@ describe('pauseRecording / resumeRecording', () => {
       micTap.onFrames(new Float32Array(16000).fill(0.5))
       expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(1)
 
-      pauseRecording() // idempotent
+      await pauseRecording() // idempotent
       expect(invokeCalls('meetings:pause')).toHaveLength(1)
 
       vi.setSystemTime(1_050_000)
-      resumeRecording()
+      await resumeRecording()
       snap = getSnapshot()
       if (snap.phase !== 'recording') throw new Error('unreachable')
       expect(snap.pausedAtMs).toBeNull()
       expect(snap.pausedMs).toBe(20_000)
       expect(rig.recorders.every((r) => !r.paused)).toBe(true)
       expect(invokeCalls('meetings:resume')).toEqual([['m1']])
-      resumeRecording() // idempotent
+      await resumeRecording() // idempotent
       expect(invokeCalls('meetings:resume')).toHaveLength(1)
 
       // capture flows again
@@ -450,7 +450,7 @@ describe('pauseRecording / resumeRecording', () => {
 
   it('stopping while paused finalizes normally', async () => {
     await startRecording()
-    pauseRecording()
+    await pauseRecording()
     const m = await stopRecording()
     expect(m?.status).toBe('ready')
     expect(getSnapshot().phase).toBe('idle')
@@ -459,11 +459,43 @@ describe('pauseRecording / resumeRecording', () => {
   })
 
   it('are no-ops outside the recording phase', async () => {
-    pauseRecording()
-    resumeRecording()
+    await pauseRecording()
+    await resumeRecording()
     expect(invokeCalls('meetings:pause')).toHaveLength(0)
     expect(invokeCalls('meetings:resume')).toHaveLength(0)
     expect(getSnapshot().phase).toBe('idle')
+  })
+
+  it('a refused meetings:pause abandons the recording instead of overcounting', async () => {
+    await startRecording()
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'meetings:pause') throw new Error('meeting not recording: m1')
+      return undefined
+    })
+    await pauseRecording()
+    const snap = getSnapshot()
+    expect(snap.phase).toBe('error')
+    if (snap.phase !== 'error') throw new Error('unreachable')
+    expect(snap.message).toMatch(/Recording lost — couldn't pause: meeting not recording/)
+    // the whole rig is released — a paused-looking UI over a dead row would
+    // keep the mic open with no way to close it
+    expect(rig.taps.every((t) => t.stopped)).toBe(true)
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(rig.systemStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(await stopRecording()).toBeNull() // nothing live to stop
+  })
+
+  it('a refused meetings:resume abandons the recording too', async () => {
+    await startRecording()
+    await pauseRecording()
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'meetings:resume') throw new Error('meeting not recording: m1')
+      return undefined
+    })
+    await resumeRecording()
+    expect(getSnapshot().phase).toBe('error')
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
   })
 })
 

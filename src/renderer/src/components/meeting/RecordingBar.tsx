@@ -37,7 +37,7 @@ export function RecordingBar(): React.JSX.Element | null {
     return (
       <Band tone="danger">
         <Dot pulse />
-        <span className="text-[12px] text-text">Starting capture…</span>
+        <StateText>Starting capture…</StateText>
         <span className="text-[11.5px] text-muted truncate">
           answer the microphone prompt if macOS shows one
         </span>
@@ -56,7 +56,9 @@ export function RecordingBar(): React.JSX.Element | null {
     return (
       <Band tone="danger" align="start">
         <div className="min-w-0 flex-1 text-[12px] leading-snug py-0.5">
-          <div className="text-danger break-words">{headline}</div>
+          <div role="status" aria-live="polite" className="text-danger break-words">
+            {headline}
+          </div>
           {hint && <div className="text-muted break-words mt-0.5">{hint}</div>}
         </div>
         <BarButton onClick={dismissError} title="Dismiss">
@@ -70,7 +72,7 @@ export function RecordingBar(): React.JSX.Element | null {
     return (
       <Band tone="danger">
         <Dot />
-        <span className="text-[12px] text-text">Saving recording…</span>
+        <StateText>Saving recording…</StateText>
       </Band>
     )
   }
@@ -80,9 +82,9 @@ export function RecordingBar(): React.JSX.Element | null {
   return (
     <Band tone={paused ? 'accent' : 'danger'}>
       <Dot pulse={!paused} tone={paused ? 'accent' : 'danger'} />
-      <span className={cn('text-[12px] font-medium', paused ? 'text-accent' : 'text-danger')}>
+      <StateText className={paused ? 'text-accent' : 'text-danger'}>
         {paused ? 'Paused' : 'Recording'}
-      </span>
+      </StateText>
       {title && (
         <span className="text-[12px] text-muted truncate min-w-0" title={title}>
           {title}
@@ -93,11 +95,11 @@ export function RecordingBar(): React.JSX.Element | null {
       </span>
       <div className="flex-1" />
       {paused ? (
-        <BarButton onClick={resumeRecording} title="Resume recording">
+        <BarButton onClick={() => void resumeRecording()} title="Resume recording">
           <Play size={12} fill="currentColor" /> Resume
         </BarButton>
       ) : (
-        <BarButton onClick={pauseRecording} title="Pause recording">
+        <BarButton onClick={() => void pauseRecording()} title="Pause recording">
           <Pause size={12} fill="currentColor" /> Pause
         </BarButton>
       )}
@@ -119,18 +121,36 @@ function Band({
 }): React.JSX.Element {
   return (
     <div
-      role="status"
-      aria-live="polite"
       className={cn(
-        // above the column's absolute drag strip, and outside the native
-        // drag region — both, or the buttons are dead
-        'no-drag relative z-50 shrink-0 flex gap-2.5 px-4 py-1.5 border-b',
+        // in flow, so it never hides under (or steals clicks from) the
+        // column's absolute drag strip; `no-drag` carves it out of the
+        // native drag region; z above every modal scrim (z-50) and the
+        // toast stack (z-60) — a hot mic stays visible with Settings or
+        // the command palette open
+        'no-drag relative z-[70] shrink-0 flex gap-2.5 px-4 py-1.5 border-b',
         align === 'center' ? 'items-center' : 'items-start',
         tone === 'danger' ? 'bg-danger/10 border-danger/30' : 'bg-accent/10 border-accent/30'
       )}
     >
       {children}
     </div>
+  )
+}
+
+/** the one thing assistive tech should hear change: Recording → Paused →
+ *  Saving. The ticking clock lives outside it, or a screen reader would
+ *  announce every second of the meeting. */
+function StateText({
+  className,
+  children
+}: {
+  className?: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <span role="status" aria-live="polite" className={cn('text-[12px] font-medium text-text', className)}>
+      {children}
+    </span>
   )
 }
 
@@ -160,6 +180,7 @@ function BarButton({
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }): React.JSX.Element {
   return (
     <button
+      type="button"
       className={cn(
         'shrink-0 inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11.5px] transition-colors',
         danger

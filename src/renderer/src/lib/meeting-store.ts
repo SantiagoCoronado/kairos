@@ -372,10 +372,27 @@ export async function startRecording(opts: {
   return meeting
 }
 
+/** main refused a live-state transition (pause/resume) — it no longer
+ *  considers this meeting live (deleted from a list, finalized by an
+ *  orphan sweep or shutdown), so every chunk from here on is refused too.
+ *  Tear the rig down and say so; a paused-looking UI over a dead row
+ *  would overcount the duration main eventually writes. */
+function abandonLive(meetingId: string, what: string, err: unknown): void {
+  if (state.phase !== 'recording' || state.meetingId !== meetingId) return
+  for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
+  rigs = {}
+  sends = []
+  setState({
+    phase: 'error',
+    message: `Recording lost — couldn't ${what}: ${err instanceof Error ? err.message : String(err)}`
+  })
+}
+
 /** hold both channels: recorders pause, tap frames drop, and whatever PCM
  *  is buffered lands on disk now (a crash mid-pause must not lose it).
- *  Main banks the paused time so the row's duration matches the archives. */
-export function pauseRecording(): void {
+ *  Main banks the paused time so the row's duration matches the archives.
+ *  Resolves once main has acknowledged (or the recording was abandoned). */
+export async function pauseRecording(): Promise<void> {
   if (state.phase !== 'recording' || state.pausedAtMs !== null) return
   const { invoke } = getDeps()
   const { meetingId } = state
@@ -384,24 +401,32 @@ export function pauseRecording(): void {
     rig.recorder.pause()
     flushPcm(invoke, meetingId, channel, rig)
   }
-  track(invoke('meetings:pause', meetingId))
   setState({ ...state, pausedAtMs: Date.now() })
+  try {
+    await invoke('meetings:pause', meetingId)
+  } catch (err) {
+    abandonLive(meetingId, 'pause', err)
+  }
 }
 
-export function resumeRecording(): void {
+export async function resumeRecording(): Promise<void> {
   if (state.phase !== 'recording' || state.pausedAtMs === null) return
   const { invoke } = getDeps()
-  for (const rig of Object.values(rigs)) {
-    if (!rig) continue
+  const { meetingId } = state
+  for (const [, rig] of Object.entries(rigs) as [MeetingChannel, ChannelRig][]) {
     rig.paused = false
     rig.recorder.resume()
   }
-  track(invoke('meetings:resume', state.meetingId))
   setState({
     ...state,
     pausedMs: state.pausedMs + (Date.now() - state.pausedAtMs),
     pausedAtMs: null
   })
+  try {
+    await invoke('meetings:resume', meetingId)
+  } catch (err) {
+    abandonLive(meetingId, 'resume', err)
+  }
 }
 
 export async function stopRecording(): Promise<Meeting | null> {
@@ -468,16 +493,17 @@ const realMedia: CaptureMedia = {
     const rec = new MediaRecorder(stream as MediaStream, mimeType ? { mimeType } : undefined)
     // blob → bytes is async: the tail chunk's ondataavailable fires before
     // onstop, but its arrayBuffer resolves after — stop() must wait for it
-    // or the last timeslice lands after meetings:stop and is refused
-    const reads: Promise<void>[] = []
+    // or the last timeslice lands after meetings:stop and is refused.
+    // Settled reads leave the set, so a long meeting holds only in-flight ones.
+    const reads = new Set<Promise<void>>()
     rec.ondataavailable = (e): void => {
       if (e.data.size === 0) return
-      reads.push(
-        e.data
-          .arrayBuffer()
-          .then((buf) => onChunk(new Uint8Array(buf)))
-          .catch(() => {})
-      )
+      const read: Promise<void> = e.data
+        .arrayBuffer()
+        .then((buf) => onChunk(new Uint8Array(buf)))
+        .catch(() => {})
+        .finally(() => reads.delete(read))
+      reads.add(read)
     }
     return {
       start: (timesliceMs) => rec.start(timesliceMs),
@@ -493,7 +519,7 @@ const realMedia: CaptureMedia = {
           rec.onstop = (): void => resolve()
           if (rec.state === 'inactive') resolve()
           else rec.stop()
-        }).then(() => Promise.all(reads).then(() => {}))
+        }).then(() => Promise.all([...reads]).then(() => {}))
     }
   },
 

@@ -2,7 +2,6 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ToastHost } from './components/ToastHost'
-import { RecordingChip } from './components/meeting/RecordingChip'
 import { api } from './lib/api'
 import { recoverActiveRecording } from './lib/meeting-store'
 import './styles.css'
@@ -78,7 +77,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
       <App />
       <ToastHost />
-      <RecordingChip />
     </ErrorBoundary>
   </React.StrictMode>
 )

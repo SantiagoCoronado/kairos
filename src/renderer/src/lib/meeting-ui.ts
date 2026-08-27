@@ -50,7 +50,17 @@ export function recordPromptToast(
   }
 }
 
-/** live elapsed clock for the recording chip: m:ss, h:mm:ss past the hour */
+/** captured time so far: wall-clock since start minus every pause — the
+ *  number the bar shows, and the one the finalized row will carry */
+export function recordedMs(
+  rec: { startedAtMs: number; pausedMs: number; pausedAtMs: number | null },
+  nowMs: number
+): number {
+  const end = rec.pausedAtMs ?? nowMs
+  return Math.max(0, end - rec.startedAtMs - rec.pausedMs)
+}
+
+/** live elapsed clock for the recording bar: m:ss, h:mm:ss past the hour */
 export function fmtElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))
   const s = total % 60

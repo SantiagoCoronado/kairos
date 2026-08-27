@@ -242,6 +242,11 @@ export interface IpcApi {
   'meetings:get': (id: string) => { meeting: Meeting; transcript: MeetingTranscript | null }
   'meetings:start': (input?: NewMeeting) => Meeting
   'meetings:stop': (id: string) => Meeting
+  /** pause/resume the live recording: the renderer holds its recorders and
+   *  drops tap frames, main banks the paused time so the row's duration
+   *  matches the archives (both skip the pause) */
+  'meetings:pause': (id: string) => void
+  'meetings:resume': (id: string) => void
   /** base64 audio chunk: webm = playback archive, pcm = 16k int16 mono
    *  appended into the channel's WAV (header patched at stop) */
   'meetings:chunk': (

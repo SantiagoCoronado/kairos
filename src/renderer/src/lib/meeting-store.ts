@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react'
 import { api } from './api'
 import { floatTo16BitPcm } from '../../../core/audio'
+import { noteFrames, resetLevels } from './meeting-levels'
 import type { Meeting } from '../../../core/types'
 
 export type MeetingChannel = 'mic' | 'system'
@@ -17,7 +18,16 @@ export type MeetingChannel = 'mic' | 'system'
 export type MeetingRecState =
   | { phase: 'idle' }
   | { phase: 'starting' }
-  | { phase: 'recording'; meetingId: string; title: string; startedAtMs: number }
+  | {
+      phase: 'recording'
+      meetingId: string
+      title: string
+      startedAtMs: number
+      /** paused time banked by earlier pause/resume pairs */
+      pausedMs: number
+      /** wall-clock start of the current pause, null while capturing */
+      pausedAtMs: number | null
+    }
   | { phase: 'stopping'; meetingId: string }
   | { phase: 'error'; message: string }
 
@@ -75,6 +85,10 @@ export interface StreamLike {
 
 export interface RecorderLike {
   start(timesliceMs: number): void
+  /** hold the archive without closing it — MediaRecorder keeps its
+   *  timeline contiguous across a pause, so playback skips the gap */
+  pause(): void
+  resume(): void
   /** resolves after the final chunk was delivered */
   stop(): Promise<void>
 }
@@ -137,6 +151,9 @@ interface ChannelRig {
   stream: StreamLike
   recorder: RecorderLike
   tap: TapLike
+  /** frames arriving while paused are dropped so the WAV (and the
+   *  transcript cut from it) stays aligned with the paused webm */
+  paused: boolean
   pcmPending: Int16Array[]
   pcmPendingSamples: number
 }
@@ -233,8 +250,17 @@ async function openRig(
     const recorder = media.makeRecorder(stream, (bytes) =>
       sendChunk(invoke, meetingId, channel, 'webm', bytes)
     )
-    const rig: ChannelRig = { stream, recorder, tap: { stop: () => {} }, pcmPending: [], pcmPendingSamples: 0 }
+    const rig: ChannelRig = {
+      stream,
+      recorder,
+      tap: { stop: () => {} },
+      paused: false,
+      pcmPending: [],
+      pcmPendingSamples: 0
+    }
     rig.tap = await media.makeTap(stream, (frames) => {
+      if (rig.paused) return
+      noteFrames(channel, frames)
       rig.pcmPending.push(floatTo16BitPcm(frames))
       rig.pcmPendingSamples += frames.length
       if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel, rig)
@@ -315,6 +341,7 @@ export async function startRecording(opts: {
     // recorder included — tracks alone leak both), drop the started row
     for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
     rigs = {}
+    resetLevels()
     sends = [] // in-flight chunk sends belong to the dead rig
     try {
       await invoke('meetings:delete', meeting.id)
@@ -341,9 +368,87 @@ export async function startRecording(opts: {
     phase: 'recording',
     meetingId: meeting.id,
     title: meeting.title,
-    startedAtMs: Date.now()
+    startedAtMs: Date.now(),
+    pausedMs: 0,
+    pausedAtMs: null
   })
   return meeting
+}
+
+/** main refused a live-state transition (pause/resume). Usually it no
+ *  longer considers this meeting live (deleted from a list, finalized by
+ *  an orphan sweep or shutdown) and every chunk from here on is refused
+ *  too — but the rejection can also come from after the transition
+ *  succeeded, with main still live. Either way: tear the rig down, say
+ *  so, and send a best-effort stop — it finalizes the row (audio already
+ *  on disk becomes reachable now, not at the next launch's orphan sweep)
+ *  and clears main's activeId so the next recording can start; when main
+ *  wasn't live it's a harmless refusal. */
+async function abandonLive(meetingId: string, what: string, err: unknown): Promise<void> {
+  if (state.phase !== 'recording' || state.meetingId !== meetingId) return
+  const { invoke } = getDeps()
+  for (const rig of Object.values(rigs)) if (rig) releaseRig(rig)
+  rigs = {}
+  resetLevels()
+  sends = []
+  const detail = err instanceof Error ? err.message : String(err)
+  // say something immediately; the wording is corrected once the stop
+  // settles — when it lands, the user has a complete, queued recording of
+  // everything up to this moment, and "lost" would send them nowhere
+  const provisional = `Recording lost — couldn't ${what}: ${detail}`
+  setState({ phase: 'error', message: provisional })
+  const saved = await invoke('meetings:stop', meetingId).catch(() => null)
+  // re-read: `state` was narrowed to 'recording' above. Correct only OUR
+  // banner — the user may have dismissed it, or a newer failure may own
+  // the slot, while the stop was in flight
+  const current = getSnapshot()
+  if (saved && current.phase === 'error' && current.message === provisional)
+    setState({
+      phase: 'error',
+      message: `Capture ended early — couldn't ${what}: ${detail}. The recording up to that point was saved.`
+    })
+}
+
+/** hold both channels: recorders pause, tap frames drop, and whatever PCM
+ *  is buffered lands on disk now (a crash mid-pause must not lose it).
+ *  Main banks the paused time so the row's duration matches the archives.
+ *  Resolves once main has acknowledged (or the recording was abandoned). */
+export async function pauseRecording(): Promise<void> {
+  if (state.phase !== 'recording' || state.pausedAtMs !== null) return
+  const { invoke } = getDeps()
+  const { meetingId } = state
+  for (const [channel, rig] of Object.entries(rigs) as [MeetingChannel, ChannelRig][]) {
+    rig.paused = true
+    rig.recorder.pause()
+    flushPcm(invoke, meetingId, channel, rig)
+  }
+  resetLevels()
+  setState({ ...state, pausedAtMs: Date.now() })
+  try {
+    await invoke('meetings:pause', meetingId)
+  } catch (err) {
+    await abandonLive(meetingId, 'pause', err)
+  }
+}
+
+export async function resumeRecording(): Promise<void> {
+  if (state.phase !== 'recording' || state.pausedAtMs === null) return
+  const { invoke } = getDeps()
+  const { meetingId } = state
+  for (const rig of Object.values(rigs) as ChannelRig[]) {
+    rig.paused = false
+    rig.recorder.resume()
+  }
+  setState({
+    ...state,
+    pausedMs: state.pausedMs + (Date.now() - state.pausedAtMs),
+    pausedAtMs: null
+  })
+  try {
+    await invoke('meetings:resume', meetingId)
+  } catch (err) {
+    await abandonLive(meetingId, 'resume', err)
+  }
 }
 
 export async function stopRecording(): Promise<Meeting | null> {
@@ -359,6 +464,7 @@ export async function stopRecording(): Promise<Meeting | null> {
     stopTracks(rig.stream)
   }
   rigs = {}
+  resetLevels()
   await Promise.all(sends)
   sends = []
 
@@ -408,19 +514,35 @@ const realMedia: CaptureMedia = {
       ? 'audio/webm;codecs=opus'
       : undefined
     const rec = new MediaRecorder(stream as MediaStream, mimeType ? { mimeType } : undefined)
+    // blob → bytes is async: the tail chunk's ondataavailable fires before
+    // onstop, but its arrayBuffer resolves after — stop() must wait for it
+    // or the last timeslice lands after meetings:stop and is refused.
+    // Settled reads leave the set, so a long meeting holds only in-flight ones.
+    const reads = new Set<Promise<void>>()
     rec.ondataavailable = (e): void => {
-      if (e.data.size > 0)
-        void e.data.arrayBuffer().then((buf) => onChunk(new Uint8Array(buf)))
+      if (e.data.size === 0) return
+      const read: Promise<void> = e.data
+        .arrayBuffer()
+        .then((buf) => onChunk(new Uint8Array(buf)))
+        .catch(() => {})
+        .finally(() => reads.delete(read))
+      reads.add(read)
     }
     return {
       start: (timesliceMs) => rec.start(timesliceMs),
+      pause: () => {
+        if (rec.state === 'recording') rec.pause()
+      },
+      resume: () => {
+        if (rec.state === 'paused') rec.resume()
+      },
       stop: () =>
         new Promise<void>((resolve) => {
           // ondataavailable for the tail fires before onstop
           rec.onstop = (): void => resolve()
           if (rec.state === 'inactive') resolve()
           else rec.stop()
-        })
+        }).then(() => Promise.all([...reads]).then(() => {}))
     }
   },
 

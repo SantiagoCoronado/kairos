@@ -8,6 +8,8 @@ import {
   configureMeetingStore,
   startRecording,
   stopRecording,
+  pauseRecording,
+  resumeRecording,
   dismissError,
   recoverActiveRecording,
   getSnapshot,
@@ -25,6 +27,7 @@ import {
   type TapLike
 } from './src/lib/meeting-store'
 import type { Meeting } from '../core/types'
+import { getLevels } from './src/lib/meeting-levels'
 
 const MEETING: Meeting = {
   id: 'm1',
@@ -66,7 +69,13 @@ function makeStream(kinds: string[]): StreamLike & { tracks: FakeTrack[] } {
 interface FakeRig {
   micStream: ReturnType<typeof makeStream>
   systemStream: ReturnType<typeof makeStream>
-  recorders: { stream: StreamLike; onChunk: (b: Uint8Array) => void; started: boolean; stopped: boolean }[]
+  recorders: {
+    stream: StreamLike
+    onChunk: (b: Uint8Array) => void
+    started: boolean
+    paused: boolean
+    stopped: boolean
+  }[]
   taps: { stream: StreamLike; onFrames: (f: Float32Array) => void; stopped: boolean }[]
   media: CaptureMedia
   failSystem?: Error
@@ -86,10 +95,12 @@ function makeFakeMedia(): FakeRig {
         return rig.systemStream
       },
       makeRecorder: (stream, onChunk): RecorderLike => {
-        const rec = { stream, onChunk, started: false, stopped: false }
+        const rec = { stream, onChunk, started: false, paused: false, stopped: false }
         rig.recorders.push(rec)
         return {
           start: () => void (rec.started = true),
+          pause: () => void (rec.paused = true),
+          resume: () => void (rec.paused = false),
           stop: async () => void (rec.stopped = true)
         }
       },
@@ -373,6 +384,7 @@ describe('stopRecording', () => {
 
     expect(m?.status).toBe('ready')
     expect(getSnapshot().phase).toBe('idle')
+    expect(getLevels()).toEqual({ mic: 0, system: 0 })
     expect(rig.taps.every((t) => t.stopped)).toBe(true)
     expect(rig.recorders.every((r) => r.stopped)).toBe(true)
     expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
@@ -389,6 +401,131 @@ describe('stopRecording', () => {
   it('is a no-op when idle', async () => {
     expect(await stopRecording()).toBeNull()
     expect(invokeCalls('meetings:stop')).toHaveLength(0)
+  })
+})
+
+describe('pauseRecording / resumeRecording', () => {
+  it('pauses both recorders, flushes buffered PCM, drops frames until resume', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    try {
+      await startRecording()
+      const micTap = rig.taps.find((t) => t.stream === rig.micStream)!
+      micTap.onFrames(new Float32Array(100).fill(0.25)) // buffered, sub-threshold
+
+      vi.setSystemTime(1_030_000)
+      await pauseRecording()
+      let snap = getSnapshot()
+      expect(snap.phase).toBe('recording')
+      if (snap.phase !== 'recording') throw new Error('unreachable')
+      expect(snap.pausedAtMs).toBe(1_030_000)
+      expect(rig.recorders.every((r) => r.paused && !r.stopped)).toBe(true)
+      expect(rig.taps.every((t) => !t.stopped)).toBe(true) // held, not torn down
+      // the tail went to disk at pause time — a crash mid-pause loses nothing
+      expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(1)
+      expect(invokeCalls('meetings:pause')).toEqual([['m1']])
+
+      // frames arriving while paused are dropped, not buffered — and the
+      // level meter is flat, not frozen on the last block
+      expect(getLevels()).toEqual({ mic: 0, system: 0 })
+      micTap.onFrames(new Float32Array(16000).fill(0.5))
+      expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(1)
+      expect(getLevels().mic).toBe(0)
+
+      await pauseRecording() // idempotent
+      expect(invokeCalls('meetings:pause')).toHaveLength(1)
+
+      vi.setSystemTime(1_050_000)
+      await resumeRecording()
+      snap = getSnapshot()
+      if (snap.phase !== 'recording') throw new Error('unreachable')
+      expect(snap.pausedAtMs).toBeNull()
+      expect(snap.pausedMs).toBe(20_000)
+      expect(rig.recorders.every((r) => !r.paused)).toBe(true)
+      expect(invokeCalls('meetings:resume')).toEqual([['m1']])
+      await resumeRecording() // idempotent
+      expect(invokeCalls('meetings:resume')).toHaveLength(1)
+
+      // capture flows again, and the meter hears it
+      micTap.onFrames(new Float32Array(16000).fill(0.5))
+      expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(2)
+      expect(getLevels().mic).toBeGreaterThan(0.8)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stopping while paused finalizes normally', async () => {
+    await startRecording()
+    await pauseRecording()
+    const m = await stopRecording()
+    expect(m?.status).toBe('ready')
+    expect(getSnapshot().phase).toBe('idle')
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
+  })
+
+  it('are no-ops outside the recording phase', async () => {
+    await pauseRecording()
+    await resumeRecording()
+    expect(invokeCalls('meetings:pause')).toHaveLength(0)
+    expect(invokeCalls('meetings:resume')).toHaveLength(0)
+    expect(getSnapshot().phase).toBe('idle')
+  })
+
+  it('a refused meetings:pause abandons the recording instead of overcounting', async () => {
+    await startRecording()
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'meetings:pause') throw new Error('meeting not recording: m1')
+      if (channel === 'meetings:stop') return { ...MEETING, status: 'ready' }
+      return undefined
+    })
+    await pauseRecording()
+    const snap = getSnapshot()
+    expect(snap.phase).toBe('error')
+    if (snap.phase !== 'error') throw new Error('unreachable')
+    // the mock's meetings:stop resolves: main was still live, the row is
+    // finalized and queued — the banner must point at it, not call it lost
+    expect(snap.message).toMatch(
+      /Capture ended early — couldn't pause: meeting not recording.*was saved/
+    )
+    // the whole rig is released — a paused-looking UI over a dead row would
+    // keep the mic open with no way to close it
+    expect(rig.taps.every((t) => t.stopped)).toBe(true)
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(rig.micStream.tracks.every((t) => t.stopped)).toBe(true)
+    expect(rig.systemStream.tracks.every((t) => t.stopped)).toBe(true)
+    // best-effort stop went out: finalizes the row (and clears main's
+    // activeId) when main was in fact still live; a no-op refusal otherwise
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
+    expect(await stopRecording()).toBeNull() // nothing live to stop
+  })
+
+  it('abandoning survives a refused stop too', async () => {
+    await startRecording()
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'meetings:pause' || channel === 'meetings:stop')
+        throw new Error('meeting not recording: m1')
+      return undefined
+    })
+    await pauseRecording()
+    const snap = getSnapshot()
+    expect(snap.phase).toBe('error')
+    if (snap.phase !== 'error') throw new Error('unreachable')
+    expect(snap.message).toMatch(/^Recording lost — couldn't pause/)
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
+  })
+
+  it('a refused meetings:resume abandons the recording too', async () => {
+    await startRecording()
+    await pauseRecording()
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'meetings:resume') throw new Error('meeting not recording: m1')
+      return undefined
+    })
+    await resumeRecording()
+    expect(getSnapshot().phase).toBe('error')
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
   })
 })
 

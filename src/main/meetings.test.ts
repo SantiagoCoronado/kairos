@@ -109,6 +109,58 @@ describe('MeetingManager', () => {
     expect(() => mgr.stop(m.id)).toThrow(/not recording/)
   })
 
+  it('pause/resume bank the paused time; duration counts only captured time', () => {
+    const mgr = mkManager()
+    const m = mgr.start()
+    expect(mgr.paused).toBe(false)
+
+    clock = new Date(T0.getTime() + 30_000)
+    mgr.pause(m.id)
+    expect(mgr.paused).toBe(true)
+    mgr.pause(m.id) // idempotent — a double click must not reset the pause start
+    clock = new Date(T0.getTime() + 50_000)
+    mgr.resume(m.id)
+    expect(mgr.paused).toBe(false)
+    mgr.resume(m.id) // idempotent
+
+    clock = new Date(T0.getTime() + 70_000)
+    mgr.pause(m.id)
+    clock = new Date(T0.getTime() + 80_000)
+    mgr.resume(m.id)
+
+    clock = new Date(T0.getTime() + 90_000)
+    const stopped = mgr.stop(m.id)
+    // 90s wall-clock, 20s + 10s paused
+    expect(stopped.duration_seconds).toBe(60)
+    expect(stopped.ended_at).toBe(clock.toISOString())
+  })
+
+  it('a stop while paused closes the pause at the stop instant', () => {
+    const mgr = mkManager()
+    const m = mgr.start()
+    clock = new Date(T0.getTime() + 40_000)
+    mgr.pause(m.id)
+    clock = new Date(T0.getTime() + 100_000)
+    const stopped = mgr.stop(m.id)
+    expect(stopped.duration_seconds).toBe(40)
+    expect(mgr.paused).toBe(false)
+
+    // the next recording starts with a clean slate
+    const next = mgr.start()
+    clock = new Date(T0.getTime() + 130_000)
+    expect(mgr.stop(next.id).duration_seconds).toBe(30)
+  })
+
+  it('pause/resume reject ids that are not the live recording', () => {
+    const mgr = mkManager()
+    expect(() => mgr.pause('01ARZ3NDEKTSV4RRFFQ69G5FAV')).toThrow(/not recording/)
+    const m = mgr.start()
+    expect(() => mgr.resume('01ARZ3NDEKTSV4RRFFQ69G5FAV')).toThrow(/not recording/)
+    mgr.pause(m.id)
+    mgr.delete(m.id)
+    expect(mgr.paused).toBe(false)
+  })
+
   it('recoverOrphans finalizes crashed recordings from disk', () => {
     const mgr = mkManager()
     const m = mgr.start()

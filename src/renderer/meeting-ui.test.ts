@@ -3,6 +3,7 @@ import {
   meetingAffordance,
   fmtMeetingDuration,
   fmtElapsed,
+  recordedMs,
   recordPromptToast
 } from './src/lib/meeting-ui'
 import type { Meeting } from '../core/types'
@@ -66,5 +67,20 @@ describe('recordPromptToast', () => {
   it('floors lateness: 31s in is still "now", 90s is 1 min', () => {
     expect(recordPromptToast({ title: 'x', startAt }, at(31_000)).detail).toBe('Starting now')
     expect(recordPromptToast({ title: 'x', startAt }, at(90_000)).detail).toBe('Started 1 min ago')
+  })
+})
+
+describe('recordedMs', () => {
+  it('counts wall-clock minus banked pauses, and freezes while paused', () => {
+    const live = { startedAtMs: 1000, pausedMs: 0, pausedAtMs: null }
+    expect(recordedMs(live, 61_000)).toBe(60_000)
+    // 20s already banked from an earlier pause
+    expect(recordedMs({ ...live, pausedMs: 20_000 }, 61_000)).toBe(40_000)
+    // paused now: the clock stops at the pause instant, whatever "now" is
+    const paused = { startedAtMs: 1000, pausedMs: 20_000, pausedAtMs: 91_000 }
+    expect(recordedMs(paused, 200_000)).toBe(70_000)
+    expect(recordedMs(paused, 91_000)).toBe(70_000)
+    // never negative (clock skew)
+    expect(recordedMs({ startedAtMs: 5000, pausedMs: 0, pausedAtMs: null }, 1000)).toBe(0)
   })
 })

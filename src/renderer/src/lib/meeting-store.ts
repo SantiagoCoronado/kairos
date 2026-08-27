@@ -17,7 +17,16 @@ export type MeetingChannel = 'mic' | 'system'
 export type MeetingRecState =
   | { phase: 'idle' }
   | { phase: 'starting' }
-  | { phase: 'recording'; meetingId: string; title: string; startedAtMs: number }
+  | {
+      phase: 'recording'
+      meetingId: string
+      title: string
+      startedAtMs: number
+      /** paused time banked by earlier pause/resume pairs */
+      pausedMs: number
+      /** wall-clock start of the current pause, null while capturing */
+      pausedAtMs: number | null
+    }
   | { phase: 'stopping'; meetingId: string }
   | { phase: 'error'; message: string }
 
@@ -75,6 +84,10 @@ export interface StreamLike {
 
 export interface RecorderLike {
   start(timesliceMs: number): void
+  /** hold the archive without closing it — MediaRecorder keeps its
+   *  timeline contiguous across a pause, so playback skips the gap */
+  pause(): void
+  resume(): void
   /** resolves after the final chunk was delivered */
   stop(): Promise<void>
 }
@@ -137,6 +150,9 @@ interface ChannelRig {
   stream: StreamLike
   recorder: RecorderLike
   tap: TapLike
+  /** frames arriving while paused are dropped so the WAV (and the
+   *  transcript cut from it) stays aligned with the paused webm */
+  paused: boolean
   pcmPending: Int16Array[]
   pcmPendingSamples: number
 }
@@ -233,8 +249,16 @@ async function openRig(
     const recorder = media.makeRecorder(stream, (bytes) =>
       sendChunk(invoke, meetingId, channel, 'webm', bytes)
     )
-    const rig: ChannelRig = { stream, recorder, tap: { stop: () => {} }, pcmPending: [], pcmPendingSamples: 0 }
+    const rig: ChannelRig = {
+      stream,
+      recorder,
+      tap: { stop: () => {} },
+      paused: false,
+      pcmPending: [],
+      pcmPendingSamples: 0
+    }
     rig.tap = await media.makeTap(stream, (frames) => {
+      if (rig.paused) return
       rig.pcmPending.push(floatTo16BitPcm(frames))
       rig.pcmPendingSamples += frames.length
       if (rig.pcmPendingSamples >= PCM_FLUSH_SAMPLES) flushPcm(invoke, meetingId, channel, rig)
@@ -341,9 +365,43 @@ export async function startRecording(opts: {
     phase: 'recording',
     meetingId: meeting.id,
     title: meeting.title,
-    startedAtMs: Date.now()
+    startedAtMs: Date.now(),
+    pausedMs: 0,
+    pausedAtMs: null
   })
   return meeting
+}
+
+/** hold both channels: recorders pause, tap frames drop, and whatever PCM
+ *  is buffered lands on disk now (a crash mid-pause must not lose it).
+ *  Main banks the paused time so the row's duration matches the archives. */
+export function pauseRecording(): void {
+  if (state.phase !== 'recording' || state.pausedAtMs !== null) return
+  const { invoke } = getDeps()
+  const { meetingId } = state
+  for (const [channel, rig] of Object.entries(rigs) as [MeetingChannel, ChannelRig][]) {
+    rig.paused = true
+    rig.recorder.pause()
+    flushPcm(invoke, meetingId, channel, rig)
+  }
+  track(invoke('meetings:pause', meetingId))
+  setState({ ...state, pausedAtMs: Date.now() })
+}
+
+export function resumeRecording(): void {
+  if (state.phase !== 'recording' || state.pausedAtMs === null) return
+  const { invoke } = getDeps()
+  for (const rig of Object.values(rigs)) {
+    if (!rig) continue
+    rig.paused = false
+    rig.recorder.resume()
+  }
+  track(invoke('meetings:resume', state.meetingId))
+  setState({
+    ...state,
+    pausedMs: state.pausedMs + (Date.now() - state.pausedAtMs),
+    pausedAtMs: null
+  })
 }
 
 export async function stopRecording(): Promise<Meeting | null> {
@@ -414,6 +472,12 @@ const realMedia: CaptureMedia = {
     }
     return {
       start: (timesliceMs) => rec.start(timesliceMs),
+      pause: () => {
+        if (rec.state === 'recording') rec.pause()
+      },
+      resume: () => {
+        if (rec.state === 'paused') rec.resume()
+      },
       stop: () =>
         new Promise<void>((resolve) => {
           // ondataavailable for the tail fires before onstop

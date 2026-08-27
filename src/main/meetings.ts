@@ -81,6 +81,10 @@ function assertKind(kind: string): asserts kind is ChunkKind {
 
 export class MeetingManager {
   private activeId: string | null = null
+  /** wall-clock start of the current pause, null while capturing */
+  private pausedAt: Date | null = null
+  /** paused time already banked by earlier pause/resume pairs */
+  private pausedMs = 0
 
   constructor(
     private readonly db: DbDriver,
@@ -128,8 +132,29 @@ export class MeetingManager {
       this.fs.write(this.pathOf(m.id, channel, 'wav'), wavHeader(0, PCM_SAMPLE_RATE))
     }
     this.activeId = m.id
+    this.pausedAt = null
+    this.pausedMs = 0
     this.onChange()
     return m
+  }
+
+  /** the renderer paused its recorders and drops tap frames meanwhile, so
+   *  the archives skip this stretch — the row's duration must skip it too */
+  pause(id: string): void {
+    if (id !== this.activeId) throw new Error(`meeting not recording: ${id}`)
+    if (this.pausedAt) return
+    this.pausedAt = this.now()
+  }
+
+  resume(id: string): void {
+    if (id !== this.activeId) throw new Error(`meeting not recording: ${id}`)
+    if (!this.pausedAt) return
+    this.pausedMs += this.now().getTime() - this.pausedAt.getTime()
+    this.pausedAt = null
+  }
+
+  get paused(): boolean {
+    return this.activeId !== null && this.pausedAt !== null
   }
 
   appendChunk(id: string, channel: MeetingChannel, kind: ChunkKind, data: Uint8Array): void {
@@ -145,7 +170,11 @@ export class MeetingManager {
     const m = meetings.getMeeting(this.db, id)!
     const { micPath, systemPath } = this.finalizeFiles(id)
     const endedAt = this.now()
-    const durationMs = endedAt.getTime() - new Date(m.started_at).getTime()
+    // a stop while paused closes the open pause at the stop instant
+    if (this.pausedAt) this.pausedMs += endedAt.getTime() - this.pausedAt.getTime()
+    this.pausedAt = null
+    const durationMs = endedAt.getTime() - new Date(m.started_at).getTime() - this.pausedMs
+    this.pausedMs = 0
     const updated = meetings.updateMeeting(
       this.db,
       id,
@@ -164,7 +193,11 @@ export class MeetingManager {
 
   delete(id: string): void {
     assertMeetingId(id)
-    if (id === this.activeId) this.activeId = null
+    if (id === this.activeId) {
+      this.activeId = null
+      this.pausedAt = null
+      this.pausedMs = 0
+    }
     this.fs.rmDir(this.dirOf(id))
     meetings.deleteMeeting(this.db, id)
     this.onChange()

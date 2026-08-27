@@ -8,6 +8,8 @@ import {
   configureMeetingStore,
   startRecording,
   stopRecording,
+  pauseRecording,
+  resumeRecording,
   dismissError,
   recoverActiveRecording,
   getSnapshot,
@@ -66,7 +68,13 @@ function makeStream(kinds: string[]): StreamLike & { tracks: FakeTrack[] } {
 interface FakeRig {
   micStream: ReturnType<typeof makeStream>
   systemStream: ReturnType<typeof makeStream>
-  recorders: { stream: StreamLike; onChunk: (b: Uint8Array) => void; started: boolean; stopped: boolean }[]
+  recorders: {
+    stream: StreamLike
+    onChunk: (b: Uint8Array) => void
+    started: boolean
+    paused: boolean
+    stopped: boolean
+  }[]
   taps: { stream: StreamLike; onFrames: (f: Float32Array) => void; stopped: boolean }[]
   media: CaptureMedia
   failSystem?: Error
@@ -86,10 +94,12 @@ function makeFakeMedia(): FakeRig {
         return rig.systemStream
       },
       makeRecorder: (stream, onChunk): RecorderLike => {
-        const rec = { stream, onChunk, started: false, stopped: false }
+        const rec = { stream, onChunk, started: false, paused: false, stopped: false }
         rig.recorders.push(rec)
         return {
           start: () => void (rec.started = true),
+          pause: () => void (rec.paused = true),
+          resume: () => void (rec.paused = false),
           stop: async () => void (rec.stopped = true)
         }
       },
@@ -389,6 +399,71 @@ describe('stopRecording', () => {
   it('is a no-op when idle', async () => {
     expect(await stopRecording()).toBeNull()
     expect(invokeCalls('meetings:stop')).toHaveLength(0)
+  })
+})
+
+describe('pauseRecording / resumeRecording', () => {
+  it('pauses both recorders, flushes buffered PCM, drops frames until resume', async () => {
+    vi.useFakeTimers({ now: 1_000_000 })
+    try {
+      await startRecording()
+      const micTap = rig.taps.find((t) => t.stream === rig.micStream)!
+      micTap.onFrames(new Float32Array(100).fill(0.25)) // buffered, sub-threshold
+
+      vi.setSystemTime(1_030_000)
+      pauseRecording()
+      let snap = getSnapshot()
+      expect(snap.phase).toBe('recording')
+      if (snap.phase !== 'recording') throw new Error('unreachable')
+      expect(snap.pausedAtMs).toBe(1_030_000)
+      expect(rig.recorders.every((r) => r.paused && !r.stopped)).toBe(true)
+      expect(rig.taps.every((t) => !t.stopped)).toBe(true) // held, not torn down
+      // the tail went to disk at pause time — a crash mid-pause loses nothing
+      expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(1)
+      expect(invokeCalls('meetings:pause')).toEqual([['m1']])
+
+      // frames arriving while paused are dropped, not buffered
+      micTap.onFrames(new Float32Array(16000).fill(0.5))
+      expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(1)
+
+      pauseRecording() // idempotent
+      expect(invokeCalls('meetings:pause')).toHaveLength(1)
+
+      vi.setSystemTime(1_050_000)
+      resumeRecording()
+      snap = getSnapshot()
+      if (snap.phase !== 'recording') throw new Error('unreachable')
+      expect(snap.pausedAtMs).toBeNull()
+      expect(snap.pausedMs).toBe(20_000)
+      expect(rig.recorders.every((r) => !r.paused)).toBe(true)
+      expect(invokeCalls('meetings:resume')).toEqual([['m1']])
+      resumeRecording() // idempotent
+      expect(invokeCalls('meetings:resume')).toHaveLength(1)
+
+      // capture flows again
+      micTap.onFrames(new Float32Array(16000).fill(0.5))
+      expect(invokeCalls('meetings:chunk').filter((c) => c[2] === 'pcm')).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stopping while paused finalizes normally', async () => {
+    await startRecording()
+    pauseRecording()
+    const m = await stopRecording()
+    expect(m?.status).toBe('ready')
+    expect(getSnapshot().phase).toBe('idle')
+    expect(rig.recorders.every((r) => r.stopped)).toBe(true)
+    expect(invokeCalls('meetings:stop')).toEqual([['m1']])
+  })
+
+  it('are no-ops outside the recording phase', async () => {
+    pauseRecording()
+    resumeRecording()
+    expect(invokeCalls('meetings:pause')).toHaveLength(0)
+    expect(invokeCalls('meetings:resume')).toHaveLength(0)
+    expect(getSnapshot().phase).toBe('idle')
   })
 })
 

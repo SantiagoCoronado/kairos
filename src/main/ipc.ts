@@ -622,9 +622,16 @@ export function registerIpc(): void {
     }),
     { useSystemPicker: false }
   )
-  const meetMgr = new MeetingManager(db, join(DATA_DIR, 'recordings'), () =>
+  // the Dock is the one place that stays visible with Kairos in the
+  // background — a live mic must never be a surprise on Cmd+Tab
+  const showRecordingBadge = (): void => {
+    if (process.platform !== 'darwin') return
+    app.dock?.setBadge(meetMgr.activeMeetingId ? (meetMgr.paused ? 'PAUSED' : 'REC') : '')
+  }
+  const meetMgr = new MeetingManager(db, join(DATA_DIR, 'recordings'), () => {
     broadcast('db:changed', { entity: 'meetings' })
-  )
+    showRecordingBadge()
+  })
   meetingManager = meetMgr
   meetMgr.recoverOrphans()
 
@@ -706,6 +713,14 @@ export function registerIpc(): void {
     // finalized on disk — hand straight to the transcription queue
     processor.enqueue(id)
     return meetingsRepo.getMeeting(db, id)!
+  })
+  handle('meetings:pause', (id) => {
+    meetMgr.pause(id)
+    showRecordingBadge()
+  })
+  handle('meetings:resume', (id) => {
+    meetMgr.resume(id)
+    showRecordingBadge()
   })
   handle('meetings:chunk', (id, channel, kind, dataBase64) =>
     meetMgr.appendChunk(id, channel, kind, Buffer.from(dataBase64, 'base64'))

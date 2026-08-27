@@ -5,6 +5,8 @@ import { api, useInvoke } from '../../lib/api'
 import { SummaryModal } from './SummaryModal'
 import { TranscriptModal } from './TranscriptModal'
 import {
+  pauseRecording,
+  resumeRecording,
   startRecording,
   stopRecording,
   useMeetingRecording
@@ -40,15 +42,41 @@ export function MeetingSection({
         <span className="text-[11px] uppercase tracking-wide text-faint">Recording</span>
         <div className="flex-1" />
         {recordingHere ? (
-          <Button
-            variant="ghost"
-            className="!py-1 text-[11.5px] text-danger"
-            onClick={() => void stopRecording()}
-          >
-            <span className="inline-flex items-center gap-1">
-              <Square size={11} fill="currentColor" /> Stop
-            </span>
-          </Button>
+          <>
+            {rec.pausedAtMs === null ? (
+              <Button
+                variant="ghost"
+                className="!py-1 text-[11.5px]"
+                title="Pause recording"
+                onClick={pauseRecording}
+              >
+                <span className="inline-flex items-center gap-1">
+                  <Pause size={11} fill="currentColor" /> Pause
+                </span>
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                className="!py-1 text-[11.5px] text-accent"
+                title="Resume recording"
+                onClick={resumeRecording}
+              >
+                <span className="inline-flex items-center gap-1">
+                  <Play size={11} fill="currentColor" /> Resume
+                </span>
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              className="!py-1 text-[11.5px] text-danger"
+              title="Stop and save the recording"
+              onClick={() => void stopRecording()}
+            >
+              <span className="inline-flex items-center gap-1">
+                <Square size={11} fill="currentColor" /> Stop
+              </span>
+            </Button>
+          </>
         ) : (
           <Button
             variant="ghost"

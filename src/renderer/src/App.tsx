@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sidebar, SidebarToggle, VIEW_ORDER, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
+import { RecordingBar } from './components/meeting/RecordingBar'
 import { IS_REMOTE, useIsMobile, useKeyboardInset, useTerminalAvailable } from './lib/mobile'
 import { pushUndo } from './lib/undo'
 import { dismissToast, toast } from './lib/toast'
@@ -77,7 +78,7 @@ export default function App(): React.JSX.Element {
                 promptToasts.delete(ev.eventId)
                 void startRecording({ calendarEventId: ev.eventId, title: ev.title }).then(
                   (started) => {
-                    // null = already recording (chip shows it) or failure —
+                    // null = already recording (the bar shows it) or failure —
                     // only the failure needs surfacing here
                     const snap = meetingSnapshot()
                     if (!started && snap.phase === 'error')
@@ -264,6 +265,9 @@ export default function App(): React.JSX.Element {
         ) : (
           <div className="drag-region absolute top-0 inset-x-0 h-6 z-40" />
         )}
+        {/* live-capture banner: in the column so it can't hide under the
+            drag strip, in every view so a hot mic is never a surprise */}
+        <RecordingBar />
         <div className="flex-1 min-h-0 overflow-y-auto">
           {commonViews}
           {view === 'pending' && (

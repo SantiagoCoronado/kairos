@@ -466,9 +466,18 @@ const realMedia: CaptureMedia = {
       ? 'audio/webm;codecs=opus'
       : undefined
     const rec = new MediaRecorder(stream as MediaStream, mimeType ? { mimeType } : undefined)
+    // blob → bytes is async: the tail chunk's ondataavailable fires before
+    // onstop, but its arrayBuffer resolves after — stop() must wait for it
+    // or the last timeslice lands after meetings:stop and is refused
+    const reads: Promise<void>[] = []
     rec.ondataavailable = (e): void => {
-      if (e.data.size > 0)
-        void e.data.arrayBuffer().then((buf) => onChunk(new Uint8Array(buf)))
+      if (e.data.size === 0) return
+      reads.push(
+        e.data
+          .arrayBuffer()
+          .then((buf) => onChunk(new Uint8Array(buf)))
+          .catch(() => {})
+      )
     }
     return {
       start: (timesliceMs) => rec.start(timesliceMs),
@@ -484,7 +493,7 @@ const realMedia: CaptureMedia = {
           rec.onstop = (): void => resolve()
           if (rec.state === 'inactive') resolve()
           else rec.stop()
-        })
+        }).then(() => Promise.all(reads).then(() => {}))
     }
   },
 

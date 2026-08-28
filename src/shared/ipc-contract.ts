@@ -257,6 +257,13 @@ export interface IpcApi {
   ) => void
   /** removes the recording directory and the row (transcript cascades) */
   'meetings:delete': (id: string) => void
+  /** re-queue an error'd meeting for transcription; throws when its WAVs
+   *  are already gone (transcribed, or pruned by retention) */
+  'meetings:retranscribe': (id: string) => void
+  /** title edit — ad-hoc recordings start untitled */
+  'meetings:rename': (id: string, title: string) => Meeting
+  /** open the recording's folder in Finder (local only) */
+  'meetings:reveal': (id: string) => void
   /** playback bytes as a data URL (VoiceNoteChip pattern) — webm archive */
   'meetings:audioData': (
     id: string,

@@ -3,6 +3,7 @@ import {
   buildServerArgs,
   parseWhisperResponse,
   WhisperServer,
+  WhisperCrashError,
   DEFAULT_WHISPER_PORT,
   type WhisperChildLike,
   type WhisperConfig
@@ -84,7 +85,7 @@ interface FakeChild extends WhisperChildLike {
   fireError: (err: Error) => void
 }
 
-function makeRig(opts: { failFetches?: number } = {}): {
+function makeRig(opts: { failFetches?: number; crashPosts?: number; deadPosts?: number } = {}): {
   server: WhisperServer
   children: FakeChild[]
   fetchCalls: { url: string; method?: string }[]
@@ -92,6 +93,10 @@ function makeRig(opts: { failFetches?: number } = {}): {
   const children: FakeChild[] = []
   const fetchCalls: { url: string; method?: string }[] = []
   let failuresLeft = opts.failFetches ?? 0
+  // POSTs that kill the sidecar (exit fires, then the socket error lands)
+  let crashesLeft = opts.crashPosts ?? 0
+  // POSTs that just fail — the sidecar stays up (network-shaped error)
+  let deadLeft = opts.deadPosts ?? 0
 
   const spawn = (_file: string, _args: string[]): WhisperChildLike => {
     const cbs = new Map<string, (err?: Error) => void>()
@@ -111,6 +116,15 @@ function makeRig(opts: { failFetches?: number } = {}): {
     if (failuresLeft > 0) {
       failuresLeft--
       throw new Error('ECONNREFUSED')
+    }
+    if (init?.method === 'POST' && crashesLeft > 0) {
+      crashesLeft--
+      children[children.length - 1].fireExit()
+      throw new TypeError('fetch failed')
+    }
+    if (init?.method === 'POST' && deadLeft > 0) {
+      deadLeft--
+      throw new TypeError('fetch failed')
     }
     if (init?.method === 'POST')
       return new Response(
@@ -207,5 +221,26 @@ describe('WhisperServer', () => {
     await expect(impatient.transcribe('/rec/a.wav')).rejects.toThrow(/did not become ready/)
     expect(children.at(-1)!.killed).toBe(true)
     void server
+  })
+})
+
+describe('WhisperServer crash during inference', () => {
+  it('surfaces a sidecar death mid-request as WhisperCrashError and respawns for the next call', async () => {
+    const { server, children } = makeRig({ crashPosts: 1 })
+    const err = await server.transcribe('/rec/m/system.wav').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(WhisperCrashError)
+    expect((err as Error).message).toMatch(/system\.wav/)
+    expect(server.running).toBe(false)
+    const res = await server.transcribe('/rec/m/mic.wav')
+    expect(res.text).toBe('hi')
+    expect(children).toHaveLength(2)
+  })
+
+  it('a failed POST with the sidecar still alive is an ordinary error, not a crash', async () => {
+    const { server } = makeRig({ deadPosts: 1 })
+    const err = await server.transcribe('/rec/m/mic.wav').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(WhisperCrashError)
+    expect(server.running).toBe(true)
   })
 })

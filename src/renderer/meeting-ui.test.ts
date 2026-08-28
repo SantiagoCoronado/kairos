@@ -4,7 +4,9 @@ import {
   fmtMeetingDuration,
   fmtElapsed,
   recordedMs,
-  recordPromptToast
+  recordPromptToast,
+  meetingDayLabel,
+  groupMeetingsByDay
 } from './src/lib/meeting-ui'
 import type { Meeting } from '../core/types'
 
@@ -82,5 +84,31 @@ describe('recordedMs', () => {
     expect(recordedMs(paused, 91_000)).toBe(70_000)
     // never negative (clock skew)
     expect(recordedMs({ startedAtMs: 5000, pausedMs: 0, pausedAtMs: null }, 1000)).toBe(0)
+  })
+})
+
+describe('meetingDayLabel / groupMeetingsByDay', () => {
+  const now = new Date(2026, 7, 28, 15, 0) // local Aug 28 2026, 3pm
+
+  it('labels today/yesterday relatively and older days by weekday + date', () => {
+    expect(meetingDayLabel(new Date(2026, 7, 28, 0, 5).toISOString(), now)).toBe('Today')
+    expect(meetingDayLabel(new Date(2026, 7, 27, 23, 59).toISOString(), now)).toBe('Yesterday')
+    const older = meetingDayLabel(new Date(2026, 7, 3, 12).toISOString(), now)
+    expect(older).toMatch(/Aug/)
+    expect(older).toMatch(/3/)
+    expect(older).not.toMatch(/2026/)
+    expect(meetingDayLabel(new Date(2025, 11, 31, 12).toISOString(), now)).toMatch(/2025/)
+  })
+
+  it('groups a newest-first list into newest-first day sections, order kept within a day', () => {
+    const at = (d: Date): { started_at: string } => ({ started_at: d.toISOString() })
+    const a = at(new Date(2026, 7, 28, 14))
+    const b = at(new Date(2026, 7, 28, 9))
+    const c = at(new Date(2026, 7, 26, 10))
+    const groups = groupMeetingsByDay([a, b, c], now)
+    expect(groups.map((g) => g.label)).toEqual(['Today', expect.stringMatching(/Aug/)])
+    expect(groups[0].meetings).toEqual([a, b])
+    expect(groups[1].meetings).toEqual([c])
+    expect(groupMeetingsByDay([], now)).toEqual([])
   })
 })

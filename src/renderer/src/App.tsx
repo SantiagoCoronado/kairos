@@ -17,6 +17,7 @@ import { NotesView } from './views/Notes'
 import { CalendarView } from './views/Calendar'
 import { AutomationsView } from './views/Automations'
 import { ObjectivesView } from './views/Objectives'
+import { MeetingsView } from './views/Meetings'
 import { ChatView } from './views/Chat'
 import { TerminalView } from './views/Terminal'
 import { api } from './lib/api'
@@ -281,6 +282,7 @@ export default function App(): React.JSX.Element {
           )}
           {view === 'tasks' && <TasksView />}
           {view === 'objectives' && <ObjectivesView />}
+          {view === 'meetings' && <MeetingsView />}
           {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}
           {terminalOpened && (
             <div className={view === 'terminal' ? 'h-full overflow-hidden' : 'hidden'}>

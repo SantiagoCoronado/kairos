@@ -92,6 +92,23 @@ export function parseWhisperResponse(body: unknown): WhisperResult {
   }
 }
 
+/** the sidecar died while handling an inference request. whisper-server
+ *  (v1.8.3 and v1.9.3 alike) aborts when Silero VAD finds no speech in the
+ *  clip — language detection then runs on 0 ms of audio — so a silent
+ *  channel is the common cause, not a broken model. Callers treat it as
+ *  "no speech" rather than a failed meeting. */
+export class WhisperCrashError extends Error {
+  constructor(wavPath: string) {
+    super(`whisper-server crashed while transcribing ${wavPath} (usually: no speech in the clip)`)
+    this.name = 'WhisperCrashError'
+  }
+}
+
+/** how long after a failed POST to wait for the child's 'exit' before
+ *  deciding it wasn't a crash — the socket error normally lands a few ms
+ *  before the exit event */
+const CRASH_SETTLE_MS = 500
+
 interface Deps {
   spawn: WhisperSpawn
   fetchFn: typeof fetch
@@ -125,16 +142,35 @@ export class WhisperServer {
       form.append('file', new Blob([bytes as BlobPart], { type: 'audio/wav' }), 'audio.wav')
       form.append('response_format', 'verbose_json')
       form.append('temperature', '0')
-      const res = await this.deps.fetchFn(`${this.baseUrl}/inference`, {
-        method: 'POST',
-        body: form
-      })
+      const child = this.child
+      let res: Response
+      try {
+        res = await this.deps.fetchFn(`${this.baseUrl}/inference`, {
+          method: 'POST',
+          body: form
+        })
+      } catch (err) {
+        if (await this.exitedDuringRequest(child)) throw new WhisperCrashError(wavPath)
+        throw err
+      }
       if (!res.ok) throw new Error(`whisper-server ${res.status}: ${await res.text()}`)
       return parseWhisperResponse(await res.json())
     } finally {
       this.inFlight--
       if (this.inFlight === 0) this.scheduleIdleShutdown()
     }
+  }
+
+  /** true once the child that served the request is gone — either its
+   *  'exit' already fired (this.child cleared) or it does within the
+   *  settle window */
+  private async exitedDuringRequest(child: WhisperChildLike | null): Promise<boolean> {
+    const deadline = Date.now() + CRASH_SETTLE_MS
+    while (this.child === child && child !== null) {
+      if (Date.now() > deadline) return false
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    return true
   }
 
   stop(): void {

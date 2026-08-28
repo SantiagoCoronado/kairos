@@ -7,11 +7,12 @@
  *  the user explicitly opts in (Settings → remote access → allow terminal).
  *  meetings mutations stay local-only: the Mac owns the live capture rig,
  *  and a remote client must never start/stop/pause/feed/delete a recording
- *  it can't see — nor trigger paid model calls (summarize). Reads
- *  (list/get/active/audioData) and the scoped undo remain available. */
+ *  it can't see — nor trigger paid model calls (summarize), re-run the
+ *  transcription sidecar, or pop Finder on the Mac (reveal). Reads
+ *  (list/get/active/audioData), rename and the scoped undo remain available. */
 const ALWAYS_DENIED = [
   /^capture:(?!submit$|smart$)/,
-  /^meetings:(start|stop|pause|resume|chunk|delete|summarize)$/
+  /^meetings:(start|stop|pause|resume|chunk|delete|summarize|retranscribe|reveal)$/
 ]
 const TERMINAL = /^terminal:/
 

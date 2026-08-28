@@ -13,28 +13,32 @@
 # which survives rebuilds, so grants stick. scripts/ship.sh picks the
 # identity up automatically; without it, ship falls back to ad-hoc.
 #
-# Idempotent: re-running with the certificate already in a keychain repairs
-# trust instead of minting a second cert — two distinct certs sharing a CN
-# make `codesign --sign "Kairos Dev"` refuse to sign at all (ambiguous
-# identity), and they'd carry different leaf hashes anyway. Trusting the
-# cert for code signing pops one macOS password dialog (user trust
-# settings), so run this from an interactive shell. The first
-# `npm run ship` afterwards may ask once more ("codesign wants to sign
-# using key…") — click Always Allow.
+# Idempotent on every path: a valid identity is left alone, an untrusted one
+# (cert + key present, e.g. the password dialog was dismissed) only gets the
+# trust step redone, and a keyless leftover certificate stops with
+# instructions — never a second mint, because two distinct certs sharing a
+# CN make `codesign --sign "Kairos Dev"` refuse the ambiguous identity (and
+# they'd carry different leaf hashes anyway). Trusting the cert for code
+# signing pops one macOS password dialog (user trust settings), so run this
+# from an interactive shell. The first `npm run ship` afterwards may ask
+# once more ("codesign wants to sign using key…") — click Always Allow.
 set -euo pipefail
 
 NAME="${KAIROS_SIGN_IDENTITY:-Kairos Dev}"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
-# same search list ship.sh uses, so the two scripts agree on "present"
-has_identity() {
+# Same search list ship.sh uses, so the two scripts agree on "present".
+# An identity is cert + private key; -v additionally requires it to be
+# trusted for code signing. The grep is anchored by the quotes around the
+# name in find-identity's output, so "Kairos Dev Old" can't match.
+has_valid_identity() {
   security find-identity -v -p codesigning | grep -q "\"$NAME\""
 }
-has_certificate() {
-  security find-certificate -c "$NAME" >/dev/null 2>&1
+has_any_identity() {
+  security find-identity -p codesigning | grep -q "\"$NAME\""
 }
 
-if has_identity; then
+if has_valid_identity; then
   echo "identity \"$NAME\" already valid — nothing to do"
   exit 0
 fi
@@ -42,11 +46,19 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-if has_certificate; then
-  # imported earlier but not trusted for code signing (e.g. the password
-  # dialog was dismissed) — export the existing cert and only redo trust
-  echo "certificate \"$NAME\" already in a keychain but not a valid signing identity — repairing trust"
+if has_any_identity; then
+  # cert + key are in a keychain but not trusted for code signing — export
+  # the existing cert and only redo trust
+  echo "identity \"$NAME\" exists but is not trusted for code signing — repairing trust"
   security find-certificate -c "$NAME" -p > "$work/cert.pem"
+elif security find-certificate -c "$NAME" >/dev/null 2>&1; then
+  # a certificate matches the name but no private key goes with it: trust
+  # can't make that signable, and minting alongside it would leave two
+  # same-named certs for codesign to choke on
+  echo "a certificate matching \"$NAME\" exists without a private key (deleted key, half-failed" \
+       "import, or a bare .cer in another keychain) — delete it in Keychain Access" \
+       "(or: security delete-certificate -c \"$NAME\") and re-run this script" >&2
+  exit 1
 else
   cat > "$work/ext.cnf" <<CNF
 [req]
@@ -76,12 +88,12 @@ fi
 echo "trusting \"$NAME\" for code signing — macOS will ask for your login password once"
 security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$work/cert.pem"
 
-if has_identity; then
+if has_valid_identity; then
   echo "identity \"$NAME\" ready — the next \`npm run ship\` signs with it"
   echo "(first Record after that ship re-prompts once; the grant then survives rebuilds)"
 else
-  echo "identity \"$NAME\" imported but still not valid for code signing — re-run this script" \
-       "(it only redoes the trust step), or open Keychain Access → login → My Certificates" \
-       "and set Code Signing to Always Trust" >&2
+  echo "identity \"$NAME\" is in the keychain but still not trusted for code signing —" \
+       "re-run this script to retry the trust dialog, or open Keychain Access → login →" \
+       "My Certificates → \"$NAME\" → Trust → Code Signing: Always Trust" >&2
   exit 1
 fi

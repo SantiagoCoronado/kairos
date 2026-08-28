@@ -43,10 +43,15 @@ export const SYSTEM_STREAM_TIMEOUT_MS = 15_000
  *  bound is generous — but a wedged input device must not park the store
  *  in 'starting' for the rest of the session */
 export const MIC_STREAM_TIMEOUT_MS = 60_000
-/** macOS gates SCK loopback on the Screen Recording grant, which every
- *  ad-hoc rebuild resets — the one thing the user can actually fix */
+/** macOS gates SCK loopback on the Screen Recording grant, which is pinned
+ *  to the app's code signature — every ad-hoc rebuild invalidates it while
+ *  System Settings keeps showing the stale row as ON (toggling never
+ *  rewrites it). The one thing the user can actually fix, so name both the
+ *  grant and the stale-row escape hatch. Must not contain the " — "
+ *  separator splitCaptureError keys on. */
 export const SYSTEM_AUDIO_HINT =
-  'allow Kairos under System Settings → Privacy & Security → Screen & System Audio Recording, then relaunch'
+  'allow Kairos under System Settings → Privacy & Security → Screen & System Audio Recording, then relaunch.' +
+  ' Already on? The grant is stale: run `tccutil reset ScreenCapture com.santiago.kairos`, relaunch, and allow again'
 export const MIC_HINT =
   'answer the microphone prompt, or allow Kairos under System Settings → Privacy & Security → Microphone'
 

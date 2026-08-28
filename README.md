@@ -61,9 +61,15 @@ npm run typecheck
 npm run dist          # builds calendar helper + app + .dmg into dist/
 ```
 
-The app is ad-hoc signed (personal use). First launch of a packaged build asks
-for Calendar access; TCC may re-prompt after rebuilds because the ad-hoc
-signature changes.
+`npm run ship` swaps the build into /Applications and relaunches. Run
+`scripts/make-signing-cert.sh` once first: it mints a self-signed "Kairos Dev"
+identity (one password dialog) that ship signs with, so macOS TCC grants
+(Screen & System Audio Recording, Microphone, Calendar) survive rebuilds.
+Without it the build is ad-hoc signed and every ship mints a new cdhash —
+the Screen Recording toggle then shows ON but the OS denies capture and
+re-prompts. ship resets that stale row whenever the signature changes, so
+the first Record after such a ship re-prompts once (Open System Settings →
+toggle Kairos → relaunch).
 
 ## Architecture notes
 

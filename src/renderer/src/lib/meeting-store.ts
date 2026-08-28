@@ -48,10 +48,13 @@ export const MIC_STREAM_TIMEOUT_MS = 60_000
  *  System Settings keeps showing the stale row as ON (toggling never
  *  rewrites it). The one thing the user can actually fix, so name both the
  *  grant and the stale-row escape hatch. Must not contain the " — "
- *  separator splitCaptureError keys on. */
+ *  separator splitCaptureError keys on. The bundle id is `appId` in
+ *  electron-builder.yml (ship.sh reads it from the built plist); keep them
+ *  in step. Recovery order matches ship.sh's message: reset → Record →
+ *  allow → relaunch. */
 export const SYSTEM_AUDIO_HINT =
   'allow Kairos under System Settings → Privacy & Security → Screen & System Audio Recording, then relaunch.' +
-  ' Already on? The grant is stale: run `tccutil reset ScreenCapture com.santiago.kairos`, relaunch, and allow again'
+  ' Already on? The grant is stale: run `tccutil reset ScreenCapture com.santiago.kairos`, hit Record again, allow, then relaunch'
 export const MIC_HINT =
   'answer the microphone prompt, or allow Kairos under System Settings → Privacy & Security → Microphone'
 

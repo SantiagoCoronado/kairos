@@ -10,7 +10,11 @@ import { Button, EmptyState } from '../components/ui'
  *  place an ad-hoc recording (Record with no event) is reachable after it
  *  scrolls off Today's 24-hour "recent meetings" — EventEditor only lists
  *  the recordings of its own event. */
-export function MeetingsView(): React.JSX.Element {
+export function MeetingsView({
+  onOpenCalendar
+}: {
+  onOpenCalendar?: (day: Date) => void
+}): React.JSX.Element {
   const { data } = useInvoke('meetings:list', [{}], ['meetings'])
   const rec = useMeetingRecording()
   const all = data ?? []
@@ -79,7 +83,16 @@ export function MeetingsView(): React.JSX.Element {
             {g.label}
           </div>
           {g.meetings.map((m) => (
-            <MeetingRow key={m.id} meeting={m} showTitle />
+            <MeetingRow
+              key={m.id}
+              meeting={m}
+              showTitle
+              onOpenEvent={
+                m.calendar_event_id && onOpenCalendar
+                  ? () => onOpenCalendar(new Date(m.started_at))
+                  : undefined
+              }
+            />
           ))}
         </section>
       ))}

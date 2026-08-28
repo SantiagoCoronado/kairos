@@ -110,10 +110,13 @@ export function MeetingSection({
  *  so there the title is editable in place. */
 export function MeetingRow({
   meeting: m,
-  showTitle = false
+  showTitle = false,
+  onOpenEvent
 }: {
   meeting: Meeting
   showTitle?: boolean
+  /** event-linked rows: jump to the event's day (all-recordings list) */
+  onOpenEvent?: () => void
 }): React.JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -151,9 +154,19 @@ export function MeetingRow({
       </span>
       {showTitle &&
         (m.calendar_event_id ? (
-          <span className="min-w-0 truncate text-[13px] text-text" title={m.title}>
-            {m.title || 'Untitled meeting'}
-          </span>
+          onOpenEvent ? (
+            <button
+              className="min-w-0 truncate text-left text-[13px] text-text hover:text-accent"
+              title="Open the linked event's day in Calendar"
+              onClick={onOpenEvent}
+            >
+              {m.title || 'Untitled meeting'}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate text-[13px] text-text" title={m.title}>
+              {m.title || 'Untitled meeting'}
+            </span>
+          )
         ) : (
           <InlineText
             value={m.title || 'Untitled meeting'}
@@ -177,6 +190,11 @@ export function MeetingRow({
         </span>
       )}
       {m.status === 'processing' && <Chip tone="muted">transcribing…</Chip>}
+      {m.status === 'ready' && m.error && (
+        <span title={m.error}>
+          <Chip tone="muted">partial</Chip>
+        </span>
+      )}
       {/* ml-auto (not a flex-1 spacer) so the actions track the right edge
           even when the row wraps to a second line */}
       <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
@@ -210,7 +228,9 @@ export function MeetingRow({
         {m.status === 'ready' && !m.audio_deleted_at && (m.mic_path || m.system_path) && (
           <PlayButton playback={playback} />
         )}
-        {m.status === 'error' && !m.audio_deleted_at && (
+        {window.api &&
+          !m.audio_deleted_at &&
+          (m.status === 'error' || (m.status === 'ready' && m.error)) && (
           <button
             className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
             title={`Retry transcription${m.error ? ` — last error: ${m.error}` : ''}`}

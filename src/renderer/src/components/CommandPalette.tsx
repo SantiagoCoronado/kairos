@@ -172,7 +172,7 @@ export function CommandPalette({
               <Item onSelect={() => go('notes')} keywords={['keep', 'memo', 'checklist', 'reminders']}>
                 <StickyNote size={14} /> Notes
               </Item>
-              <Item onSelect={() => go('calendar')} keywords={['events', 'schedule', 'agenda', 'gcal', 'meetings']}>
+              <Item onSelect={() => go('calendar')} keywords={['events', 'schedule', 'agenda', 'gcal']}>
                 <CalendarDays size={14} /> Calendar
               </Item>
               <Item onSelect={() => go('meetings')} keywords={['recordings', 'transcripts', 'audio', 'record']}>

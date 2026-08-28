@@ -282,7 +282,7 @@ export default function App(): React.JSX.Element {
           )}
           {view === 'tasks' && <TasksView />}
           {view === 'objectives' && <ObjectivesView />}
-          {view === 'meetings' && <MeetingsView />}
+          {view === 'meetings' && <MeetingsView onOpenCalendar={openCalendarAt} />}
           {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}
           {terminalOpened && (
             <div className={view === 'terminal' ? 'h-full overflow-hidden' : 'hidden'}>

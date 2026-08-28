@@ -160,13 +160,29 @@ describe('MeetingProcessor', () => {
 
     const m = meetings.getMeeting(db, id)!
     expect(m.status).toBe('ready')
-    expect(m.error).toBeNull()
+    // the gap is named on the row — a crash is inferred, not a confirmed
+    // "no speech", so it must not look like a clean two-channel success
+    expect(m.error).toMatch(/partial: no speech detected on system/)
     const t = meetings.getTranscript(db, id)!
     expect(t.segments.map((s) => s.channel)).toEqual(['me'])
     expect(t.language).toBe('en')
-    // both WAVs are consumed — a retry would only crash the same way again
+    // WAVs kept so Retry stays possible (an hour-long meeting that lost
+    // "them" to an OOM or a VAD false-negative is not a 5s silent clip)
+    expect(fs.size(join(REC, id, 'system.wav'))).not.toBeNull()
+    expect(fs.size(join(REC, id, 'mic.wav'))).not.toBeNull()
+
+    // retry of the partial row re-runs both channels; a clean pass clears
+    // the note and consumes the WAVs
+    crashFor = null
+    const p = mkProcessor()
+    p.retry(id)
+    await flush()
+    await flush()
+    const again = meetings.getMeeting(db, id)!
+    expect(again.status).toBe('ready')
+    expect(again.error).toBeNull()
+    expect(meetings.getTranscript(db, id)!.segments.map((s) => s.channel)).toEqual(['me', 'them'])
     expect(fs.size(join(REC, id, 'system.wav'))).toBeNull()
-    expect(fs.size(join(REC, id, 'mic.wav'))).toBeNull()
   })
 
   it('every channel crashing still fails loudly — a dead sidecar must not read as an empty meeting', async () => {

@@ -93,11 +93,21 @@ describe('meetingDayLabel / groupMeetingsByDay', () => {
   it('labels today/yesterday relatively and older days by weekday + date', () => {
     expect(meetingDayLabel(new Date(2026, 7, 28, 0, 5).toISOString(), now)).toBe('Today')
     expect(meetingDayLabel(new Date(2026, 7, 27, 23, 59).toISOString(), now)).toBe('Yesterday')
-    const older = meetingDayLabel(new Date(2026, 7, 3, 12).toISOString(), now)
-    expect(older).toMatch(/Aug/)
-    expect(older).toMatch(/3/)
-    expect(older).not.toMatch(/2026/)
-    expect(meetingDayLabel(new Date(2025, 11, 31, 12).toISOString(), now)).toMatch(/2025/)
+    // expected strings come from the same Intl call so the test holds in
+    // any host locale (this repo also runs under -l es)
+    const aug3 = new Date(2026, 7, 3, 12)
+    expect(meetingDayLabel(aug3.toISOString(), now)).toBe(
+      aug3.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+    )
+    const lastYear = new Date(2025, 11, 31, 12)
+    expect(meetingDayLabel(lastYear.toISOString(), now)).toBe(
+      lastYear.toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      })
+    )
   })
 
   it('groups a newest-first list into newest-first day sections, order kept within a day', () => {
@@ -106,7 +116,7 @@ describe('meetingDayLabel / groupMeetingsByDay', () => {
     const b = at(new Date(2026, 7, 28, 9))
     const c = at(new Date(2026, 7, 26, 10))
     const groups = groupMeetingsByDay([a, b, c], now)
-    expect(groups.map((g) => g.label)).toEqual(['Today', expect.stringMatching(/Aug/)])
+    expect(groups.map((g) => g.label)).toEqual(['Today', meetingDayLabel(c.started_at, now)])
     expect(groups[0].meetings).toEqual([a, b])
     expect(groups[1].meetings).toEqual([c])
     expect(groupMeetingsByDay([], now)).toEqual([])

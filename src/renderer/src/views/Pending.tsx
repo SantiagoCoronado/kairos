@@ -19,8 +19,9 @@ const KIND_VIEW: Partial<Record<PendingKind, ViewId>> = {
   reminder: 'notes',
   thread: 'inbox',
   outbox: 'inbox',
-  agent_run: 'automations'
-  // meeting and invite rows route through onOpenCalendar (day focus)
+  agent_run: 'automations',
+  meeting: 'meetings'
+  // invite rows route through onOpenCalendar (day focus)
 }
 
 const KIND_ICON: Partial<Record<PendingKind, typeof CheckSquare>> = {
@@ -167,8 +168,7 @@ export function PendingView({
 
   const open = (item: PendingItem): void => {
     if (item.kind === 'followup') onOpenPerson(item.id)
-    else if (item.kind === 'meeting' || item.kind === 'invite')
-      onOpenCalendar(item.at ? new Date(item.at) : new Date())
+    else if (item.kind === 'invite') onOpenCalendar(item.at ? new Date(item.at) : new Date())
     else onNavigate(KIND_VIEW[item.kind] ?? 'today')
   }
 

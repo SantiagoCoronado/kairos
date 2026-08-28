@@ -137,6 +137,9 @@ export class MeetingProcessor {
       const segs = (r: ChannelResult): WhisperResult | null => (r === 'crashed' ? null : r)
       const micRes = segs(mic)
       const systemRes = segs(system)
+      const crashed = (['mic', 'system'] as const).filter(
+        (c) => (c === 'mic' ? mic : system) === 'crashed'
+      )
       const segments = mergeChannelSegments(micRes?.segments ?? [], systemRes?.segments ?? [])
       meetings.setTranscript(this.db, id, {
         segments,
@@ -144,12 +147,24 @@ export class MeetingProcessor {
         language: micRes?.language ?? systemRes?.language ?? null,
         model: transcriber.modelName
       })
-      // WAVs were transcription input only — the webm archives stay
-      for (const channel of ['mic', 'system'] as const) {
-        const wav = this.wavPath(id, channel)
-        if (this.deps.fs.size(wav) !== null) this.deps.fs.rm(wav)
+      // WAVs were transcription input only — the webm archives stay. A
+      // crashed channel keeps them: the crash is inferred from the sidecar
+      // dying mid-request, and "no speech" is only the usual cause, so an
+      // hour-long meeting that lost "them" must still be retryable. The
+      // row stays 'ready' (the other channel's transcript is real) with the
+      // gap named in `error` so the UI can show it and offer Retry.
+      if (crashed.length === 0) {
+        for (const channel of ['mic', 'system'] as const) {
+          const wav = this.wavPath(id, channel)
+          if (this.deps.fs.size(wav) !== null) this.deps.fs.rm(wav)
+        }
       }
-      meetings.updateMeeting(this.db, id, { status: 'ready' })
+      meetings.updateMeeting(this.db, id, {
+        status: 'ready',
+        error: crashed.length
+          ? `partial: no speech detected on ${crashed.join(' + ')} (whisper-server rejected that audio) — audio kept, Retry re-runs it`
+          : null
+      })
       this.deps.onEvent({ kind: 'transcribed', meetingId: id })
       this.deps.onChange()
       this.deps.notify(
@@ -157,7 +172,10 @@ export class MeetingProcessor {
         meeting.title || 'Transcript is ready to review.',
         id
       )
-      this.deps.log('info', `meetings: transcribed ${id} (${segments.length} segments)`)
+      this.deps.log(
+        'info',
+        `meetings: transcribed ${id} (${segments.length} segments${crashed.length ? `, ${crashed.join('+')} crashed → kept WAVs` : ''})`
+      )
       if (this.deps.summarize && segments.length > 0) {
         try {
           await this.deps.summarize(id)

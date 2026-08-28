@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AudioLines, CircleDot } from 'lucide-react'
 import { useInvoke } from '../lib/api'
 import { startRecording, useMeetingRecording } from '../lib/meeting-store'
@@ -11,9 +11,14 @@ import { Button, EmptyState } from '../components/ui'
  *  scrolls off Today's 24-hour "recent meetings" — EventEditor only lists
  *  the recordings of its own event. */
 export function MeetingsView({
-  onOpenCalendar
+  onOpenCalendar,
+  focusId = null,
+  onFocusConsumed
 }: {
   onOpenCalendar?: (day: Date) => void
+  /** meeting to scroll to and highlight (notification / deep-link entry) */
+  focusId?: string | null
+  onFocusConsumed?: () => void
 }): React.JSX.Element {
   const { data } = useInvoke('meetings:list', [{}], ['meetings'])
   const rec = useMeetingRecording()
@@ -23,6 +28,21 @@ export function MeetingsView({
   const groups = useMemo(() => groupMeetingsByDay(rows), [rows])
   const totalSeconds = rows.reduce((acc, m) => acc + (m.duration_seconds ?? 0), 0)
   const failed = rows.filter((m) => m.status === 'error').length
+  // ready rows carrying an error note = one channel dropped by the sidecar
+  const partial = rows.filter((m) => m.status === 'ready' && m.error).length
+
+  // highlight the linked row once it's on screen, then let the ring fade
+  const [highlight, setHighlight] = useState<string | null>(null)
+  useEffect(() => {
+    if (!focusId || !data) return
+    const el = document.getElementById(`meeting-${focusId}`)
+    if (!el) return
+    el.scrollIntoView({ block: 'center' })
+    setHighlight(focusId)
+    onFocusConsumed?.()
+    const t = setTimeout(() => setHighlight(null), 2500)
+    return () => clearTimeout(t)
+  }, [focusId, data])
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-5 space-y-4">
@@ -37,6 +57,7 @@ export function MeetingsView({
               : `${rows.length} recording${rows.length === 1 ? '' : 's'}` +
                 (totalSeconds > 0 ? ` · ${fmtMeetingDuration(totalSeconds)}` : '') +
                 (failed > 0 ? ` · ${failed} failed` : '') +
+                (partial > 0 ? ` · ${partial} partial` : '') +
                 ' · stored locally in ~/Kairos/recordings'}
           </p>
         </div>
@@ -87,6 +108,7 @@ export function MeetingsView({
               key={m.id}
               meeting={m}
               showTitle
+              highlight={highlight === m.id}
               onOpenEvent={
                 m.calendar_event_id && onOpenCalendar
                   ? () => onOpenCalendar(new Date(m.started_at))

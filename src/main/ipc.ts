@@ -693,8 +693,9 @@ export function registerIpc(): void {
     notify: (title, body, meetingId) => {
       if (!Notification.isSupported()) return
       const n = new Notification({ title, body, silent: true })
-      // id rides along so the renderer can focus the meeting's day
-      n.on('click', () => openWithDeepLink({ view: 'calendar', id: meetingId }))
+      // id rides along so the renderer can focus the row — in Meetings, the
+      // one list that also holds ad-hoc recordings and partials needing Retry
+      n.on('click', () => openWithDeepLink({ view: 'meetings', id: meetingId }))
       n.show()
     },
     log: (level, message) => logLine(level, 'meetings', message),

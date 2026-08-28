@@ -183,6 +183,7 @@ describe('MeetingProcessor', () => {
     expect(again.error).toBeNull()
     expect(meetings.getTranscript(db, id)!.segments.map((s) => s.channel)).toEqual(['me', 'them'])
     expect(fs.size(join(REC, id, 'system.wav'))).toBeNull()
+    expect(fs.size(join(REC, id, 'mic.wav'))).toBeNull()
   })
 
   it('every channel crashing still fails loudly — a dead sidecar must not read as an empty meeting', async () => {

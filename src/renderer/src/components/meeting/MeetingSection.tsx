@@ -111,12 +111,15 @@ export function MeetingSection({
 export function MeetingRow({
   meeting: m,
   showTitle = false,
-  onOpenEvent
+  onOpenEvent,
+  highlight = false
 }: {
   meeting: Meeting
   showTitle?: boolean
   /** event-linked rows: jump to the event's day (all-recordings list) */
   onOpenEvent?: () => void
+  /** transient ring after a notification / deep link landed on this row */
+  highlight?: boolean
 }): React.JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -148,7 +151,13 @@ export function MeetingRow({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-panel px-2.5 py-1.5">
+    <div
+      id={`meeting-${m.id}`}
+      className={cn(
+        'flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-panel px-2.5 py-1.5 transition-shadow',
+        highlight && 'ring-1 ring-accent/60'
+      )}
+    >
       <span className="shrink-0 whitespace-nowrap text-[12px] text-text tabular-nums">
         {dateLabel}
       </span>

@@ -678,6 +678,7 @@ export type NavView =
   | 'objectives'
   | 'automations'
   | 'calendar'
+  | 'meetings'
   | 'chat'
   | 'terminal'
 

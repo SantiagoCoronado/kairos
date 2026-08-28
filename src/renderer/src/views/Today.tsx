@@ -553,6 +553,11 @@ function RecentMeetings(): React.JSX.Element | null {
             {new Date(m.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
           <span className="text-[13px] truncate">{m.title || 'Untitled meeting'}</span>
+          {m.error && (
+            <span className="font-mono text-[10.5px] text-muted shrink-0" title={m.error}>
+              partial
+            </span>
+          )}
           <span className="flex-1" />
           {m.summary_md ? (
             <button

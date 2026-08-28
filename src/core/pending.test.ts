@@ -442,6 +442,24 @@ describe('failure-state sources', () => {
     expect(items.find((i) => i.id === 'm-old')!.tone).toBe('muted')
   })
 
+  it('partial transcripts (ready + error note) surface once, even when summarized', () => {
+    seedMeeting('m-part', {
+      status: 'ready',
+      error: 'partial: no speech detected on system — audio kept, Retry re-runs it',
+      summarizedAt: T0.toISOString()
+    })
+    seedMeeting('m-part-unsum', { status: 'ready', error: 'partial: no speech detected on mic' })
+    const items = pendingItems(db, T0).items.filter((i) => i.kind === 'meeting')
+    expect(items.map((i) => i.id).sort()).toEqual(['m-part', 'm-part-unsum'])
+    for (const it of items) {
+      expect(it.status).toBe('partial')
+      expect(it.tone).toBe('accent')
+      expect(it.subtitle).toMatch(/^partial:/)
+    }
+    // one item per meeting — the unsummarized bucket must not double-list it
+    expect(new Set(items.map((i) => i.key)).size).toBe(items.length)
+  })
+
   it('finished runs surface within the window with status tones; running and aged-out do not', () => {
     const task = agentTasks.createAgentTask(db, { name: 'Daily digest', prompt: 'p' }, T0)
     const ok = agentTasks.createRun(db, task.id, null, daysAgo(1))

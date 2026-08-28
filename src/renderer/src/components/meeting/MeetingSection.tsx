@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Circle, FileText, Pause, Play, Sparkles, Square, Trash2 } from 'lucide-react'
+import { Circle, FileText, FolderOpen, Pause, Play, RotateCcw, Sparkles, Square, Trash2 } from 'lucide-react'
 import type { Meeting, MeetingTranscript } from '../../../../core/types'
 import { api, useInvoke } from '../../lib/api'
 import { SummaryModal } from './SummaryModal'
@@ -13,7 +13,7 @@ import {
 } from '../../lib/meeting-store'
 import { fmtMeetingDuration } from '../../lib/meeting-ui'
 import { useMeetingPlayback, type MeetingPlayback } from '../../lib/meeting-playback'
-import { Button, Chip, cn } from '../ui'
+import { Button, Chip, InlineText, cn } from '../ui'
 
 /** Recording block inside EventEditor (saved events only): start/stop a
  *  recording linked to this event, list past recordings with playback. */
@@ -104,8 +104,25 @@ export function MeetingSection({
   )
 }
 
-function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
+/** One recording: date, duration, status, and every action the row's state
+ *  allows. `showTitle` is for the all-recordings list — inside EventEditor
+ *  the event already names the meeting. Ad-hoc recordings start untitled,
+ *  so there the title is editable in place. */
+export function MeetingRow({
+  meeting: m,
+  showTitle = false,
+  onOpenEvent,
+  highlight = false
+}: {
+  meeting: Meeting
+  showTitle?: boolean
+  /** event-linked rows: jump to the event's day (all-recordings list) */
+  onOpenEvent?: () => void
+  /** transient ring after a notification / deep link landed on this row */
+  highlight?: boolean
+}): React.JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<MeetingTranscript | null>(null)
   const [showSummary, setShowSummary] = useState(false)
   // one playback per row, shared with the transcript modal — a second hook
@@ -117,18 +134,55 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
     const res = await api.invoke('meetings:get', m.id)
     if (res.transcript) setTranscript(res.transcript)
   }
+  // under a day header (all-recordings list) the date would repeat per row
   const dateLabel = started.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
+    ...(showTitle ? {} : { month: 'short', day: 'numeric' }),
     hour: 'numeric',
     minute: '2-digit'
   })
 
+  const retry = async (): Promise<void> => {
+    setActionError(null)
+    try {
+      await api.invoke('meetings:retranscribe', m.id)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-panel px-2.5 py-1.5">
+    <div
+      id={`meeting-${m.id}`}
+      className={cn(
+        'flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-panel px-2.5 py-1.5 transition-shadow',
+        highlight && 'ring-1 ring-accent/60'
+      )}
+    >
       <span className="shrink-0 whitespace-nowrap text-[12px] text-text tabular-nums">
         {dateLabel}
       </span>
+      {showTitle &&
+        (m.calendar_event_id ? (
+          onOpenEvent ? (
+            <button
+              className="min-w-0 truncate text-left text-[13px] text-text hover:text-accent"
+              title="Open the linked event's day in Calendar"
+              onClick={onOpenEvent}
+            >
+              {m.title || 'Untitled meeting'}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate text-[13px] text-text" title={m.title}>
+              {m.title || 'Untitled meeting'}
+            </span>
+          )
+        ) : (
+          <InlineText
+            value={m.title || 'Untitled meeting'}
+            className="min-w-0 flex-1 basis-40 text-[13px] text-text"
+            onSave={(v) => void api.invoke('meetings:rename', m.id, v)}
+          />
+        ))}
       {m.duration_seconds != null && (
         <span className="shrink-0 whitespace-nowrap text-[11.5px] text-muted tabular-nums">
           {fmtMeetingDuration(m.duration_seconds)}
@@ -139,7 +193,17 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
           <Chip tone="danger">failed</Chip>
         </span>
       )}
+      {actionError && (
+        <span className="text-[11px] text-danger" title={actionError}>
+          {actionError}
+        </span>
+      )}
       {m.status === 'processing' && <Chip tone="muted">transcribing…</Chip>}
+      {m.status === 'ready' && m.error && (
+        <span title={m.error}>
+          <Chip tone="muted">partial</Chip>
+        </span>
+      )}
       {/* ml-auto (not a flex-1 spacer) so the actions track the right edge
           even when the row wraps to a second line */}
       <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
@@ -172,6 +236,26 @@ function MeetingRow({ meeting: m }: { meeting: Meeting }): React.JSX.Element {
         )}
         {m.status === 'ready' && !m.audio_deleted_at && (m.mic_path || m.system_path) && (
           <PlayButton playback={playback} />
+        )}
+        {window.api &&
+          !m.audio_deleted_at &&
+          (m.status === 'error' || (m.status === 'ready' && m.error)) && (
+          <button
+            className="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded text-muted hover:bg-raised hover:text-text"
+            title={`Retry transcription${m.error ? ` — last error: ${m.error}` : ''}`}
+            onClick={() => void retry()}
+          >
+            <RotateCcw size={10} /> retry
+          </button>
+        )}
+        {window.api && !m.audio_deleted_at && (
+          <button
+            className="shrink-0 p-1 rounded text-faint hover:bg-raised hover:text-text"
+            title="Show recording files in Finder"
+            onClick={() => void api.invoke('meetings:reveal', m.id)}
+          >
+            <FolderOpen size={12} />
+          </button>
         )}
         <button
           className={cn(

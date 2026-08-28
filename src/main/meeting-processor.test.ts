@@ -6,7 +6,7 @@ import { migrate } from '../core/migrations'
 import * as meetings from '../core/repo/meetings'
 import { MeetingProcessor, type ProcessorFs, type Transcriber } from './meeting-processor'
 import type { MeetingEvent } from '../shared/ipc-contract'
-import type { WhisperResult } from './whisper'
+import { WhisperCrashError, type WhisperResult } from './whisper'
 
 const T0 = new Date('2026-07-28T12:00:00Z')
 const REC = '/rec'
@@ -27,12 +27,15 @@ let notifications: string[]
 let transcribed: string[]
 let result: (path: string) => WhisperResult
 let failFor: string | null
+/** wav paths containing this crash the (fake) sidecar */
+let crashFor: string | null
 
 function mkProcessor(now = (): Date => T0): MeetingProcessor {
   const transcriber: Transcriber = {
     modelName: 'base',
     transcribe: async (wavPath) => {
       if (failFor && wavPath.includes(failFor)) throw new Error('model exploded')
+      if (crashFor && wavPath.includes(crashFor)) throw new WhisperCrashError(wavPath)
       transcribed.push(wavPath)
       return result(wavPath)
     }
@@ -80,6 +83,7 @@ beforeEach(() => {
   notifications = []
   transcribed = []
   failFor = null
+  crashFor = null
   result = (path) => ({
     text: 'x',
     language: 'en',
@@ -145,6 +149,78 @@ describe('MeetingProcessor', () => {
     expect(events.some((e) => e.kind === 'transcribe-error')).toBe(true)
     // WAVs kept on failure so a retry (sweep) can still transcribe
     expect(fs.size(join(REC, bad, 'mic.wav'))).not.toBeNull()
+  })
+
+  it('a sidecar crash on one channel is silence, not a failed meeting', async () => {
+    const id = seedMeeting()
+    crashFor = 'system.wav' // nobody spoke on the far side → whisper-server aborts
+    mkProcessor().enqueue(id)
+    await flush()
+    await flush()
+
+    const m = meetings.getMeeting(db, id)!
+    expect(m.status).toBe('ready')
+    // the gap is named on the row — a crash is inferred, not a confirmed
+    // "no speech", so it must not look like a clean two-channel success
+    expect(m.error).toMatch(/partial: no speech detected on system/)
+    const t = meetings.getTranscript(db, id)!
+    expect(t.segments.map((s) => s.channel)).toEqual(['me'])
+    expect(t.language).toBe('en')
+    // WAVs kept so Retry stays possible (an hour-long meeting that lost
+    // "them" to an OOM or a VAD false-negative is not a 5s silent clip)
+    expect(fs.size(join(REC, id, 'system.wav'))).not.toBeNull()
+    expect(fs.size(join(REC, id, 'mic.wav'))).not.toBeNull()
+
+    // retry of the partial row re-runs both channels; a clean pass clears
+    // the note and consumes the WAVs
+    crashFor = null
+    const p = mkProcessor()
+    p.retry(id)
+    await flush()
+    await flush()
+    const again = meetings.getMeeting(db, id)!
+    expect(again.status).toBe('ready')
+    expect(again.error).toBeNull()
+    expect(meetings.getTranscript(db, id)!.segments.map((s) => s.channel)).toEqual(['me', 'them'])
+    expect(fs.size(join(REC, id, 'system.wav'))).toBeNull()
+    expect(fs.size(join(REC, id, 'mic.wav'))).toBeNull()
+  })
+
+  it('every channel crashing still fails loudly — a dead sidecar must not read as an empty meeting', async () => {
+    const id = seedMeeting()
+    crashFor = id
+    mkProcessor().enqueue(id)
+    await flush()
+    await flush()
+
+    const m = meetings.getMeeting(db, id)!
+    expect(m.status).toBe('error')
+    expect(m.error).toMatch(/no speech detected/)
+    expect(meetings.getTranscript(db, id)).toBeUndefined()
+    expect(fs.size(join(REC, id, 'mic.wav'))).not.toBeNull()
+  })
+
+  it('retry re-queues an error’d meeting while its WAVs exist and refuses once they are gone', async () => {
+    const id = seedMeeting()
+    failFor = id
+    const p = mkProcessor()
+    p.enqueue(id)
+    await flush()
+    await flush()
+    expect(meetings.getMeeting(db, id)!.status).toBe('error')
+
+    failFor = null
+    p.retry(id)
+    await flush()
+    await flush()
+    expect(meetings.getMeeting(db, id)!.status).toBe('ready')
+    expect(meetings.getTranscript(db, id)!.segments).toHaveLength(2)
+
+    // WAVs were consumed by the successful pass — nothing left to retry
+    expect(() => p.retry(id)).toThrow(/gone/)
+    meetings.markAudioDeleted(db, id, T0)
+    expect(() => p.retry(id)).toThrow(/retention/)
+    expect(() => p.retry('nope')).toThrow(/not found/)
   })
 
   it('sweepIncomplete re-enqueues stuck and never-transcribed meetings', async () => {

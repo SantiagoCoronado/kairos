@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Bell } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Bell, AudioLines } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useResizableWidth, ResizeHandle } from './ResizeHandle'
 import { useInvoke } from '../lib/api'
@@ -13,6 +13,7 @@ export type ViewId =
   | 'tasks'
   | 'notes'
   | 'calendar'
+  | 'meetings'
   | 'objectives'
   | 'automations'
   | 'chat'
@@ -58,7 +59,8 @@ export const VIEW_ORDER: ViewId[] = [
   'automations',
   'chat',
   'terminal',
-  'pending'
+  'pending',
+  'meetings'
 ]
 
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
@@ -69,6 +71,7 @@ const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'tasks', label: 'Tasks', icon: CheckSquare },
   { id: 'notes', label: 'Notes', icon: StickyNote },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'meetings', label: 'Meetings', icon: AudioLines },
   { id: 'objectives', label: 'Objectives', icon: Target },
   { id: 'automations', label: 'Automations', icon: Bot },
   { id: 'chat', label: 'Chat', icon: Sparkles },

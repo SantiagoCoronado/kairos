@@ -12,13 +12,22 @@ describe('isDeniedChannel', () => {
     'meetings:resume',
     'meetings:chunk',
     'meetings:delete',
-    'meetings:summarize'
+    'meetings:summarize',
+    'meetings:retranscribe',
+    'meetings:reveal'
   ])('refuses the live-capture / paid mutation %s regardless of settings', (channel) => {
     expect(isDeniedChannel(channel, local)).toBe(true)
     expect(isDeniedChannel(channel, optedIn)).toBe(true)
   })
 
-  it.each(['meetings:list', 'meetings:get', 'meetings:active', 'meetings:audioData', 'meetings:undoTasks'])(
+  it.each([
+    'meetings:list',
+    'meetings:get',
+    'meetings:active',
+    'meetings:audioData',
+    'meetings:undoTasks',
+    'meetings:rename'
+  ])(
     'allows the meeting read / scoped undo %s',
     (channel) => {
       expect(isDeniedChannel(channel, local)).toBe(false)

@@ -52,7 +52,7 @@ import { summarizeMeeting } from './chat/meeting-summarizer'
 import { undoFanOutTasks } from '../core/meeting-summary'
 import { spawn as childSpawn } from 'node:child_process'
 import { rmSync, statSync } from 'node:fs'
-import { app, Notification } from 'electron'
+import { app, Notification, shell } from 'electron'
 import { localDate } from '../core/ids'
 import { CommsSyncManager } from './comms/manager'
 import { CommsNotifier } from './comms/notifier'
@@ -693,8 +693,9 @@ export function registerIpc(): void {
     notify: (title, body, meetingId) => {
       if (!Notification.isSupported()) return
       const n = new Notification({ title, body, silent: true })
-      // id rides along so the renderer can focus the meeting's day
-      n.on('click', () => openWithDeepLink({ view: 'calendar', id: meetingId }))
+      // id rides along so the renderer can focus the row — in Meetings, the
+      // one list that also holds ad-hoc recordings and partials needing Retry
+      n.on('click', () => openWithDeepLink({ view: 'meetings', id: meetingId }))
       n.show()
     },
     log: (level, message) => logLine(level, 'meetings', message),
@@ -731,6 +732,17 @@ export function registerIpc(): void {
     meetMgr.appendChunk(id, channel, kind, Buffer.from(dataBase64, 'base64'))
   )
   handle('meetings:delete', (id) => meetMgr.delete(id))
+  handle('meetings:retranscribe', (id) => processor.retry(id))
+  handle('meetings:rename', (id, title) => {
+    const m = meetingsRepo.updateMeeting(db, id, { title: title.trim() })
+    broadcast('db:changed', { entity: 'meetings' })
+    return m
+  })
+  handle('meetings:reveal', (id) => {
+    if (!meetingsRepo.getMeeting(db, id)) throw new Error(`meeting not found: ${id}`)
+    // the id is a ULID from our own row, so it can't walk out of the dir
+    shell.showItemInFolder(join(DATA_DIR, 'recordings', id))
+  })
   handle('meetings:active', () => meetMgr.activeMeetingId)
   handle('meetings:summarize', (id, force) => runSummarize(id, force ?? false))
   handle('meetings:undoTasks', (id, taskIds) => {

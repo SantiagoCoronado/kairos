@@ -57,7 +57,7 @@ elif security find-certificate -c "$NAME" >/dev/null 2>&1; then
   # same-named certs for codesign to choke on
   echo "a certificate matching \"$NAME\" exists without a private key (deleted key, half-failed" \
        "import, or a bare .cer in another keychain) — delete it in Keychain Access" \
-       "(or: security delete-certificate -c \"$NAME\") and re-run this script" >&2
+       "(or: security delete-certificate -t -c \"$NAME\") and re-run this script" >&2
   exit 1
 else
   cat > "$work/ext.cnf" <<CNF
@@ -92,8 +92,16 @@ if has_valid_identity; then
   echo "identity \"$NAME\" ready — the next \`npm run ship\` signs with it"
   echo "(first Record after that ship re-prompts once; the grant then survives rebuilds)"
 else
-  echo "identity \"$NAME\" is in the keychain but still not trusted for code signing —" \
-       "re-run this script to retry the trust dialog, or open Keychain Access → login →" \
-       "My Certificates → \"$NAME\" → Trust → Code Signing: Always Trust" >&2
+  # two hypotheses, in likelihood order: the trust dialog was dismissed, or
+  # a second certificate named $NAME (e.g. a bare .cer in another keychain)
+  # shadowed the real one — find-certificate -p exports whichever comes
+  # first, so trust may have landed on the wrong cert. Re-running can't fix
+  # the second case, so name it instead of inviting a loop.
+  echo "identity \"$NAME\" is in the keychain but still not trusted for code signing." >&2
+  echo "  - dismissed the password dialog? re-run this script to retry it" >&2
+  echo "  - more than one certificate named \"$NAME\"? list them with" >&2
+  echo "      security find-certificate -a -c \"$NAME\" -Z | grep SHA-1" >&2
+  echo "    and delete the extras (Keychain Access, or: security delete-certificate -t -Z <sha1>)," >&2
+  echo "    then re-run — or set Code Signing: Always Trust on the right one in Keychain Access" >&2
   exit 1
 fi

@@ -19,8 +19,9 @@ const KIND_VIEW: Partial<Record<PendingKind, ViewId>> = {
   reminder: 'notes',
   thread: 'inbox',
   outbox: 'inbox',
-  agent_run: 'automations'
-  // meeting and invite rows route through onOpenCalendar (day focus)
+  agent_run: 'automations',
+  meeting: 'meetings'
+  // invite rows route through onOpenCalendar (day focus)
 }
 
 const KIND_ICON: Partial<Record<PendingKind, typeof CheckSquare>> = {
@@ -167,8 +168,7 @@ export function PendingView({
 
   const open = (item: PendingItem): void => {
     if (item.kind === 'followup') onOpenPerson(item.id)
-    else if (item.kind === 'meeting' || item.kind === 'invite')
-      onOpenCalendar(item.at ? new Date(item.at) : new Date())
+    else if (item.kind === 'invite') onOpenCalendar(item.at ? new Date(item.at) : new Date())
     else onNavigate(KIND_VIEW[item.kind] ?? 'today')
   }
 
@@ -210,6 +210,20 @@ export function PendingView({
         })
         reload()
       })
+  }
+
+  const retranscribe = (item: PendingItem): void => {
+    void api
+      .invoke('meetings:retranscribe', item.id)
+      .then(() => reload())
+      .catch((err: unknown) =>
+        toast({
+          variant: 'error',
+          text: 'Retry failed',
+          detail: err instanceof Error ? err.message : String(err),
+          timeoutMs: 6000
+        })
+      )
   }
 
   const summarize = (item: PendingItem): void => {
@@ -342,6 +356,11 @@ export function PendingView({
                     {item.kind === 'meeting' && item.status === 'ready' && (
                       <RowAction onClick={() => summarize(item)}>summarize</RowAction>
                     )}
+                    {item.kind === 'meeting' &&
+                      window.api &&
+                      (item.status === 'error' || item.status === 'partial') && (
+                        <RowAction onClick={() => retranscribe(item)}>retry</RowAction>
+                      )}
                     {item.kind === 'invite' && (
                       <>
                         <RowAction onClick={() => respond(item, 'accepted')}>accept</RowAction>

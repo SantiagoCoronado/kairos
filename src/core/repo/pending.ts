@@ -287,11 +287,28 @@ function meetingItems(db: DbDriver, now: Date): PendingItem[] {
     fingerprint: `${m.status}:${m.summarized_at ?? ''}`,
     status: m.status
   }))
+  // a 'ready' row with an error note = the sidecar dropped one channel
+  // (partial transcript, WAVs kept for Retry). Auto-summarize still runs on
+  // the surviving channel, so without this bucket a two-sided meeting that
+  // lost "them" would look fully handled everywhere but a muted chip.
+  const partial = listMeetings(db, { status: 'ready' })
+    .filter((m) => m.error)
+    .map((m) => ({
+      key: `meeting:${m.id}`,
+      kind: 'meeting' as const,
+      id: m.id,
+      title: m.title || 'Meeting',
+      subtitle: m.error!,
+      tone: 'accent' as const,
+      at: m.started_at,
+      fingerprint: `partial:${m.error}`,
+      status: 'partial'
+    }))
   // summarize failures leave status='ready' with summarized_at NULL and no
   // error — this predicate is their only trace outside a warn log line
   const grace = new Date(now.getTime() - UNSUMMARIZED_GRACE_MS).toISOString()
   const unsummarized = listMeetings(db, { status: 'ready' })
-    .filter((m) => !m.summarized_at && m.ended_at != null && m.ended_at < grace)
+    .filter((m) => !m.error && !m.summarized_at && m.ended_at != null && m.ended_at < grace)
     .map((m) => ({
       key: `meeting:${m.id}`,
       kind: 'meeting' as const,
@@ -303,7 +320,7 @@ function meetingItems(db: DbDriver, now: Date): PendingItem[] {
       fingerprint: `${m.status}:${m.summarized_at ?? ''}`,
       status: m.status
     }))
-  return [...errored, ...unsummarized]
+  return [...errored, ...partial, ...unsummarized]
 }
 
 /** Finished runs from the review window: error runs loud, results quieter.

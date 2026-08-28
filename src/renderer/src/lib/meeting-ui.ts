@@ -70,3 +70,35 @@ export function fmtElapsed(ms: number): string {
     ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
     : `${m}:${String(s).padStart(2, '0')}`
 }
+
+/** "Today" / "Yesterday" / "Tue, Aug 26" (year appended once it differs) —
+ *  section labels for the all-recordings list */
+export function meetingDayLabel(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso)
+  const startOf = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((startOf(now) - startOf(d)) / 86_400_000)
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  return d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {})
+  })
+}
+
+/** newest-first meetings → newest-first day sections, order preserved
+ *  within a day */
+export function groupMeetingsByDay<T extends { started_at: string }>(
+  meetings: T[],
+  now: Date = new Date()
+): { label: string; meetings: T[] }[] {
+  const groups: { label: string; meetings: T[] }[] = []
+  for (const m of meetings) {
+    const label = meetingDayLabel(m.started_at, now)
+    const last = groups[groups.length - 1]
+    if (last && last.label === label) last.meetings.push(m)
+    else groups.push({ label, meetings: [m] })
+  }
+  return groups
+}

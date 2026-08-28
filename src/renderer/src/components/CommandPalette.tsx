@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Command } from 'cmdk'
-import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, CircleAlert, Bell } from 'lucide-react'
+import { Sun, Users, CheckSquare, Target, Sparkles, Plus, User, FileDown, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Mic, Loader2, CircleAlert, Bell, AudioLines } from 'lucide-react'
 import type { Person } from '../../../core/types'
 import type { CaptureContext } from '../../../shared/ipc-contract'
 import type { ViewId } from './Sidebar'
@@ -172,8 +172,11 @@ export function CommandPalette({
               <Item onSelect={() => go('notes')} keywords={['keep', 'memo', 'checklist', 'reminders']}>
                 <StickyNote size={14} /> Notes
               </Item>
-              <Item onSelect={() => go('calendar')} keywords={['events', 'schedule', 'agenda', 'gcal', 'meetings']}>
+              <Item onSelect={() => go('calendar')} keywords={['events', 'schedule', 'agenda', 'gcal']}>
                 <CalendarDays size={14} /> Calendar
+              </Item>
+              <Item onSelect={() => go('meetings')} keywords={['recordings', 'transcripts', 'audio', 'record']}>
+                <AudioLines size={14} /> Meetings
               </Item>
               <Item onSelect={() => go('objectives')} keywords={['okr', 'goals']}>
                 <Target size={14} /> Objectives

@@ -17,6 +17,7 @@ import { NotesView } from './views/Notes'
 import { CalendarView } from './views/Calendar'
 import { AutomationsView } from './views/Automations'
 import { ObjectivesView } from './views/Objectives'
+import { MeetingsView } from './views/Meetings'
 import { ChatView } from './views/Chat'
 import { TerminalView } from './views/Terminal'
 import { api } from './lib/api'
@@ -123,6 +124,7 @@ export default function App(): React.JSX.Element {
           .catch(() => {})
       }
       if (v === 'pending' && id) setPendingFocus(id)
+      if (v === 'meetings' && id) setMeetingFocus(id)
       setView(v)
     }
     if (!IS_REMOTE) {
@@ -183,6 +185,7 @@ export default function App(): React.JSX.Element {
   // the calendar re-anchors even for the same day twice
   const [calendarFocus, setCalendarFocus] = useState<Date | null>(null)
   const [pendingFocus, setPendingFocus] = useState<string | null>(null)
+  const [meetingFocus, setMeetingFocus] = useState<string | null>(null)
   const openCalendarAt = (day: Date): void => {
     setCalendarFocus(new Date(day))
     setView('calendar')
@@ -281,6 +284,13 @@ export default function App(): React.JSX.Element {
           )}
           {view === 'tasks' && <TasksView />}
           {view === 'objectives' && <ObjectivesView />}
+          {view === 'meetings' && (
+            <MeetingsView
+              onOpenCalendar={openCalendarAt}
+              focusId={meetingFocus}
+              onFocusConsumed={() => setMeetingFocus(null)}
+            />
+          )}
           {view === 'automations' && <AutomationsView onOpenSession={openChatSession} />}
           {terminalOpened && (
             <div className={view === 'terminal' ? 'h-full overflow-hidden' : 'hidden'}>

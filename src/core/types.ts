@@ -8,7 +8,6 @@ export type DbEntity =
   | 'tasks'
   | 'people'
   | 'interactions'
-  | 'objectives'
   | 'projects'
   | 'comms'
   | 'notes'
@@ -25,7 +24,6 @@ export type DbEntity =
 export type InteractionKind = 'call' | 'message' | 'email' | 'meeting' | 'coffee' | 'other'
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled'
 export type ProjectStatus = 'active' | 'paused' | 'done' | 'archived'
-export type ObjectiveStatus = 'active' | 'achieved' | 'dropped'
 
 export interface Person {
   id: string
@@ -77,30 +75,6 @@ export interface Task {
   completed_at: string | null
   sort_order: number
   created_at: string
-  updated_at: string
-}
-
-export interface Objective {
-  id: string
-  title: string
-  description: string
-  area: Area
-  period: string // e.g. '2026-Q3'
-  status: ObjectiveStatus
-  sort_order: number
-  created_at: string
-  updated_at: string
-}
-
-export interface KeyResult {
-  id: string
-  objective_id: string
-  title: string
-  unit: string
-  start_value: number
-  target_value: number
-  current_value: number
-  sort_order: number
   updated_at: string
 }
 
@@ -474,12 +448,6 @@ export interface FollowupDue {
   days_overdue: number
 }
 
-export interface ObjectiveWithKRs extends Objective {
-  key_results: KeyResult[]
-  /** 0..1 average of KR completion ratios */
-  progress: number
-}
-
 // ---------- input shapes ----------
 
 export interface PeopleFilter {
@@ -617,30 +585,6 @@ export interface NewProject {
   description?: string
 }
 
-export interface NewObjective {
-  title: string
-  description?: string
-  area?: Area
-  period: string
-  key_results?: { title: string; unit?: string; start_value?: number; target_value?: number }[]
-}
-
-export interface ObjectivePatch {
-  title?: string
-  description?: string
-  area?: Area
-  period?: string
-  status?: ObjectiveStatus
-}
-
-export interface KrPatch {
-  title?: string
-  unit?: string
-  start_value?: number
-  target_value?: number
-  current_value?: number
-}
-
 export interface PersonDetail {
   person: Person
   interactions: Interaction[]
@@ -651,7 +595,6 @@ export interface TodayPayload {
   overdue_tasks: Task[]
   due_today_tasks: Task[]
   followups: FollowupDue[]
-  objectives: ObjectiveWithKRs[]
 }
 
 // ---------- pending inbox ----------

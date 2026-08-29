@@ -659,6 +659,13 @@ CREATE TABLE pending_overlay (
   // it costs one full page-through per calendar on next launch.
   `
 UPDATE calendar_calendars SET sync_token = NULL;
+`,
+  // 025 — objectives / key results removed (feature retired Aug 2026; the
+  // only rows ever written were seed data). Order respects foreign_keys=ON.
+  `
+DROP TABLE IF EXISTS task_key_results;
+DROP TABLE IF EXISTS key_results;
+DROP TABLE IF EXISTS objectives;
 `
 ]
 

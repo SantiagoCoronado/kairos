@@ -9,7 +9,7 @@ import { getSettings } from '../settings'
 import { logLine } from '../logger'
 import { buildKairosSdkServer, buildChildEnv, resolveClaudeBinary, DISALLOWED_TOOLS } from './agent'
 
-const TASK_SYSTEM_PROMPT = `You are running as a scheduled background task inside Kairos, Santiago's personal local CRM + task manager + objective tracker.
+const TASK_SYSTEM_PROMPT = `You are running as a scheduled background task inside Kairos, Santiago's personal local CRM + task manager.
 
 You were NOT invoked interactively — nobody is watching, and nobody can answer questions. Rules:
 - Use your tools over the real data; never guess.

@@ -151,7 +151,7 @@ const PRESETS: { label: string; desc: string; icon: typeof Sun; task: NewAgentTa
     task: {
       name: 'Morning brief',
       prompt:
-        'Build my morning brief: check today_agenda (overdue + due-today tasks, objectives), followups_due, and scan unread email threads with comms_search. Summarize the day in a few tight bullets: what needs action first, who to reply to, what can wait.',
+        'Build my morning brief: check today_agenda (overdue + due-today tasks), followups_due, and scan unread email threads with comms_search. Summarize the day in a few tight bullets: what needs action first, who to reply to, what can wait.',
       schedule: 'daily',
       scheduled_time: '08:00'
     }
@@ -171,12 +171,12 @@ const PRESETS: { label: string; desc: string; icon: typeof Sun; task: NewAgentTa
   },
   {
     label: 'Weekly review draft',
-    desc: 'Fri 17:00 — recap tasks + objectives',
+    desc: 'Fri 17:00 — recap the week\'s tasks',
     icon: CalendarCheck,
     task: {
       name: 'Weekly review draft',
       prompt:
-        'Draft my weekly review: list open work tasks (tasks_list, area work), check objectives_review progress, and note what moved this week. Produce a short recap: wins, stalled items, and three priorities for next week.',
+        'Draft my weekly review: list open work tasks (tasks_list, area work) and note what moved this week. Produce a short recap: wins, stalled items, and three priorities for next week.',
       schedule: 'weekly',
       scheduled_time: '17:00',
       scheduled_day: 5

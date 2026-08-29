@@ -17,7 +17,6 @@ import * as tasks from './repo/tasks'
 import * as notes from './repo/notes'
 import * as agentTasks from './repo/agent-tasks'
 import * as projects from './repo/projects'
-import * as objectives from './repo/objectives'
 import { todayAgenda } from './repo/today'
 import { pendingItems, snoozeItem, dismissItem } from './repo/pending'
 import { exportMarkdown } from './export/markdown'
@@ -517,115 +516,9 @@ export function buildToolDefs(db: DbDriver, ctx: ToolCtx): ToolDef[] {
       handler: (a: { id: string; limit?: number }) => agentTasks.listRuns(db, a.id, a.limit ?? 10)
     },
     {
-      name: 'objectives_review',
-      description:
-        'Objectives with key results, progress fraction, and tasks linked to each KR. Filter by period like 2026-Q3.',
-      schema: {
-        period: z.string().optional(),
-        area: area.optional()
-      },
-      handler: (a: { period?: string; area?: Area }) =>
-        objectives.listObjectives(db, { period: a.period, area: a.area }).map((o) => ({
-          ...o,
-          key_results: o.key_results.map((kr) => ({
-            ...kr,
-            linked_tasks: objectives.tasksForKr(db, kr.id)
-          }))
-        }))
-    },
-    {
-      name: 'objective_create',
-      description: 'Create an objective with optional initial key results.',
-      schema: {
-        title: z.string(),
-        period: z.string().describe('e.g. 2026-Q3'),
-        area: area.optional(),
-        description: z.string().optional(),
-        key_results: z
-          .array(
-            z.object({
-              title: z.string(),
-              unit: z.string().optional(),
-              start_value: z.number().optional(),
-              target_value: z.number().optional()
-            })
-          )
-          .optional()
-      },
-      handler: (a: Parameters<typeof objectives.createObjective>[1]) => {
-        const o = objectives.createObjective(db, a)
-        ctx.onMutate('objectives')
-        return o
-      }
-    },
-    {
-      name: 'objective_update',
-      description: 'Edit an objective: title, description, area, period, or status.',
-      schema: {
-        id: z.string(),
-        title: z.string().optional(),
-        description: z.string().optional(),
-        area: area.optional(),
-        period: z.string().optional().describe('e.g. 2026-Q3'),
-        status: z.enum(['active', 'achieved', 'dropped']).optional()
-      },
-      handler: ({ id, ...patch }: { id: string } & Parameters<typeof objectives.updateObjective>[2]) => {
-        const o = objectives.updateObjective(db, id, patch)
-        ctx.onMutate('objectives')
-        return o
-      }
-    },
-    {
-      name: 'objective_delete',
-      description: 'Delete an objective and its key results. Linked tasks are kept.',
-      schema: { id: z.string() },
-      handler: (a: { id: string }) => {
-        objectives.deleteObjective(db, a.id)
-        ctx.onMutate('objectives')
-        return { deleted: true }
-      }
-    },
-    {
-      name: 'kr_update',
-      description: "Edit a key result's title, unit, start/target/current values.",
-      schema: {
-        id: z.string(),
-        title: z.string().optional(),
-        unit: z.string().optional(),
-        start_value: z.number().optional(),
-        target_value: z.number().optional(),
-        current_value: z.number().optional()
-      },
-      handler: ({ id, ...patch }: { id: string } & Parameters<typeof objectives.updateKeyResult>[2]) => {
-        const kr = objectives.updateKeyResult(db, id, patch)
-        ctx.onMutate('objectives')
-        return kr
-      }
-    },
-    {
-      name: 'kr_update_progress',
-      description: "Set a key result's current value.",
-      schema: { id: z.string(), value: z.number() },
-      handler: (a: { id: string; value: number }) => {
-        const kr = objectives.updateKrProgress(db, a.id, a.value)
-        ctx.onMutate('objectives')
-        return kr
-      }
-    },
-    {
-      name: 'kr_link_task',
-      description: 'Link an existing task to a key result.',
-      schema: { kr_id: z.string(), task_id: z.string() },
-      handler: (a: { kr_id: string; task_id: string }) => {
-        objectives.linkTaskToKr(db, a.task_id, a.kr_id)
-        ctx.onMutate('objectives')
-        return { linked: true }
-      }
-    },
-    {
       name: 'today_agenda',
       description:
-        'The Today dashboard payload: overdue tasks, tasks due today, follow-ups due, active objectives with progress.',
+        'The Today dashboard payload: overdue tasks, tasks due today, follow-ups due.',
       schema: {},
       handler: () => todayAgenda(db)
     },

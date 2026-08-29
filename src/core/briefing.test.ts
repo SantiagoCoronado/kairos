@@ -6,7 +6,7 @@ const MONDAY_9AM = new Date('2026-07-13T09:00:00')
 const MONDAY_7PM = new Date('2026-07-13T19:00:00')
 
 function agenda(p: Partial<TodayPayload> = {}): TodayPayload {
-  return { overdue_tasks: [], due_today_tasks: [], followups: [], objectives: [], ...p }
+  return { overdue_tasks: [], due_today_tasks: [], followups: [], ...p }
 }
 
 function task(title: string): Task {

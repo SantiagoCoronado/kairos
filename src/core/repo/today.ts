@@ -2,7 +2,6 @@ import type { DbDriver } from '../driver'
 import type { TodayPayload, Task } from '../types'
 import { localDate } from '../ids'
 import { followupsDue } from './followups'
-import { listObjectives } from './objectives'
 
 export function todayAgenda(db: DbDriver, now: Date = new Date()): TodayPayload {
   const today = localDate(now)
@@ -21,7 +20,6 @@ export function todayAgenda(db: DbDriver, now: Date = new Date()): TodayPayload 
   return {
     overdue_tasks,
     due_today_tasks,
-    followups: followupsDue(db, now),
-    objectives: listObjectives(db, { status: 'active' })
+    followups: followupsDue(db, now)
   }
 }

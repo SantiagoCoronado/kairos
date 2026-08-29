@@ -9,7 +9,6 @@ import { exportMarkdown } from './markdown'
 import * as people from '../repo/people'
 import * as interactions from '../repo/interactions'
 import * as tasks from '../repo/tasks'
-import * as objectives from '../repo/objectives'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
 
@@ -38,7 +37,7 @@ function snapshot(root: string): Map<string, string> {
 }
 
 describe('markdown export', () => {
-  it('exports people, tasks, objectives and is byte-stable across runs', () => {
+  it('exports people and tasks and is byte-stable across runs', () => {
     const p = people.upsertPerson(
       db,
       { name: 'Anna Martinez', company: 'Acme', cadence_days: 21, notes: 'met at conf' },
@@ -50,18 +49,13 @@ describe('markdown export', () => {
       T0
     )
     tasks.createTask(db, { title: 'Ship deck', area: 'work', due_date: '2026-07-10' }, T0)
-    objectives.createObjective(
-      db,
-      { title: 'Get fit', period: '2026-Q3', key_results: [{ title: 'Run 100km', unit: 'km' }] },
-      T0
-    )
 
     const first = exportMarkdown(db, dir)
-    expect(first.files).toBe(3)
+    expect(first.files).toBe(2)
     const a = snapshot(dir)
 
     const second = exportMarkdown(db, dir)
-    expect(second.files).toBe(3)
+    expect(second.files).toBe(2)
     const b = snapshot(dir)
 
     expect([...b.keys()].sort()).toEqual([...a.keys()].sort())

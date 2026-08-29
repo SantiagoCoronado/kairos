@@ -2544,11 +2544,15 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
 <base target="_blank">
 <style>
   /* the frame is sized to its content and must never scroll on its own — the
-     message pane is the only scroller (two nested scrollbars otherwise) */
-  html { color-scheme: light; overflow: hidden; }
+     message pane is the only scroller (two nested scrollbars otherwise). Only
+     the root clips: any non-visible overflow on <body> (even just overflow-x)
+     makes it a scroll container of its own, and a 2px trailing margin was
+     enough to give it a second scrollbar. !important so an email's reset
+     stylesheet can't reintroduce one. */
+  html { color-scheme: light; overflow: hidden !important; }
   body { margin: 0; padding: 12px; background: #fff; color: #111;
          font: 13px/1.45 -apple-system, system-ui, sans-serif; word-break: break-word;
-         overflow-x: hidden; word-wrap: break-word; }
+         overflow: visible !important; word-wrap: break-word; }
   /* newsletters are fixed-width (600px+) table layouts; squeeze them to the phone */
   table, td, img, video, div { max-width: 100% !important; }
   img { height: auto; }

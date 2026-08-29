@@ -53,7 +53,8 @@ import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
 import { MicButton } from '../components/MicButton'
 import { InviteCard } from '../components/InviteCard'
 import { Linkified } from '../components/Linkify'
-import { clamp, useResizableWidth, ResizeHandle } from '../components/ResizeHandle'
+import { clamp, useResizableWidth, useMeasuredWidth, ResizeHandle } from '../components/ResizeHandle'
+import { fitMax } from '../lib/inbox-columns'
 import { SettingsModal } from '../components/SettingsModal'
 import {
   GmailIcon,
@@ -312,8 +313,20 @@ export function InboxView({
   const [railCollapsed, setRailCollapsed] = useState(
     () => localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'
   )
-  const { width: railW, startResize: startRailResize } = useResizableWidth(RAIL_W_KEY, RAIL_W)
-  const { width: listW, startResize: startListResize } = useResizableWidth(LIST_W_KEY, LIST_W)
+  // the columns yield to the message pane as the window narrows — the list
+  // first, then the rail: both show truncated one-liners and degrade well,
+  // the pane holds a whole email. Maxes cut here rather than in the specs so
+  // a stored width comes back once the window is wide again.
+  const [shellRef, shellW] = useMeasuredWidth<HTMLDivElement>()
+  const { width: railW, startResize: startRailResize } = useResizableWidth(RAIL_W_KEY, {
+    ...RAIL_W,
+    max: fitMax(shellW, LIST_W.min, RAIL_W)
+  })
+  const railSpace = railCollapsed ? 44 : railW
+  const { width: listW, startResize: startListResize } = useResizableWidth(LIST_W_KEY, {
+    ...LIST_W,
+    max: fitMax(shellW, railSpace, LIST_W)
+  })
 
   // debounced: title/snippet LIKE is cheap but body search scans message
   // bodies — don't run either on every keystroke
@@ -730,11 +743,11 @@ export function InboxView({
   }
 
   return (
-    <div className="flex h-full">
+    <div ref={shellRef} className="flex h-full">
       {/* account rail */}
       <div
         className="relative shrink-0 border-r border-border flex flex-col py-2 px-1.5 space-y-0.5"
-        style={{ width: railCollapsed ? 44 : railW }}
+        style={{ width: railSpace }}
       >
         <AccountRow
           active={accountId === null && provider === null}

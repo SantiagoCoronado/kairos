@@ -317,7 +317,7 @@ export function InboxView({
   // first, then the rail: both show truncated one-liners and degrade well,
   // the pane holds a whole email. Maxes cut here rather than in the specs so
   // a stored width comes back once the window is wide again.
-  const [shellRef, shellW] = useMeasuredWidth<HTMLDivElement>()
+  const [shellRef, shellW] = useMeasuredWidth()
   const { width: railW, startResize: startRailResize } = useResizableWidth(RAIL_W_KEY, {
     ...RAIL_W,
     max: fitMax(shellW, LIST_W.min, RAIL_W)

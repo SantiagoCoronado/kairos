@@ -46,6 +46,7 @@ import { api, useInvoke } from '../lib/api'
 import { setCaptureContext, clearCaptureContext } from '../lib/capture-context'
 import { pushUndo } from '../lib/undo'
 import { pendingEchoLanded } from '../lib/pending-echo'
+import { threadScrollTarget, type ThreadScrollKey, type ThreadScrollTarget } from '../lib/thread-scroll'
 import { toast } from '../lib/toast'
 import { IS_REMOTE, useIsMobile } from '../lib/mobile'
 import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
@@ -1714,6 +1715,9 @@ function ThreadPane({
     }
     return map
   }, [threadAttachments])
+  const paneRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const latestRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const archived = thread.is_archived === 1
   const { name, title } = threadLabel(thread)
@@ -1770,9 +1774,66 @@ function ThreadPane({
     })
   }, [messages])
 
+  const scrollKey = useRef<ThreadScrollKey | null>(null)
+  // the last applied target, held while HTML frames and images expand after
+  // the first paint (they all start small — see HtmlBody) and released the
+  // moment the reader scrolls on their own
+  const pinned = useRef<ThreadScrollTarget | null>(null)
+  // set for the scroll event our own scrollTo/scrollIntoView dispatches, so
+  // the release listener can tell it from the reader's
+  const programmatic = useRef(false)
+  const applyScroll = (target: ThreadScrollTarget): void => {
+    programmatic.current = true
+    // the scroll event fires in the next rendering step, before rAF callbacks
+    requestAnimationFrame(() => {
+      programmatic.current = false
+    })
+    if (target === 'bottom') {
+      bottomRef.current?.scrollIntoView()
+    } else if (latestRef.current && latestRef.current !== contentRef.current?.firstElementChild) {
+      latestRef.current.scrollIntoView({ block: 'start' })
+    } else {
+      // a single-message thread reads from the very top, padding included
+      paneRef.current?.scrollTo({ top: 0 })
+    }
+  }
   useEffect(() => {
-    bottomRef.current?.scrollIntoView()
-  }, [messages, pendingSends, thread.id])
+    // ThreadPane is keyed by thread.id, so a fresh mount starts from
+    // undefined and messages always belong to this thread — the guard is
+    // belt and braces against a future un-keyed render
+    if (!messages || (messages.length > 0 && messages[0].thread_id !== thread.id)) return
+    const next: ThreadScrollKey = {
+      threadId: thread.id,
+      newestId: messages[messages.length - 1]?.id ?? '',
+      pendingCount: pendingSends.length
+    }
+    const target = threadScrollTarget(scrollKey.current, next, thread.provider)
+    scrollKey.current = next
+    if (!target) return
+    applyScroll(target)
+    pinned.current = target
+  }, [messages, pendingSends, thread.id, thread.provider])
+  useEffect(() => {
+    const pane = paneRef.current
+    const content = contentRef.current
+    if (!pane || !content) return
+    // release on the pane's own scroll event rather than on wheel/touch/key:
+    // input events inside an HTML email land in the sandboxed frame's
+    // document and never reach the pane — only the scroll they chain into
+    // does. This also catches scrollbar drags and keyboard scrolling.
+    const onScroll = (): void => {
+      if (!programmatic.current) pinned.current = null
+    }
+    pane.addEventListener('scroll', onScroll, { passive: true })
+    const ro = new ResizeObserver(() => {
+      if (pinned.current) applyScroll(pinned.current)
+    })
+    ro.observe(content)
+    return () => {
+      pane.removeEventListener('scroll', onScroll)
+      ro.disconnect()
+    }
+  }, [])
 
   // e = archive, ⌫ = delete (email only — Slack/WhatsApp never delete),
   // u = mark unread + back to list, p = pin/unpin, r = focus the reply box
@@ -1880,37 +1941,42 @@ function ThreadPane({
         )}
         {!onBack && <Chip tone="muted">{thread.provider}</Chip>}
       </div>
-      <div className="fade-in flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
-        {messages?.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            attachments={attachmentsByMessage.get(m.id)}
-            onOpenPerson={onOpenPerson}
-            onOpenCalendar={onOpenCalendar}
-            onForward={setForwardMsg}
-          />
-        ))}
-        {pendingSends.map((p) => (
-          <div key={`pending-${p.key}`} className="max-w-[85%] ml-auto">
-            <div
-              className={cn(
-                'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words',
-                MY_BUBBLE_CLASS,
-                p.state !== 'sent' && 'opacity-70'
-              )}
-            >
-              <Linkified text={p.text} />
+      <div ref={paneRef} className="fade-in flex-1 min-h-0 overflow-y-auto px-4 py-3">
+        {/* one wrapper around everything the pane scrolls, so a single
+            ResizeObserver sees every frame and image growing in */}
+        <div ref={contentRef} className="space-y-3">
+          {messages?.map((m, i) => (
+            <div key={m.id} ref={i === messages.length - 1 ? latestRef : undefined}>
+              <MessageBubble
+                message={m}
+                attachments={attachmentsByMessage.get(m.id)}
+                onOpenPerson={onOpenPerson}
+                onOpenCalendar={onOpenCalendar}
+                onForward={setForwardMsg}
+              />
             </div>
-            {p.state === 'queued' && (
-              <p className="mt-0.5 text-right text-[10.5px] text-faint">sending — ⌘Z to undo</p>
-            )}
-            {p.state === 'committed' && (
-              <p className="mt-0.5 text-right text-[10.5px] text-faint">sending…</p>
-            )}
-          </div>
-        ))}
-        <div ref={bottomRef} />
+          ))}
+          {pendingSends.map((p) => (
+            <div key={`pending-${p.key}`} className="max-w-[85%] ml-auto">
+              <div
+                className={cn(
+                  'rounded-lg px-3 py-2 text-[13px] whitespace-pre-wrap break-words',
+                  MY_BUBBLE_CLASS,
+                  p.state !== 'sent' && 'opacity-70'
+                )}
+              >
+                <Linkified text={p.text} />
+              </div>
+              {p.state === 'queued' && (
+                <p className="mt-0.5 text-right text-[10.5px] text-faint">sending — ⌘Z to undo</p>
+              )}
+              {p.state === 'committed' && (
+                <p className="mt-0.5 text-right text-[10.5px] text-faint">sending…</p>
+              )}
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
       </div>
       <Composer
         thread={thread}
@@ -2453,6 +2519,7 @@ function AttachmentChip({ attachment: a }: { attachment: CommsAttachment }): Rea
 function HtmlBody({ html }: { html: string }): React.JSX.Element {
   const ref = useRef<HTMLIFrameElement>(null)
   const observers = useRef<ResizeObserver[]>([])
+  const wired = useRef<Document | null>(null)
   const [height, setHeight] = useState(120)
   useEffect(() => () => observers.current.forEach((o) => o.disconnect()), [])
 
@@ -2504,13 +2571,21 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
     }
   }
 
-  const onLoad = (): void => {
-    measure()
-    // images may finish after the load event; settle once more
-    setTimeout(measure, 500)
+  // Hook the srcdoc document up (first measurement, growth observers, link
+  // intercept) as soon as it exists. The frame's load event is too late: it
+  // waits for every <img> in the email, so a newsletter with slow or dead
+  // images sat at the 120px placeholder for seconds and then jumped. The
+  // srcdoc navigation commits asynchronously — until then contentDocument
+  // is the initial about:blank, which has a body of its own.
+  const wire = (stale: Document | null = null): boolean => {
     const frame = ref.current
     const cdoc = frame?.contentDocument
-    if (!frame || !cdoc?.body) return
+    if (!frame || !cdoc?.body || cdoc.URL !== 'about:srcdoc') return false
+    // a new srcdoc on a mounted frame: the previous document stays in place
+    // until the navigation commits — keep polling past it
+    if (cdoc === stale) return false
+    if (wired.current === cdoc) return true
+    wired.current = cdoc
     // keep the height honest as images stream in and the pane is resized —
     // a stale height is what brings the frame's own scrollbar back
     observers.current.forEach((o) => o.disconnect())
@@ -2526,15 +2601,36 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
         window.open(a.href) // routed to the system browser by the main process
       }
     })
+    measure()
+    return true
+  }
+  useEffect(() => {
+    let raf = 0
+    const stale = wired.current
+    const tick = (): void => {
+      if (!wire(stale)) raf = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc])
+
+  const onLoad = (): void => {
+    wire()
+    measure()
+    // images may finish after the load event; settle once more
+    setTimeout(measure, 500)
   }
 
+  // no loading="lazy": the wiring above polls until the document exists, and
+  // a deferred frame would keep that poll alive for as long as it stayed
+  // below the fold
   return (
     <iframe
       ref={ref}
       sandbox="allow-same-origin"
       srcDoc={doc}
       onLoad={onLoad}
-      loading="lazy"
       style={{ height }}
       className="w-full block"
       title="email"

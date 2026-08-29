@@ -1775,11 +1775,19 @@ function ThreadPane({
   }, [messages])
 
   const scrollKey = useRef<ThreadScrollKey | null>(null)
-  // the opening target, held while HTML frames and images expand after the
-  // first paint (they all start small — see HtmlBody) and released the moment
-  // the reader scrolls on their own
+  // the last applied target, held while HTML frames and images expand after
+  // the first paint (they all start small — see HtmlBody) and released the
+  // moment the reader scrolls on their own
   const pinned = useRef<ThreadScrollTarget | null>(null)
+  // set for the scroll event our own scrollTo/scrollIntoView dispatches, so
+  // the release listener can tell it from the reader's
+  const programmatic = useRef(false)
   const applyScroll = (target: ThreadScrollTarget): void => {
+    programmatic.current = true
+    // the scroll event fires in the next rendering step, before rAF callbacks
+    requestAnimationFrame(() => {
+      programmatic.current = false
+    })
     if (target === 'bottom') {
       bottomRef.current?.scrollIntoView()
     } else if (latestRef.current && latestRef.current !== contentRef.current?.firstElementChild) {
@@ -1790,8 +1798,9 @@ function ThreadPane({
     }
   }
   useEffect(() => {
-    // useInvoke keeps the previous thread's messages until the new fetch
-    // lands — never scroll (or record a key) against another thread's data
+    // ThreadPane is keyed by thread.id, so a fresh mount starts from
+    // undefined and messages always belong to this thread — the guard is
+    // belt and braces against a future un-keyed render
     if (!messages || (messages.length > 0 && messages[0].thread_id !== thread.id)) return
     const next: ThreadScrollKey = {
       threadId: thread.id,
@@ -1799,29 +1808,29 @@ function ThreadPane({
       pendingCount: pendingSends.length
     }
     const target = threadScrollTarget(scrollKey.current, next, thread.provider)
-    const opening = scrollKey.current?.threadId !== thread.id
     scrollKey.current = next
     if (!target) return
     applyScroll(target)
-    if (opening) pinned.current = target
+    pinned.current = target
   }, [messages, pendingSends, thread.id, thread.provider])
   useEffect(() => {
     const pane = paneRef.current
     const content = contentRef.current
     if (!pane || !content) return
-    const release = (): void => {
-      pinned.current = null
+    // release on the pane's own scroll event rather than on wheel/touch/key:
+    // input events inside an HTML email land in the sandboxed frame's
+    // document and never reach the pane — only the scroll they chain into
+    // does. This also catches scrollbar drags and keyboard scrolling.
+    const onScroll = (): void => {
+      if (!programmatic.current) pinned.current = null
     }
-    const events = ['wheel', 'touchstart', 'pointerdown'] as const
-    for (const ev of events) pane.addEventListener(ev, release, { passive: true })
-    window.addEventListener('keydown', release)
+    pane.addEventListener('scroll', onScroll, { passive: true })
     const ro = new ResizeObserver(() => {
       if (pinned.current) applyScroll(pinned.current)
     })
     ro.observe(content)
     return () => {
-      for (const ev of events) pane.removeEventListener(ev, release)
-      window.removeEventListener('keydown', release)
+      pane.removeEventListener('scroll', onScroll)
       ro.disconnect()
     }
   }, [])
@@ -2568,10 +2577,13 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
   // images sat at the 120px placeholder for seconds and then jumped. The
   // srcdoc navigation commits asynchronously — until then contentDocument
   // is the initial about:blank, which has a body of its own.
-  const wire = (): boolean => {
+  const wire = (stale: Document | null = null): boolean => {
     const frame = ref.current
     const cdoc = frame?.contentDocument
     if (!frame || !cdoc?.body || cdoc.URL !== 'about:srcdoc') return false
+    // a new srcdoc on a mounted frame: the previous document stays in place
+    // until the navigation commits — keep polling past it
+    if (cdoc === stale) return false
     if (wired.current === cdoc) return true
     wired.current = cdoc
     // keep the height honest as images stream in and the pane is resized —
@@ -2594,8 +2606,9 @@ function HtmlBody({ html }: { html: string }): React.JSX.Element {
   }
   useEffect(() => {
     let raf = 0
+    const stale = wired.current
     const tick = (): void => {
-      if (!wire()) raf = requestAnimationFrame(tick)
+      if (!wire(stale)) raf = requestAnimationFrame(tick)
     }
     tick()
     return () => cancelAnimationFrame(raf)

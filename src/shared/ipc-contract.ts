@@ -6,7 +6,6 @@ import type {
   TaskFilter,
   NewTask,
   TaskPatch,
-  KrPatch,
   Project,
   NewProject,
   ProjectStatus,
@@ -17,11 +16,6 @@ import type {
   Interaction,
   NewInteraction,
   FollowupDue,
-  ObjectiveWithKRs,
-  NewObjective,
-  ObjectivePatch,
-  ObjectiveStatus,
-  KeyResult,
   TodayPayload,
   PendingPayload,
   Note,
@@ -159,29 +153,6 @@ export interface IpcApi {
   'followups:statuses': () => FollowupDue[]
   'followups:snooze': (personId: string, untilDate: string) => void
   'followups:clearSnooze': (personId: string) => void
-
-  'objectives:list': (f: {
-    period?: string
-    area?: Area
-    status?: ObjectiveStatus
-  }) => ObjectiveWithKRs[]
-  'objectives:create': (input: NewObjective) => ObjectiveWithKRs
-  'objectives:update': (id: string, patch: ObjectivePatch) => ObjectiveWithKRs
-  'objectives:delete': (id: string) => void
-  /** place an objective before another in manual order (null = move to end) */
-  'objectives:reorder': (id: string, beforeId: string | null) => void
-  /** distinct periods present in the DB, newest first */
-  'objectives:periods': () => string[]
-  'krs:add': (
-    objectiveId: string,
-    kr: { title: string; unit?: string; start_value?: number; target_value?: number }
-  ) => KeyResult
-  'krs:update': (id: string, patch: KrPatch) => KeyResult
-  'krs:updateProgress': (id: string, value: number) => KeyResult
-  'krs:delete': (id: string) => void
-  'krs:linkTask': (krId: string, taskId: string) => void
-  'krs:unlinkTask': (krId: string, taskId: string) => void
-  'krs:tasks': (krId: string) => Task[]
 
   'today:get': () => TodayPayload
 
@@ -675,7 +646,6 @@ export type NavView =
   | 'people'
   | 'tasks'
   | 'notes'
-  | 'objectives'
   | 'automations'
   | 'calendar'
   | 'meetings'

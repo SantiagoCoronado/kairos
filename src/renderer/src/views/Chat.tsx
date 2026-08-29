@@ -535,7 +535,7 @@ export function ChatView({
                 ? 'Drop files to attach'
                 : mobile
                   ? 'Ask anything…'
-                  : 'Ask about your people, tasks, objectives… (Shift+Enter for a new line)'
+                  : 'Ask about your people, tasks, mail… (Shift+Enter for a new line)'
             }
             className="flex-1 max-h-44 resize-none overflow-y-auto bg-transparent py-1 text-[13px] text-text placeholder:text-faint focus:outline-none"
           />

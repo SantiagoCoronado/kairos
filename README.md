@@ -1,15 +1,14 @@
 # Kairos
 
-Kairos — the opportune moment. A local-first macOS command center: personal CRM, task management, and OKR-style
-objectives for both personal life and work. Dark, keyboard-driven, one SQLite
+Kairos — the opportune moment. A local-first macOS command center: personal CRM and task
+management for both personal life and work. Dark, keyboard-driven, one SQLite
 file you own. Claude is an optional layer — the app is fully usable without it.
 
 ## What's inside
 
-- **Today** — overdue + due-today tasks, follow-ups due, objective progress, today's calendar
+- **Today** — overdue + due-today tasks, follow-ups due, today's calendar
 - **People** — contacts with follow-up cadences ("ping every 21 days"), interaction log, snooze
 - **Tasks** — projects, areas (personal/work), priorities, due dates
-- **Objectives** — quarterly OKRs with key results, progress bars, linked tasks
 - **⌘K** — command palette: navigate, create tasks/people, jump to a person, export
 - **Alt+Space** — global quick capture from anywhere: `ship the deck @work !1 due:fri`, `p Anna had coffee`
 - **Export** — one-way Markdown mirror at `~/Kairos/export/` (Obsidian/git friendly)
@@ -20,10 +19,10 @@ Data lives in `~/Kairos/data.db` (SQLite, WAL). Settings in
 ## Claude integration (both optional)
 
 1. **In-app chat** (Chat tab) — a Claude agent with tools over your data
-   (log interactions, plan your week, review objectives). Uses your
+   (log interactions, plan your week, triage mail). Uses your
    `claude login` subscription; never an API key.
 2. **From terminal agents — Claude Code, Codex, anything MCP** — a standalone
-   stdio server exposing the same 18 tools:
+   stdio server exposing the same tools:
 
    ```sh
    npm run mcp:install   # builds + registers with Claude Code (user scope)

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Sun, Users, CheckSquare, Target, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Bell, AudioLines } from 'lucide-react'
+import { Sun, Users, CheckSquare, Sparkles, Settings, PanelLeft, Inbox, StickyNote, Bot, Terminal, CalendarDays, Bell, AudioLines } from 'lucide-react'
 import { SettingsModal } from './SettingsModal'
 import { useResizableWidth, ResizeHandle } from './ResizeHandle'
 import { useInvoke } from '../lib/api'
@@ -14,7 +14,6 @@ export type ViewId =
   | 'notes'
   | 'calendar'
   | 'meetings'
-  | 'objectives'
   | 'automations'
   | 'chat'
   | 'terminal'
@@ -44,10 +43,10 @@ export function SidebarToggle({
 const SIDEBAR_W_KEY = 'kairos.sidebar.w'
 const SIDEBAR_W = { def: 208, min: 160, max: 320 }
 
-/** ⌘1–⌘9 slots (drives App's key handler AND the tooltips here). Pending is
- *  deliberately appended, not inserted at its sidebar position: the
- *  long-standing slots (⌘2 Inbox, ⌘3 People, …) keep their muscle memory,
- *  and anything past ⌘9 simply has no shortcut. */
+/** ⌘1–⌘9 slots (drives App's key handler AND the tooltips here). Not in
+ *  sidebar order: the long-standing slots (⌘2 Inbox, ⌘3 People, …) keep their
+ *  muscle memory, so new views take whatever slot is free — Pending inherited
+ *  ⌘7 when Objectives was retired — and anything past ⌘9 has no shortcut. */
 export const VIEW_ORDER: ViewId[] = [
   'today',
   'inbox',
@@ -55,11 +54,10 @@ export const VIEW_ORDER: ViewId[] = [
   'tasks',
   'notes',
   'calendar',
-  'objectives',
+  'pending',
   'automations',
   'chat',
   'terminal',
-  'pending',
   'meetings'
 ]
 
@@ -72,7 +70,6 @@ const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'notes', label: 'Notes', icon: StickyNote },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'meetings', label: 'Meetings', icon: AudioLines },
-  { id: 'objectives', label: 'Objectives', icon: Target },
   { id: 'automations', label: 'Automations', icon: Bot },
   { id: 'chat', label: 'Chat', icon: Sparkles },
   { id: 'terminal', label: 'Terminal', icon: Terminal }

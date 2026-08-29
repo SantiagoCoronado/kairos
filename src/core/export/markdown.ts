@@ -1,12 +1,11 @@
 import { mkdirSync, rmSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DbDriver } from '../driver'
-import type { Person, Interaction, Task, Project, ObjectiveWithKRs } from '../types'
+import type { Person, Interaction, Task, Project } from '../types'
 import { listPeople } from '../repo/people'
 import { listInteractions } from '../repo/interactions'
 import { listTasks } from '../repo/tasks'
 import { listProjects } from '../repo/projects'
-import { listObjectives } from '../repo/objectives'
 
 // One-way export: SQLite is the source of truth, these files are a readable
 // backup (Obsidian/git friendly). Regenerated wholesale; never read back.
@@ -14,7 +13,7 @@ import { listObjectives } from '../repo/objectives'
 
 export function exportMarkdown(db: DbDriver, outDir: string): { files: number } {
   let files = 0
-  for (const sub of ['people', 'tasks', 'objectives']) {
+  for (const sub of ['people', 'tasks']) {
     rmSync(join(outDir, sub), { recursive: true, force: true })
     mkdirSync(join(outDir, sub), { recursive: true })
   }
@@ -34,10 +33,6 @@ export function exportMarkdown(db: DbDriver, outDir: string): { files: number } 
   const projects = listProjects(db)
   const tasks = listTasks(db)
   write(join('tasks', 'tasks.md'), tasksMd(tasks, projects))
-
-  for (const o of listObjectives(db)) {
-    write(join('objectives', fileSlug(`${o.period} ${o.title}`, o.id)), objectiveMd(o))
-  }
 
   return { files }
 }
@@ -102,25 +97,5 @@ function tasksMd(tasks: Task[], projects: Project[]): string {
 
   if (open.length) md += `\n## Open\n\n${open.map(line).join('\n')}\n`
   if (done.length) md += `\n## Done\n\n${done.map(line).join('\n')}\n`
-  return md
-}
-
-function objectiveMd(o: ObjectiveWithKRs): string {
-  let md = fm([
-    ['id', o.id],
-    ['period', o.period],
-    ['area', o.area],
-    ['status', o.status],
-    ['progress', `${Math.round(o.progress * 100)}%`],
-    ['updated_at', o.updated_at]
-  ])
-  md += `\n# ${o.title}\n`
-  if (o.description) md += `\n${o.description}\n`
-  if (o.key_results.length) {
-    md += `\n## Key results\n\n`
-    for (const kr of o.key_results) {
-      md += `- ${kr.title}: ${kr.current_value} / ${kr.target_value}${kr.unit ? ` ${kr.unit}` : ''}\n`
-    }
-  }
   return md
 }

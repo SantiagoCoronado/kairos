@@ -12,7 +12,6 @@ Decisions made 2026-08-06:
 - **Sources in scope:** overdue/due-today tasks, followups due, note reminders
   due, unread/action-needed comms threads, failed/queued outbox sends, errored
   meetings, unseen finished agent runs, calendar invites needing RSVP.
-  Out of scope: stale objectives/KRs (no staleness concept exists; not inventing one now).
 - **Surface:** new `Pending` view. Today stays the calm daily briefing.
 - **No notification history.** The inbox shows current pending state only;
   resolved items disappear. Existing notification call sites keep firing as today.

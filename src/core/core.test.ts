@@ -7,7 +7,6 @@ import * as interactions from './repo/interactions'
 import * as followups from './repo/followups'
 import * as tasks from './repo/tasks'
 import * as projects from './repo/projects'
-import * as objectives from './repo/objectives'
 import { todayAgenda } from './repo/today'
 
 // Tests run on the node:sqlite adapter (plain-Node ABI). The better-sqlite3
@@ -271,107 +270,6 @@ describe('followup cadence math (injected clock)', () => {
     const p = people.upsertPerson(db, { name: 'Archived', cadence_days: 1 }, daysAgo(100))
     people.archivePerson(db, p.id, T0)
     expect(followups.followupsDue(db, T0)).toHaveLength(0)
-  })
-})
-
-describe('objectives', () => {
-  it('computes progress across KRs, clamped', () => {
-    const o = objectives.createObjective(
-      db,
-      {
-        title: 'Get fit',
-        period: '2026-Q3',
-        key_results: [
-          { title: 'Run 100km', unit: 'km', target_value: 100 },
-          { title: 'Weight 80->75', start_value: 80, target_value: 75 }
-        ]
-      },
-      T0
-    )
-    expect(o.progress).toBe(0)
-    objectives.updateKrProgress(db, o.key_results[0].id, 50, T0) // 50%
-    objectives.updateKrProgress(db, o.key_results[1].id, 74, T0) // >100% -> clamped to 1
-    const after = objectives.getObjective(db, o.id)!
-    expect(after.progress).toBeCloseTo(0.75)
-  })
-
-  it('links tasks to KRs both ways', () => {
-    const o = objectives.createObjective(
-      db,
-      { title: 'x', period: '2026-Q3', key_results: [{ title: 'kr' }] },
-      T0
-    )
-    const t = tasks.createTask(db, { title: 'related work' }, T0)
-    objectives.linkTaskToKr(db, t.id, o.key_results[0].id)
-    expect(objectives.tasksForKr(db, o.key_results[0].id)).toHaveLength(1)
-    expect(objectives.krsForTask(db, t.id)).toHaveLength(1)
-    // idempotent link
-    objectives.linkTaskToKr(db, t.id, o.key_results[0].id)
-    expect(objectives.tasksForKr(db, o.key_results[0].id)).toHaveLength(1)
-  })
-
-  it('deleteObjective cascades KRs and task links, leaves tasks intact', () => {
-    const o = objectives.createObjective(
-      db,
-      { title: 'x', period: '2026-Q3', key_results: [{ title: 'kr' }] },
-      T0
-    )
-    const t = tasks.createTask(db, { title: 'linked work' }, T0)
-    objectives.linkTaskToKr(db, t.id, o.key_results[0].id)
-
-    objectives.deleteObjective(db, o.id)
-    expect(objectives.getObjective(db, o.id)).toBeUndefined()
-    expect(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM key_results')?.n).toBe(0)
-    expect(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM task_key_results')?.n).toBe(0)
-    expect(tasks.getTask(db, t.id)).toBeDefined()
-  })
-
-  it('updateKeyResult patches fields and recomputes progress; deleteKeyResult removes', () => {
-    const o = objectives.createObjective(
-      db,
-      { title: 'x', period: '2026-Q3', key_results: [{ title: 'kr', target_value: 100 }] },
-      T0
-    )
-    const kr = objectives.updateKeyResult(
-      db,
-      o.key_results[0].id,
-      { title: 'renamed', target_value: 50, unit: 'pts', current_value: 25 },
-      T0
-    )
-    expect(kr.title).toBe('renamed')
-    expect(kr.target_value).toBe(50)
-    expect(kr.unit).toBe('pts')
-    expect(objectives.getObjective(db, o.id)!.progress).toBeCloseTo(0.5)
-    expect(() => objectives.updateKeyResult(db, 'nope', { title: 'x' }, T0)).toThrow()
-
-    objectives.deleteKeyResult(db, kr.id)
-    expect(objectives.getObjective(db, o.id)!.key_results).toHaveLength(0)
-  })
-
-  it('unlinkTaskFromKr removes only the link', () => {
-    const o = objectives.createObjective(
-      db,
-      { title: 'x', period: '2026-Q3', key_results: [{ title: 'kr' }] },
-      T0
-    )
-    const t = tasks.createTask(db, { title: 'work' }, T0)
-    objectives.linkTaskToKr(db, t.id, o.key_results[0].id)
-    objectives.unlinkTaskFromKr(db, t.id, o.key_results[0].id)
-    expect(objectives.tasksForKr(db, o.key_results[0].id)).toHaveLength(0)
-    expect(tasks.getTask(db, t.id)).toBeDefined()
-  })
-
-  it('listPeriods is distinct and newest-first; moveObjectiveBefore reorders within a period', () => {
-    const a = objectives.createObjective(db, { title: 'a', period: '2026-Q3' }, T0)
-    const b = objectives.createObjective(db, { title: 'b', period: '2026-Q3' }, T0)
-    objectives.createObjective(db, { title: 'old', period: '2026-Q1' }, T0)
-    expect(objectives.listPeriods(db)).toEqual(['2026-Q3', '2026-Q1'])
-
-    expect(objectives.listObjectives(db).map((o) => o.title)).toEqual(['a', 'b', 'old'])
-    objectives.moveObjectiveBefore(db, b.id, a.id, T0)
-    expect(objectives.listObjectives(db).map((o) => o.title)).toEqual(['b', 'a', 'old'])
-    objectives.moveObjectiveBefore(db, b.id, null, T0)
-    expect(objectives.listObjectives(db).map((o) => o.title)).toEqual(['a', 'b', 'old'])
   })
 })
 

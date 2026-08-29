@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { DbDriver } from './driver'
 import { openNodeSqliteDb } from './drivers/node-sqlite'
-import { migrate, migrations, applyMigration } from './migrations'
+import { migrate, applyMigration } from './migrations'
 import * as cal from './repo/calendar'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
@@ -497,8 +497,10 @@ describe('migration 024: stripped-attendees repair', () => {
     cal.setCalendarSyncToken(db, calendarId, 'tok-1', T0)
     expect(cal.getCalendar(db, calendarId)!.sync_token).toBe('tok-1')
 
-    // re-run the repair by index (fresh DBs already ran it inside migrate())
-    applyMigration(db, migrations.length - 1)
+    // re-run the repair by its literal index — migration 024 (fresh DBs
+    // already ran it inside migrate()); never `migrations.length - 1`, which
+    // silently points at whatever migration was appended last
+    applyMigration(db, 23)
     expect(cal.getCalendar(db, calendarId)!.sync_token).toBeNull()
   })
 })

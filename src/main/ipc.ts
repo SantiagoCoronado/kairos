@@ -22,7 +22,6 @@ import * as projects from '../core/repo/projects'
 import * as people from '../core/repo/people'
 import * as interactions from '../core/repo/interactions'
 import * as followups from '../core/repo/followups'
-import * as objectives from '../core/repo/objectives'
 import { todayAgenda } from '../core/repo/today'
 import {
   pendingItems,
@@ -415,56 +414,6 @@ export function registerIpc(): void {
     people.clearSnooze(db, personId)
     broadcast('db:changed', { entity: 'people' })
   })
-
-  handle('objectives:list', (f) => objectives.listObjectives(db, f))
-  handle('objectives:create', (input) => {
-    const o = objectives.createObjective(db, input)
-    broadcast('db:changed', { entity: 'objectives' })
-    return o
-  })
-  handle('objectives:update', (id, patch) => {
-    const o = objectives.updateObjective(db, id, patch)
-    broadcast('db:changed', { entity: 'objectives' })
-    return o
-  })
-  handle('objectives:delete', (id) => {
-    objectives.deleteObjective(db, id)
-    broadcast('db:changed', { entity: 'objectives' })
-    broadcast('db:changed', { entity: 'tasks' }) // task-KR links cascade
-  })
-  handle('objectives:reorder', (id, beforeId) => {
-    objectives.moveObjectiveBefore(db, id, beforeId)
-    broadcast('db:changed', { entity: 'objectives' })
-  })
-  handle('objectives:periods', () => objectives.listPeriods(db))
-  handle('krs:add', (objectiveId, kr) => {
-    const k = objectives.addKeyResult(db, objectiveId, kr)
-    broadcast('db:changed', { entity: 'objectives' })
-    return k
-  })
-  handle('krs:update', (id, patch) => {
-    const k = objectives.updateKeyResult(db, id, patch)
-    broadcast('db:changed', { entity: 'objectives' })
-    return k
-  })
-  handle('krs:updateProgress', (id, value) => {
-    const k = objectives.updateKrProgress(db, id, value)
-    broadcast('db:changed', { entity: 'objectives' })
-    return k
-  })
-  handle('krs:delete', (id) => {
-    objectives.deleteKeyResult(db, id)
-    broadcast('db:changed', { entity: 'objectives' })
-  })
-  handle('krs:linkTask', (krId, taskId) => {
-    objectives.linkTaskToKr(db, taskId, krId)
-    broadcast('db:changed', { entity: 'objectives' })
-  })
-  handle('krs:unlinkTask', (krId, taskId) => {
-    objectives.unlinkTaskFromKr(db, taskId, krId)
-    broadcast('db:changed', { entity: 'objectives' })
-  })
-  handle('krs:tasks', (krId) => objectives.tasksForKr(db, krId))
 
   handle('today:get', () => todayAgenda(db))
 

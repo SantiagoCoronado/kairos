@@ -10,7 +10,6 @@ import { Chip, cn } from '../components/ui'
 import { PushBell } from '../components/PushBell'
 import { MicButton } from '../components/MicButton'
 import { SummaryModal } from '../components/meeting/SummaryModal'
-import { ProgressBar } from './Objectives'
 
 export function TodayView({
   onOpenPerson
@@ -20,7 +19,7 @@ export function TodayView({
   const { data: agenda } = useInvoke(
     'today:get',
     [],
-    ['tasks', 'people', 'interactions', 'objectives']
+    ['tasks', 'people', 'interactions']
   )
   const { data: calendar } = useInvoke('calendar:today', [], [])
   const { data: settings } = useInvoke('settings:get', [], ['settings'])
@@ -217,24 +216,6 @@ export function TodayView({
               )}
             </>
           )}
-        </Section>
-      )}
-
-      {agenda && agenda.objectives.length > 0 && (
-        <Section title="objectives">
-          <div className="space-y-2.5 pt-1">
-            {agenda.objectives.map((o) => (
-              <div key={o.id} className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-[12.5px]">{o.title}</span>
-                  <span className="font-mono text-[10.5px] text-faint">
-                    {Math.round(o.progress * 100)}%
-                  </span>
-                </div>
-                <ProgressBar value={o.progress} thin />
-              </div>
-            ))}
-          </div>
         </Section>
       )}
     </div>

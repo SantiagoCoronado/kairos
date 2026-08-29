@@ -22,7 +22,7 @@ Data lives in `~/Kairos/data.db` (SQLite, WAL). Settings in
    (log interactions, plan your week, triage mail). Uses your
    `claude login` subscription; never an API key.
 2. **From terminal agents — Claude Code, Codex, anything MCP** — a standalone
-   stdio server exposing the same 18 tools:
+   stdio server exposing the same tools:
 
    ```sh
    npm run mcp:install   # builds + registers with Claude Code (user scope)

@@ -49,12 +49,13 @@ import { pendingEchoLanded } from '../lib/pending-echo'
 import { threadScrollTarget, type ThreadScrollKey, type ThreadScrollTarget } from '../lib/thread-scroll'
 import { toast } from '../lib/toast'
 import { IS_REMOTE, useIsMobile } from '../lib/mobile'
-import { Input, Button, Chip, EmptyState, cn } from '../components/ui'
+import { Input, Button, Chip, EmptyState, Select, cn } from '../components/ui'
 import { MicButton } from '../components/MicButton'
 import { InviteCard } from '../components/InviteCard'
 import { Linkified } from '../components/Linkify'
 import { clamp, useResizableWidth, useMeasuredWidth, ResizeHandle } from '../components/ResizeHandle'
 import { fitMax } from '../lib/inbox-columns'
+import { gmailAccounts, defaultComposeAccount } from '../lib/compose-from'
 import { SettingsModal } from '../components/SettingsModal'
 import {
   GmailIcon,
@@ -387,6 +388,9 @@ export function InboxView({
 
   const selectedAccount = accounts?.find((a) => a.id === accountId) ?? null
   const thread = displayThreads?.find((t) => t.id === threadId) ?? null
+  // a new email can start from anywhere — All inboxes, a Slack account — as
+  // long as some Gmail account can send it; the pane picks the From
+  const gmail = useMemo(() => gmailAccounts(accounts), [accounts])
 
   // keep selection valid when the thread leaves both the list and the held snapshot
   useEffect(() => {
@@ -590,7 +594,7 @@ export function InboxView({
       } else if (e.key === '/') {
         e.preventDefault()
         document.getElementById('inbox-search')?.focus()
-      } else if (e.key === 'c' && selectedAccount?.provider === 'gmail') {
+      } else if (e.key === 'c' && gmail.length > 0) {
         e.preventDefault()
         setComposeDraft(null)
         setMode('compose')
@@ -598,7 +602,7 @@ export function InboxView({
     }
     window.addEventListener('keydown', down)
     return () => window.removeEventListener('keydown', down)
-  }, [displayThreads, threadId, mode, selectedAccount])
+  }, [displayThreads, threadId, mode, gmail])
 
   const dropAccount = (draggedId: string, target: CommsAccount, edge: 'before' | 'after'): void => {
     if (!accounts || draggedId === target.id) return
@@ -843,7 +847,7 @@ export function InboxView({
                 <SlidersHorizontal size={11} /> Channels
               </button>
             )}
-            {selectedAccount?.provider === 'gmail' && (
+            {gmail.length > 0 && (
               <button
                 onClick={() => {
                   if (mode !== 'compose') setComposeDraft(null)
@@ -916,10 +920,13 @@ export function InboxView({
 
       {/* message pane */}
       <div className="flex-1 min-w-0 flex flex-col">
-        {mode === 'compose' && selectedAccount ? (
+        {mode === 'compose' && gmail.length > 0 ? (
           <ComposePane
             key={composeDraft ? `draft-${composeDraft.nonce}` : 'blank'}
-            account={selectedAccount}
+            accounts={gmail}
+            defaultAccountId={
+              defaultComposeAccount(gmail, accountId, thread?.account_id ?? null)?.id ?? gmail[0].id
+            }
             draft={composeDraft?.draft ?? null}
             onSent={() => setMode('threads')}
             onUndoRestore={(d) => {
@@ -3251,20 +3258,28 @@ function Composer({
   )
 }
 
-type ComposeDraft = { to: string; subject: string; body: string }
+type ComposeDraft = { accountId: string; to: string; subject: string; body: string }
 
 function ComposePane({
-  account,
+  accounts,
+  defaultAccountId,
   draft,
   onSent,
   onUndoRestore
 }: {
-  account: CommsAccount
+  /** Gmail accounts that can send; the From picker lists them */
+  accounts: CommsAccount[]
+  defaultAccountId: string
   /** restored fields from an undone send */
   draft?: ComposeDraft | null
   onSent: () => void
   onUndoRestore: (d: ComposeDraft) => void
 }): React.JSX.Element {
+  // a restored draft keeps its From unless that account has since been removed
+  const [accountId, setAccountId] = useState(
+    draft && accounts.some((a) => a.id === draft.accountId) ? draft.accountId : defaultAccountId
+  )
+  const account = accounts.find((a) => a.id === accountId) ?? accounts[0]
   const [to, setTo] = useState(draft?.to ?? '')
   const [subject, setSubject] = useState(draft?.subject ?? '')
   const [body, setBody] = useState(draft?.body ?? '')
@@ -3272,7 +3287,7 @@ function ComposePane({
 
   /** deferred behind the undo window — ⌘Z reopens the pane with the draft */
   const send = (): void => {
-    const d = { to, subject, body }
+    const d = { accountId: account.id, to, subject, body }
     pushUndo({
       label: 'Email sent',
       commit: () => {
@@ -3299,9 +3314,26 @@ function ComposePane({
 
   return (
     <div className="p-4 space-y-2 max-w-2xl">
-      <p className="font-mono text-[10px] uppercase tracking-wider text-faint">
-        new email · {account.display_name}
-      </p>
+      {accounts.length > 1 ? (
+        <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-faint">
+          <span className="shrink-0">new email · from</span>
+          <Select
+            className="font-sans normal-case tracking-normal"
+            value={account.id}
+            onChange={(e) => setAccountId(e.target.value)}
+          >
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.display_name} · {a.external_id}
+              </option>
+            ))}
+          </Select>
+        </label>
+      ) : (
+        <p className="font-mono text-[10px] uppercase tracking-wider text-faint">
+          new email · {account.display_name}
+        </p>
+      )}
       <Input
         className="w-full"
         placeholder="To (comma-separated)"

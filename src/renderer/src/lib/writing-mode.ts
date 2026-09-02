@@ -47,6 +47,32 @@ export function isWritingShortcut(e: {
   return (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'e'
 }
 
+/**
+ * Whether the mode may enter on its own right now. `armed` is cleared by a
+ * manual exit (toggle, chevron, Escape) so the fold never fights the user,
+ * and set again once the message is sent or another composer opens.
+ */
+export function autoEnterWriting(o: {
+  enabled: boolean
+  armed: boolean
+  active: boolean
+  hasComposer: boolean
+  mobile: boolean
+}): boolean {
+  return o.enabled && o.armed && !o.active && o.hasComposer && !o.mobile
+}
+
+/** Roughly how many lines `body` takes in a box `cols` characters wide. */
+export function approxLines(body: string, cols: number): number {
+  return body.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / cols)), 0)
+}
+
+/** The new-email body has no auto-grow to read, so "past two lines" is
+ *  estimated from the text at the pane's typical ~90 characters a line. */
+export function longEnoughForWriting(body: string): boolean {
+  return approxLines(body, 90) > 2
+}
+
 /** Escape leaves writing mode only from an empty box — with text in it,
  *  Escape keeps its old job (blur) and the draft keeps its room. */
 export function escapeExitsWriting(active: boolean, body: string): boolean {

@@ -264,6 +264,17 @@ function InboxSection({ settings, save }: SectionProps): React.JSX.Element {
           className="accent-accent w-4 h-4 shrink-0"
         />
       </Row>
+      <Row
+        label="writing mode after two lines"
+        hint="Fold the columns on their own once a reply or new email runs past two lines. ⌘⇧E still toggles by hand, and a manual exit holds until the next message."
+      >
+        <input
+          type="checkbox"
+          checked={settings.inboxAutoWriting}
+          onChange={(e) => save({ inboxAutoWriting: e.target.checked })}
+          className="accent-accent w-4 h-4 shrink-0"
+        />
+      </Row>
 
       <Row
         label="message notifications"

@@ -64,6 +64,8 @@ import {
   writingActive,
   isWritingShortcut,
   escapeExitsWriting,
+  autoEnterWriting,
+  longEnoughForWriting,
   useMorphing
 } from '../lib/writing-mode'
 import { gmailAccounts, defaultComposeAccount } from '../lib/compose-from'
@@ -285,8 +287,11 @@ function threadLabel(t: CommsThreadListItem): { name: string | null; title: stri
 type WritingMode = {
   active: boolean
   toggle: () => void
-  /** leave the mode for good — after a send, or Escape from an empty box */
-  exit: () => void
+  /** leave the mode — 'send' re-arms auto-entry for the next message, a
+   *  'user' exit (Escape from an empty box) holds it off */
+  exit: (reason: 'send' | 'user') => void
+  /** the composer has run past two lines — fold if allowed right now */
+  autoEnter: () => void
 }
 
 export function InboxView({
@@ -426,10 +431,33 @@ export function InboxView({
     setWritingPref(on)
     writeWritingPref(on)
   }
+  // auto-entry (settings) is armed per composer: a manual exit disarms it
+  // so the fold never fights the user; a send or another composer re-arms
+  const { data: settings } = useInvoke('settings:get', [], ['settings'])
+  const [autoArmed, setAutoArmed] = useState(true)
+  useEffect(() => setAutoArmed(true), [threadId, mode])
+  const toggleWriting = (): void => {
+    const next = !writingPref
+    setWriting(next)
+    if (!next) setAutoArmed(false)
+  }
   const writingMode: WritingMode = {
     active: writing,
-    toggle: () => setWriting(!writingPref),
-    exit: () => setWriting(false)
+    toggle: toggleWriting,
+    exit: (reason) => {
+      setWriting(false)
+      setAutoArmed(reason === 'send')
+    },
+    autoEnter: () => {
+      const ok = autoEnterWriting({
+        enabled: settings?.inboxAutoWriting ?? true,
+        armed: autoArmed,
+        active: writing,
+        hasComposer,
+        mobile
+      })
+      if (ok) setWriting(true)
+    }
   }
   // the sidebar is hidden for the fold's duration and put back only if the
   // fold was what hid it — one the user hid with ⌘B stays hidden
@@ -455,10 +483,11 @@ export function InboxView({
     const down = (e: KeyboardEvent): void => {
       if (!isWritingShortcut(e) || !hasComposer || mobile) return
       e.preventDefault()
-      setWriting(!writingPref)
+      toggleWriting()
     }
     window.addEventListener('keydown', down)
     return () => window.removeEventListener('keydown', down)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasComposer, mobile, writingPref])
 
   // keep selection valid when the thread leaves both the list and the held snapshot
@@ -1019,6 +1048,7 @@ export function InboxView({
             onSent={() => {
               setMode('threads')
               setWriting(false)
+              setAutoArmed(true)
             }}
             onUndoRestore={(d) => {
               setComposeDraft((prev) => ({ draft: d, nonce: (prev?.nonce ?? 0) + 1 }))
@@ -3225,8 +3255,16 @@ function Composer({
   // writing mode opens the box into a taller, softer surface; the rows and
   // padding change its floor, so the auto-grow refits on the flip
   const open = writing?.active ?? false
-  useAutoGrow(boxRef, body, open)
+  const { grown } = useAutoGrow(boxRef, body, open)
   const morphing = useMorphing(open)
+  // a third line has begun: fold the columns if auto-entry allows it now.
+  // Read through a ref so the effect keys on `grown` alone, not on the
+  // writing object InboxView rebuilds every render.
+  const writingRef = useRef(writing)
+  writingRef.current = writing
+  useEffect(() => {
+    if (grown) writingRef.current?.autoEnter()
+  }, [grown])
 
   useEffect(() => {
     const merge = (text: string): void =>
@@ -3251,7 +3289,7 @@ function Composer({
     // ⌘Z must reach the undo layer, not the textarea's native text undo
     document.getElementById('inbox-reply')?.blur()
     // the long email is written; give the columns back
-    writing?.exit()
+    writing?.exit('send')
     const pending = addPending(text)
     // the draft must survive a failed send, wherever the user is now — and an
     // IPC rejection must not strand a "⌘Z to undo" bubble the stack no longer
@@ -3356,7 +3394,7 @@ function Composer({
               // would read the same Escape as "close the thread" and drop
               // the draft with it
               e.stopPropagation()
-              if (writing && escapeExitsWriting(writing.active, body)) writing.exit()
+              if (writing && escapeExitsWriting(writing.active, body)) writing.exit('user')
               ;(e.target as HTMLTextAreaElement).blur()
             }
           }}
@@ -3486,13 +3524,20 @@ function ComposePane({
       // same guard as the reply box: the blurred field must not let the
       // window handler close the pane on the same keystroke
       e.stopPropagation()
-      writing.exit()
+      writing.exit('user')
       ;(e.target as HTMLElement).blur()
     }
   }
 
   const open = writing?.active ?? false
   const morphing = useMorphing(open)
+  // no auto-grow to read here — estimate the lines from the text
+  const writingRef = useRef(writing)
+  writingRef.current = writing
+  const long = longEnoughForWriting(body)
+  useEffect(() => {
+    if (long) writingRef.current?.autoEnter()
+  }, [long])
 
   return (
     // full-height column so the body takes every row the pane has

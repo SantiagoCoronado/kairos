@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, useState, type RefObject } from 'react'
 
 /** Share of the message pane the reply box may take before it scrolls inside. */
 export const COMPOSER_CAP_FRACTION = 0.45
@@ -31,13 +31,16 @@ export function autoGrowHeight(
  * `[data-pane]` ancestor's height, then scrolls inside. Re-fits whenever
  * `value` changes (typing, dictation, an AI draft, an undo restore) and
  * whenever the pane is resized — the columns yielding, the window shrinking.
+ * Returns `grown`: the text has outgrown the rows= floor, i.e. with two
+ * rows a third line has begun — what writing mode's auto-entry listens for.
  */
 export function useAutoGrow(
   ref: RefObject<HTMLTextAreaElement | null>,
   value: string,
   /** anything else that changes the box's floor — its rows= or padding */
   layoutKey?: unknown
-): void {
+): { grown: boolean } {
+  const [grown, setGrown] = useState(false)
   const fit = useCallback((): void => {
     const el = ref.current
     if (!el) return
@@ -55,6 +58,7 @@ export function useAutoGrow(
       floor,
       composerCap(pane?.clientHeight ?? window.innerHeight, floor)
     )
+    setGrown(el.scrollHeight + borders > floor)
     // the measuring read above flushed style with height:auto, and
     // auto → <length> never interpolates: put the previous length back and
     // flush once more so the before-change style is a length again. Only
@@ -76,4 +80,5 @@ export function useAutoGrow(
     ro.observe(pane)
     return () => ro.disconnect()
   }, [ref, fit])
+  return { grown }
 }

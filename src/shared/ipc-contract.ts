@@ -466,6 +466,10 @@ export interface AppSettings {
   showClaudeUsage: boolean
   /** background email auto-labeling (haiku batches via the Claude Code login) */
   autoLabel: boolean
+  /** fold the Inbox columns on their own once a reply or new email runs
+   *  past two lines; ⌘⇧E stays manual, and a manual exit holds until the
+   *  next message */
+  inboxAutoWriting: boolean
   /** native notifications for new messages: DMs + action-needed email
    *  ('important'), everything ('all'), or never ('off') */
   notifyInbox: 'off' | 'important' | 'all'

@@ -3336,8 +3336,11 @@ function Composer({
           ref={boxRef}
           id="inbox-reply"
           className={cn(
-            'flex-1 bg-raised border border-border text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none t-morph-box',
-            open ? 'rounded-xl px-4 py-3' : 'rounded-md px-2.5 py-1.5'
+            'bg-raised border border-border text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none t-morph-box',
+            // open: the row is a column, and a flex-1 item there would let
+            // flex sizing own the height — the auto-grow and the morph both
+            // write `height`, so the box must be a plain full-width block
+            open ? 'w-full rounded-xl px-4 py-3' : 'flex-1 rounded-md px-2.5 py-1.5'
           )}
           rows={open ? 5 : 2}
           placeholder={mobile ? 'Reply…' : 'Reply… ⌘↩ to send'}
@@ -3494,7 +3497,7 @@ function ComposePane({
   return (
     // full-height column so the body takes every row the pane has
     <div
-      className={cn('p-4 flex flex-col gap-2 h-full w-full max-w-4xl t-morph', morphing && 'is-morphing')}
+      className={cn('p-4 flex flex-col gap-2 flex-1 min-h-0 w-full max-w-4xl t-morph', morphing && 'is-morphing')}
       data-open={open}
       onKeyDown={sendKey}
     >

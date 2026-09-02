@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { escapeExitsWriting, isWritingShortcut, writingActive } from './src/lib/writing-mode'
+import { cssTimeToMs, escapeExitsWriting, isWritingShortcut, writingActive } from './src/lib/writing-mode'
 
 describe('writingActive', () => {
   it('folds only while a composer is on screen', () => {
@@ -58,5 +58,21 @@ describe('escapeExitsWriting', () => {
 
   it('is a no-op outside the mode', () => {
     expect(escapeExitsWriting(false, '')).toBe(false)
+  })
+})
+
+describe('cssTimeToMs', () => {
+  it('reads the minified seconds form the build emits', () => {
+    expect(cssTimeToMs('.35s', 0)).toBe(350)
+    expect(cssTimeToMs('0.25s', 0)).toBe(250)
+  })
+
+  it('reads milliseconds, with the whitespace getPropertyValue keeps', () => {
+    expect(cssTimeToMs(' 350ms', 0)).toBe(350)
+  })
+
+  it('falls back when the token is missing or not a time', () => {
+    expect(cssTimeToMs('', 350)).toBe(350)
+    expect(cssTimeToMs('fast', 350)).toBe(350)
   })
 })

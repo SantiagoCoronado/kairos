@@ -54,6 +54,17 @@ export function escapeExitsWriting(active: boolean, body: string): boolean {
 }
 
 /**
+ * A CSS <time> as milliseconds. The build minifies `350ms` to `.35s`, so
+ * a bare parseFloat would read 0.35 and end the morph on the next tick.
+ */
+export function cssTimeToMs(raw: string, fallback: number): number {
+  const m = raw.trim().match(/^(-?\d*\.?\d+)(ms|s)$/i)
+  if (!m) return fallback
+  const n = Number(m[1])
+  return m[2].toLowerCase() === 's' ? n * 1000 : n
+}
+
+/**
  * True for one morph's duration after `active` flips, so the composer can
  * tween its height for the mode change and nowhere else — the box also
  * grows with every typed line, and that must stay instant. Set during the
@@ -63,6 +74,10 @@ export function escapeExitsWriting(active: boolean, body: string): boolean {
 export function useMorphing(active: boolean): boolean {
   const prev = useRef(active)
   const [morphing, setMorphing] = useState(false)
+  // deliberate setState during render (React's derived-state escape hatch):
+  // an effect would land a frame late, after the layout effect has already
+  // written the new height with no transition class on the box. The ref
+  // guard makes it a one-shot, so StrictMode's double render is harmless.
   if (prev.current !== active) {
     prev.current = active
     setMorphing(true)
@@ -73,8 +88,7 @@ export function useMorphing(active: boolean): boolean {
     const raw = getComputedStyle(document.documentElement).getPropertyValue(
       active ? '--morph-open-dur' : '--morph-close-dur'
     )
-    const ms = Number.parseFloat(raw) || 350
-    const t = setTimeout(() => setMorphing(false), ms)
+    const t = setTimeout(() => setMorphing(false), cssTimeToMs(raw, 350))
     return () => clearTimeout(t)
   }, [morphing, active])
   return morphing

@@ -364,6 +364,33 @@ textarea,
   transform: scale(var(--icon-swap-start-scale));
 }
 
+/* Compose button → new-email pane (View Transitions, lib/view-transition.ts).
+   Only the named pair moves; the rest of the page swaps in place. The two
+   snapshots keep their natural size and are clipped by the group's box as
+   it tweens, so the pane's content is revealed the way the morph recipe's
+   menu is. Open on the bouncy ease, close on the smooth one. Reduced
+   motion never starts the transition, so no guard is needed here. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+::view-transition-group(compose) {
+  animation-duration: var(--morph-open-dur);
+  animation-timing-function: var(--morph-ease);
+}
+html.vt-closing::view-transition-group(compose) {
+  animation-duration: var(--morph-close-dur);
+  animation-timing-function: var(--morph-close-ease);
+}
+::view-transition-old(compose),
+::view-transition-new(compose) {
+  animation-duration: var(--morph-fade-dur);
+  width: 100%;
+  height: 100%;
+  object-fit: none;
+  object-position: top left;
+}
+
 /* every tokenised motion is zeroed here — the writing-mode recipes and the
    older thread-pane entrance and row fold they were refined onto */
 @media (prefers-reduced-motion: reduce) {

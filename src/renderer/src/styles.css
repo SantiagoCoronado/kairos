@@ -364,14 +364,18 @@ textarea,
   transform: scale(var(--icon-swap-start-scale));
 }
 
+/* every tokenised motion is zeroed here — the writing-mode recipes and the
+   older thread-pane entrance and row fold they were refined onto */
 @media (prefers-reduced-motion: reduce) {
   .t-fold,
   .t-fold-inner,
   .t-morph-box,
-  .t-icon-swap .t-icon {
+  .t-icon-swap .t-icon,
+  .thread-row {
     transition: none !important;
   }
-  .t-morph.is-morphing .t-morph-toolbar {
+  .t-morph.is-morphing .t-morph-toolbar,
+  .fade-in {
     animation: none !important;
   }
 }

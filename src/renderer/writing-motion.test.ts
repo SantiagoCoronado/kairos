@@ -74,12 +74,12 @@ describe('composer morph', () => {
 describe('reduced motion', () => {
   const guard = css.slice(css.lastIndexOf('@media (prefers-reduced-motion: reduce)'))
 
-  it('zeroes every writing-mode transition and animation', () => {
-    for (const sel of ['.t-fold', '.t-fold-inner', '.t-morph-box', '.t-icon-swap .t-icon']) {
+  it('zeroes every tokenised transition and animation', () => {
+    for (const sel of ['.t-fold', '.t-fold-inner', '.t-morph-box', '.t-icon-swap .t-icon', '.thread-row']) {
       expect(guard, sel).toContain(sel)
     }
     expect(guard).toMatch(/transition: none !important/)
-    expect(guard).toMatch(/\.t-morph\.is-morphing \.t-morph-toolbar\s*\{\s*animation: none !important/)
+    expect(guard).toMatch(/\.t-morph\.is-morphing \.t-morph-toolbar,\s*\.fade-in\s*\{\s*animation: none !important/)
   })
 })
 

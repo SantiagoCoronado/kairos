@@ -205,7 +205,16 @@ export default function App(): React.JSX.Element {
   const commonViews = (
     <>
       {view === 'today' && <TodayView onOpenPerson={openPerson} />}
-      {view === 'inbox' && <InboxView onOpenPerson={openPerson} onOpenCalendar={openCalendarAt} />}
+      {view === 'inbox' && (
+        <InboxView
+          onOpenPerson={openPerson}
+          onOpenCalendar={openCalendarAt}
+          sidebarHidden={sidebarHidden}
+          // writing mode hides the sidebar for its own duration; the stored
+          // ⌘B preference is left alone so it comes back on the next launch
+          setSidebarHidden={setSidebarHidden}
+        />
+      )}
       {view === 'people' && <PeopleView selectedId={personId} onSelect={setPersonId} />}
       {view === 'notes' && <NotesView onOpenSession={openChatSession} />}
       {view === 'calendar' && <CalendarView onNavigate={setView} focusDate={calendarFocus} />}

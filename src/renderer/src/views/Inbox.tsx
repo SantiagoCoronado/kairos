@@ -14,6 +14,8 @@ import {
   ArchiveRestore,
   PanelLeftClose,
   PanelLeftOpen,
+  Maximize2,
+  Minimize2,
   Paperclip,
   Pin,
   Check,
@@ -56,6 +58,13 @@ import { Linkified } from '../components/Linkify'
 import { clamp, useResizableWidth, useMeasuredWidth, ResizeHandle } from '../components/ResizeHandle'
 import { fitMax } from '../lib/inbox-columns'
 import { useAutoGrow } from '../lib/autogrow'
+import {
+  readWritingPref,
+  writeWritingPref,
+  writingActive,
+  isWritingShortcut,
+  escapeExitsWriting
+} from '../lib/writing-mode'
 import { gmailAccounts, defaultComposeAccount } from '../lib/compose-from'
 import { SettingsModal } from '../components/SettingsModal'
 import {
@@ -271,12 +280,25 @@ function threadLabel(t: CommsThreadListItem): { name: string | null; title: stri
   return { name: t.person_name, title: t.title || '(untitled)' }
 }
 
+/** Writing mode as the composers see it (see lib/writing-mode.ts). */
+type WritingMode = {
+  active: boolean
+  toggle: () => void
+  /** leave the mode for good — after a send, or Escape from an empty box */
+  exit: () => void
+}
+
 export function InboxView({
   onOpenPerson,
-  onOpenCalendar
+  onOpenCalendar,
+  sidebarHidden,
+  setSidebarHidden
 }: {
   onOpenPerson?: (id: string) => void
   onOpenCalendar?: (day: Date) => void
+  /** the app sidebar, owned by App — writing mode borrows it */
+  sidebarHidden: boolean
+  setSidebarHidden: (hidden: boolean) => void
 }): React.JSX.Element {
   const mobile = useIsMobile()
   const [accountId, setAccountId] = useState<string | null>(null)
@@ -392,6 +414,51 @@ export function InboxView({
   // a new email can start from anywhere — All inboxes, a Slack account — as
   // long as some Gmail account can send it; the pane picks the From
   const gmail = useMemo(() => gmailAccounts(accounts), [accounts])
+
+  // writing mode: the preference lives for the session; the fold itself only
+  // while a composer is on screen, so closing a thread unfolds the columns
+  // and opening the next one folds them again
+  const [writingPref, setWritingPref] = useState(readWritingPref)
+  const hasComposer = mode === 'compose' ? gmail.length > 0 : thread !== null
+  const writing = writingActive(writingPref, hasComposer, mobile)
+  const setWriting = (on: boolean): void => {
+    setWritingPref(on)
+    writeWritingPref(on)
+  }
+  const writingMode: WritingMode = {
+    active: writing,
+    toggle: () => setWriting(!writingPref),
+    exit: () => setWriting(false)
+  }
+  // the sidebar is hidden for the fold's duration and put back only if the
+  // fold was what hid it — one the user hid with ⌘B stays hidden
+  const hidSidebar = useRef(false)
+  useEffect(() => {
+    if (!writing) return
+    if (!sidebarHidden) {
+      hidSidebar.current = true
+      setSidebarHidden(true)
+    }
+    return () => {
+      if (hidSidebar.current) {
+        hidSidebar.current = false
+        setSidebarHidden(false)
+      }
+    }
+    // sidebarHidden is read on entry only: a ⌘B mid-fold must not re-run this
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [writing])
+  // leaving the Inbox (⌘1–⌘9) ends the mode rather than ambushing the next visit
+  useEffect(() => () => writeWritingPref(false), [])
+  useEffect(() => {
+    const down = (e: KeyboardEvent): void => {
+      if (!isWritingShortcut(e) || !hasComposer || mobile) return
+      e.preventDefault()
+      setWriting(!writingPref)
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  }, [hasComposer, mobile, writingPref])
 
   // keep selection valid when the thread leaves both the list and the held snapshot
   useEffect(() => {
@@ -749,10 +816,13 @@ export function InboxView({
 
   return (
     <div ref={shellRef} className="flex h-full">
-      {/* account rail */}
+      {/* account rail — folded to nothing in writing mode */}
       <div
-        className="relative shrink-0 border-r border-border flex flex-col py-2 px-1.5 space-y-0.5"
-        style={{ width: railSpace }}
+        className={cn(
+          'relative shrink-0 flex flex-col space-y-0.5 overflow-hidden',
+          writing ? 'p-0' : 'border-r border-border py-2 px-1.5'
+        )}
+        style={{ width: writing ? 0 : railSpace }}
       >
         <AccountRow
           active={accountId === null && provider === null}
@@ -813,11 +883,17 @@ export function InboxView({
             {railCollapsed ? <PanelLeftOpen size={13} /> : <PanelLeftClose size={13} />}
           </button>
         </div>
-        {!railCollapsed && <ResizeHandle onMouseDown={startRailResize} />}
+        {!railCollapsed && !writing && <ResizeHandle onMouseDown={startRailResize} />}
       </div>
 
-      {/* thread list / channel manager */}
-      <div className="relative shrink-0 border-r border-border flex flex-col" style={{ width: listW }}>
+      {/* thread list / channel manager — folded to nothing in writing mode */}
+      <div
+        className={cn(
+          'relative shrink-0 flex flex-col overflow-hidden',
+          !writing && 'border-r border-border'
+        )}
+        style={{ width: writing ? 0 : listW }}
+      >
         <div className="p-3 space-y-2 border-b border-border">
           <Input
             id="inbox-search"
@@ -916,7 +992,7 @@ export function InboxView({
             </>
           )}
         </div>
-        <ResizeHandle onMouseDown={startListResize} />
+        {!writing && <ResizeHandle onMouseDown={startListResize} />}
       </div>
 
       {/* message pane */}
@@ -929,7 +1005,11 @@ export function InboxView({
               defaultComposeAccount(gmail, accountId, thread?.account_id ?? null)?.id ?? gmail[0].id
             }
             draft={composeDraft?.draft ?? null}
-            onSent={() => setMode('threads')}
+            writing={writingMode}
+            onSent={() => {
+              setMode('threads')
+              setWriting(false)
+            }}
             onUndoRestore={(d) => {
               setComposeDraft((prev) => ({ draft: d, nonce: (prev?.nonce ?? 0) + 1 }))
               setMode('compose')
@@ -946,6 +1026,7 @@ export function InboxView({
             onDelete={() => deleteThread(thread)}
             onMarkUnread={() => markUnread(thread)}
             onTogglePin={() => togglePin(thread)}
+            writing={writingMode}
           />
         ) : (
           <EmptyState>Select a conversation.</EmptyState>
@@ -1692,7 +1773,8 @@ function ThreadPane({
   onDelete,
   onMarkUnread,
   onTogglePin,
-  onBack
+  onBack,
+  writing
 }: {
   thread: CommsThreadListItem
   /** the account's own address (gmail) — needed for the open-in-Gmail deep link */
@@ -1707,6 +1789,8 @@ function ThreadPane({
   /** mobile: the pane is the whole screen — render a back button (also
    *  signals touch-sized targets throughout the header) */
   onBack?: () => void
+  /** desktop: fold/unfold the columns around the pane */
+  writing?: WritingMode
 }): React.JSX.Element {
   const { data: messages } = useInvoke('comms:messages', [thread.id], ['comms'])
   const { data: threadAttachments } = useInvoke('comms:threadAttachments', [thread.id], ['comms'])
@@ -1894,6 +1978,15 @@ function ThreadPane({
             <ChevronLeft size={20} />
           </button>
         )}
+        {!onBack && writing?.active && (
+          <button
+            onClick={writing.toggle}
+            title="Show the columns (⌘⇧E)"
+            className="shrink-0 -ml-1.5 h-6 w-6 rounded flex items-center justify-center text-muted hover:text-text hover:bg-raised"
+          >
+            <PanelLeftOpen size={14} />
+          </button>
+        )}
         <span className="text-[13.5px] font-medium truncate flex-1">
           {thread.person_id && onOpenPerson ? (
             <>
@@ -2007,6 +2100,7 @@ function ThreadPane({
         markPendingCommitted={markPendingCommitted}
         markPendingSent={markPendingSent}
         removePending={removePending}
+        writing={writing}
       />
       {forwardMsg && (
         <ForwardModal
@@ -3098,7 +3192,8 @@ function Composer({
   addPending,
   markPendingCommitted,
   markPendingSent,
-  removePending
+  removePending,
+  writing
 }: {
   thread: CommsThread
   /** optimistic sent-bubble lifecycle, owned by ThreadPane */
@@ -3106,6 +3201,7 @@ function Composer({
   markPendingCommitted: (key: number) => void
   markPendingSent: (key: number) => void
   removePending: (key: number) => void
+  writing?: WritingMode
 }): React.JSX.Element {
   const mobile = useIsMobile()
   const [body, setBody] = useState('')
@@ -3140,6 +3236,8 @@ function Composer({
     setError(null)
     // ⌘Z must reach the undo layer, not the textarea's native text undo
     document.getElementById('inbox-reply')?.blur()
+    // the long email is written; give the columns back
+    writing?.exit()
     const pending = addPending(text)
     // the draft must survive a failed send, wherever the user is now — and an
     // IPC rejection must not strand a "⌘Z to undo" bubble the stack no longer
@@ -3229,9 +3327,17 @@ function Composer({
               e.preventDefault()
               send()
             }
-            if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur()
+            if (e.key === 'Escape') {
+              // blur only: once the box has lost focus the window handler
+              // would read the same Escape as "close the thread" and drop
+              // the draft with it
+              e.stopPropagation()
+              if (writing && escapeExitsWriting(writing.active, body)) writing.exit()
+              ;(e.target as HTMLTextAreaElement).blur()
+            }
           }}
         />
+        {writing && !mobile && <WritingToggle writing={writing} />}
         {settings?.elevenLabsApiKey && (
           <MicButton
             size={14}
@@ -3264,12 +3370,31 @@ function Composer({
   )
 }
 
+/** Fold / unfold the columns around the composer. */
+function WritingToggle({ writing }: { writing: WritingMode }): React.JSX.Element {
+  return (
+    <button
+      onClick={writing.toggle}
+      title={writing.active ? 'Show the columns (⌘⇧E)' : 'Writing mode — fold the columns (⌘⇧E)'}
+      className={cn(
+        'shrink-0 h-8 w-8 rounded-md border flex items-center justify-center transition-colors',
+        writing.active
+          ? 'bg-accent/15 border-accent/40 text-accent'
+          : 'border-border text-muted hover:text-text'
+      )}
+    >
+      {writing.active ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+    </button>
+  )
+}
+
 type ComposeDraft = { accountId: string; to: string; subject: string; body: string }
 
 function ComposePane({
   accounts,
   defaultAccountId,
   draft,
+  writing,
   onSent,
   onUndoRestore
 }: {
@@ -3278,6 +3403,7 @@ function ComposePane({
   defaultAccountId: string
   /** restored fields from an undone send */
   draft?: ComposeDraft | null
+  writing?: WritingMode
   onSent: () => void
   onUndoRestore: (d: ComposeDraft) => void
 }): React.JSX.Element {
@@ -3320,11 +3446,19 @@ function ComposePane({
     onSent()
   }
 
-  // ⌘↩ sends from any field, same as the reply box
+  // ⌘↩ sends from any field, same as the reply box; Escape from an empty
+  // body gives the columns back
   const sendKey = (e: React.KeyboardEvent): void => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
       send()
+    }
+    if (e.key === 'Escape' && writing && escapeExitsWriting(writing.active, body)) {
+      // same guard as the reply box: the blurred field must not let the
+      // window handler close the pane on the same keystroke
+      e.stopPropagation()
+      writing.exit()
+      ;(e.target as HTMLElement).blur()
     }
   }
 
@@ -3370,6 +3504,7 @@ function ComposePane({
         onChange={(e) => setBody(e.target.value)}
       />
       <div className="flex justify-end items-center gap-2 shrink-0">
+        {writing && <WritingToggle writing={writing} />}
         {settings?.elevenLabsApiKey && (
           <MicButton
             size={14}

@@ -43,24 +43,6 @@ export function SidebarToggle({
 const SIDEBAR_W_KEY = 'kairos.sidebar.w'
 const SIDEBAR_W = { def: 208, min: 160, max: 320 }
 
-/** ⌘1–⌘9 slots (drives App's key handler AND the tooltips here). Not in
- *  sidebar order: the long-standing slots (⌘2 Inbox, ⌘3 People, …) keep their
- *  muscle memory, so new views take whatever slot is free — Pending inherited
- *  ⌘7 when Objectives was retired — and anything past ⌘9 has no shortcut. */
-export const VIEW_ORDER: ViewId[] = [
-  'today',
-  'inbox',
-  'people',
-  'tasks',
-  'notes',
-  'calendar',
-  'pending',
-  'automations',
-  'chat',
-  'terminal',
-  'meetings'
-]
-
 const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'today', label: 'Today', icon: Sun },
   { id: 'pending', label: 'Pending', icon: Bell },
@@ -74,6 +56,47 @@ const NAV: { id: ViewId; label: string; icon: typeof Sun }[] = [
   { id: 'chat', label: 'Chat', icon: Sparkles },
   { id: 'terminal', label: 'Terminal', icon: Terminal }
 ]
+
+/** ⌘1–⌘9 follow sidebar order: slot N is the Nth entry of NAV, so reordering
+ *  or inserting a sidebar entry reassigns the shortcuts with it (App's key
+ *  handler and the hints below both read this). Entries past the ninth have
+ *  no shortcut. Hold ⌘ for a second to see the numbers in the sidebar. */
+export const VIEW_ORDER: ViewId[] = NAV.map((n) => n.id)
+export const SHORTCUT_SLOTS = 9
+const HINT_HOLD_MS = 1000
+
+/** True once ⌘ (or Ctrl) has been held for HINT_HOLD_MS. Clears on release
+ *  and on window blur — ⌘-Tab away, or a ⌘-drag out of the window, never
+ *  delivers the keyup, so blur is the only reliable end signal there. */
+function useModifierHeld(): boolean {
+  const [held, setHeld] = useState(false)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const clear = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = null
+      setHeld(false)
+    }
+    const isModifier = (e: KeyboardEvent): boolean => e.key === 'Meta' || e.key === 'Control'
+    const down = (e: KeyboardEvent): void => {
+      if (!isModifier(e) || e.repeat || timer) return
+      timer = setTimeout(() => setHeld(true), HINT_HOLD_MS)
+    }
+    const up = (e: KeyboardEvent): void => {
+      if (isModifier(e)) clear()
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', clear)
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
+  return held
+}
 
 export function Sidebar({
   view,
@@ -119,6 +142,7 @@ export function Sidebar({
   const { data: termAttention } = useInvoke('terminal:attentionCount', [], ['terminal'], terminalOk)
   const nav = terminalOk ? NAV : NAV.filter((n) => n.id !== 'terminal')
   const { width, startResize } = useResizableWidth(SIDEBAR_W_KEY, SIDEBAR_W)
+  const showSlots = useModifierHeld()
   return (
     <aside
       className="relative shrink-0 border-r border-border surface-sidebar flex flex-col select-none"
@@ -131,11 +155,12 @@ export function Sidebar({
       <nav className="flex-1 px-2 py-2 space-y-0.5">
         {nav.map(({ id, label, icon: Icon }) => {
           const slot = VIEW_ORDER.indexOf(id)
+          const hasSlot = slot >= 0 && slot < SHORTCUT_SLOTS
           return (
           <button
             key={id}
             onClick={() => onNavigate(id)}
-            title={slot >= 0 && slot < 9 ? `${label} (⌘${slot + 1})` : label}
+            title={hasSlot ? `${label} (⌘${slot + 1})` : label}
             className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-left transition-colors ${
               view === id ? 'bg-raised text-text' : 'text-muted hover:text-text hover:bg-raised/50'
             }`}
@@ -189,6 +214,16 @@ export function Sidebar({
               >
                 {termAttention! > 99 ? '99+' : termAttention}
               </span>
+            )}
+            {hasSlot && (
+              <kbd
+                aria-hidden
+                className={`font-mono text-[10px] tabular-nums text-faint transition-opacity duration-150 ${
+                  showSlots ? 'opacity-100' : 'opacity-0'
+                }`}
+              >
+                ⌘{slot + 1}
+              </kbd>
             )}
           </button>
           )

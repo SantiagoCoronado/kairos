@@ -619,6 +619,171 @@ export function deleteThread(db: DbDriver, threadId: string): void {
   db.run('DELETE FROM comms_threads WHERE id = ?', threadId)
 }
 
+/** Re-key a thread (WhatsApp: a lid-keyed chat learns its phone jid). */
+export function setThreadExternalId(
+  db: DbDriver,
+  threadId: string,
+  externalId: string,
+  now: Date = new Date()
+): void {
+  db.run(
+    'UPDATE comms_threads SET external_id = ?, updated_at = ? WHERE id = ?',
+    externalId,
+    nowIso(now),
+    threadId
+  )
+}
+
+/**
+ * Fold `fromId` into `intoId` — the same WhatsApp chat keyed two ways (phone
+ * jid vs lid). Messages and queued sends move over; local flags survive
+ * (pinned if either was, archived only if both were, labels unioned); a real
+ * title beats a placeholder; snippet / last_message_at come from the newest
+ * message the survivor now holds; unread counts add; a pending-inbox
+ * dismissal/snooze on the absorbed thread carries over when the survivor has
+ * none. The absorbed thread is deleted. Returns the message count moved.
+ */
+export function mergeThreads(db: DbDriver, fromId: string, intoId: string, now: Date = new Date()): number {
+  if (fromId === intoId) return 0
+  return db.transaction(() => {
+    const from = getThread(db, fromId)
+    const into = getThread(db, intoId)
+    if (!from || !into) return 0
+    const moved = db.run('UPDATE comms_messages SET thread_id = ? WHERE thread_id = ?', intoId, fromId).changes
+    db.run('UPDATE comms_outbox SET thread_id = ? WHERE thread_id = ?', intoId, fromId)
+    db.run(
+      `UPDATE pending_overlay SET item_key = ? WHERE item_key = ?
+         AND NOT EXISTS (SELECT 1 FROM pending_overlay WHERE item_key = ?)`,
+      `thread:${intoId}`,
+      `thread:${fromId}`,
+      `thread:${intoId}`
+    )
+    db.run('DELETE FROM pending_overlay WHERE item_key = ?', `thread:${fromId}`)
+    const labels = new Set<string>()
+    for (const l of `${into.labels},${from.labels}`.split(',')) if (l) labels.add(l)
+    const title = isPlaceholderTitle(into.title) && !isPlaceholderTitle(from.title) ? from.title : into.title
+    // ids are ULIDs: the tiebreak on same-second messages is insertion order
+    const newest = db.get<{ sent_at: string; body_text: string }>(
+      'SELECT sent_at, body_text FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT 1',
+      intoId
+    )
+    db.run(
+      `UPDATE comms_threads SET
+         title = ?, labels = ?, pinned = ?, is_archived = ?,
+         unread_count = ?, last_message_at = ?, snippet = ?,
+         notify_eval_at = ?, updated_at = ?
+       WHERE id = ?`,
+      title,
+      [...labels].join(','),
+      into.pinned || from.pinned ? 1 : 0,
+      into.is_archived && from.is_archived ? 1 : 0,
+      into.unread_count + from.unread_count,
+      newest?.sent_at ?? into.last_message_at ?? from.last_message_at,
+      newest ? newest.body_text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN) : into.snippet,
+      [into.notify_eval_at, from.notify_eval_at].filter(Boolean).sort().pop() ?? null,
+      nowIso(now),
+      intoId
+    )
+    db.run('DELETE FROM comms_threads WHERE id = ?', fromId)
+    return moved
+  })
+}
+
+export interface FoldResult {
+  action: 'merged' | 'rekeyed' | 'none'
+  /** the surviving thread (undefined for 'none') */
+  threadId?: string
+  /** messages that changed thread ('merged') or key ('rekeyed') */
+  messages: number
+  /** inbound rows whose sender handle moved to the phone digits */
+  handles: number
+}
+
+/**
+ * A WhatsApp thread keyed by `lidJid` becomes the `pnJid` thread, atomically:
+ * merged into an existing phone thread, or re-keyed in place (id, pins and
+ * labels survive). Inbound sender handles switch to the phone digits so the
+ * rows link to People. A placeholder title becomes `title` when given, else
+ * the number — a lid could only ever be titled 'WhatsApp chat'.
+ */
+export function foldLidThread(
+  db: DbDriver,
+  accountId: string,
+  lidJid: string,
+  pnJid: string,
+  title?: string,
+  now: Date = new Date()
+): FoldResult {
+  return db.transaction(() => {
+    const lidThread = getThreadByExternal(db, accountId, lidJid)
+    if (!lidThread) return { action: 'none', messages: 0, handles: 0 }
+    const pnThread = getThreadByExternal(db, accountId, pnJid)
+    let action: FoldResult['action']
+    let messages: number
+    if (pnThread) {
+      action = 'merged'
+      messages = mergeThreads(db, lidThread.id, pnThread.id, now)
+    } else {
+      action = 'rekeyed'
+      setThreadExternalId(db, lidThread.id, pnJid, now)
+      messages = db.get<{ n: number }>('SELECT COUNT(*) n FROM comms_messages WHERE thread_id = ?', lidThread.id)!.n
+    }
+    const lidUser = lidJid.split('@')[0]
+    const pnUser = pnJid.split('@')[0]
+    const handles = replaceSenderHandle(db, accountId, 'whatsapp', lidUser, pnUser, now)
+    const survivor = getThreadByExternal(db, accountId, pnJid)!
+    if (isPlaceholderTitle(survivor.title)) setThreadTitle(db, survivor.id, title || `+${pnUser}`, now)
+    return { action, threadId: survivor.id, messages, handles }
+  })
+}
+
+/**
+ * Inbound sender handles that may still be lid digits — the lid→phone handle
+ * sweep's candidates. A handle that keys a phone-jid thread of the account is
+ * a phone number and is left out: asking the store about `<phone>@lid` is a
+ * miss today, but a collision with a real lid would rewrite genuine phone
+ * handles onto another number, account-wide.
+ */
+export function listInboundSenderHandles(db: DbDriver, accountId: string): string[] {
+  return db
+    .all<{ sender_handle: string }>(
+      `SELECT DISTINCT m.sender_handle FROM comms_messages m
+       WHERE m.account_id = ? AND m.is_me = 0 AND m.sender_handle != ''
+         AND NOT EXISTS (SELECT 1 FROM comms_threads t
+                         WHERE t.account_id = m.account_id
+                           AND t.external_id = m.sender_handle || '@s.whatsapp.net')`,
+      accountId
+    )
+    .map((r) => r.sender_handle)
+}
+
+/**
+ * Re-key an account's inbound messages from one sender handle to another
+ * (WhatsApp: lid digits → phone digits) and link them to whoever the new
+ * handle resolves to. Returns rows changed.
+ */
+export function replaceSenderHandle(
+  db: DbDriver,
+  accountId: string,
+  provider: CommsProvider,
+  from: string,
+  to: string,
+  now: Date = new Date()
+): number {
+  if (!from || !to || from === to) return 0
+  return db.transaction(() => {
+    const personId = resolvePersonForHandle(db, provider, to, now)
+    return db.run(
+      `UPDATE comms_messages SET sender_handle = ?, person_id = COALESCE(person_id, ?)
+       WHERE account_id = ? AND sender_handle = ? AND is_me = 0`,
+      to,
+      personId,
+      accountId,
+      from
+    ).changes
+  })
+}
+
 /**
  * Fill body_html on an already-synced message that predates HTML capture —
  * re-syncs skip existing rows, so this is the only path that upgrades them.

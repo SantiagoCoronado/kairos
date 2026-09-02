@@ -3,7 +3,7 @@
 // Electron code; better-sqlite3 is the adapter there.
 import type { StatementSync } from 'node:sqlite'
 import type { DbDriver, SqlValue, RunResult } from '../driver'
-import { OPEN_PRAGMAS, runTransaction } from '../driver'
+import { OPEN_PRAGMAS, makeTransaction } from '../driver'
 
 // process.getBuiltinModule instead of a static import: esbuild (tsup) does
 // not recognize the node:sqlite builtin and rewrites the specifier to a
@@ -33,7 +33,7 @@ export function openNodeSqliteDb(path: string): DbDriver {
       return { changes: Number(r.changes) }
     },
     exec: (sql: string) => db.exec(sql),
-    transaction: <T>(fn: () => T) => runTransaction((s) => db.exec(s), fn),
+    transaction: makeTransaction((s) => db.exec(s)),
     close: () => db.close()
   }
 }

@@ -55,6 +55,7 @@ import { InviteCard } from '../components/InviteCard'
 import { Linkified } from '../components/Linkify'
 import { clamp, useResizableWidth, useMeasuredWidth, ResizeHandle } from '../components/ResizeHandle'
 import { fitMax } from '../lib/inbox-columns'
+import { useAutoGrow } from '../lib/autogrow'
 import { gmailAccounts, defaultComposeAccount } from '../lib/compose-from'
 import { SettingsModal } from '../components/SettingsModal'
 import {
@@ -642,7 +643,7 @@ export function InboxView({
     return (
       <div className="flex flex-col h-full">
         {thread ? (
-          <div className="flex-1 min-h-0 flex flex-col">
+          <div data-pane className="flex-1 min-h-0 flex flex-col">
             <ThreadPane
               key={thread.id}
               thread={thread}
@@ -919,7 +920,7 @@ export function InboxView({
       </div>
 
       {/* message pane */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div data-pane className="flex-1 min-w-0 flex flex-col">
         {mode === 'compose' && gmail.length > 0 ? (
           <ComposePane
             key={composeDraft ? `draft-${composeDraft.nonce}` : 'blank'}
@@ -1849,6 +1850,8 @@ function ThreadPane({
       if (pinned.current) applyScroll(pinned.current)
     })
     ro.observe(content)
+    // the pane shrinks as the reply box grows — keep the bottom pinned then too
+    ro.observe(pane)
     return () => {
       pane.removeEventListener('scroll', onScroll)
       ro.disconnect()
@@ -3112,6 +3115,8 @@ function Composer({
   const [drafting, setDrafting] = useState(false)
   // dictation is gated on the ElevenLabs key, same as every other MicButton
   const { data: settings } = useInvoke('settings:get', [], ['settings'])
+  const boxRef = useRef<HTMLTextAreaElement>(null)
+  useAutoGrow(boxRef, body)
 
   useEffect(() => {
     const merge = (text: string): void =>
@@ -3212,6 +3217,7 @@ function Composer({
       )}
       <div className="flex gap-2 items-end">
         <textarea
+          ref={boxRef}
           id="inbox-reply"
           className="flex-1 bg-raised border border-border rounded-md px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none"
           rows={2}
@@ -3285,8 +3291,10 @@ function ComposePane({
   const [body, setBody] = useState(draft?.body ?? '')
   const { data: settings } = useInvoke('settings:get', [], ['settings'])
 
+  const canSend = Boolean(to.trim() && subject.trim() && body.trim())
   /** deferred behind the undo window — ⌘Z reopens the pane with the draft */
   const send = (): void => {
+    if (!canSend) return
     const d = { accountId: account.id, to, subject, body }
     pushUndo({
       label: 'Email sent',
@@ -3312,8 +3320,17 @@ function ComposePane({
     onSent()
   }
 
+  // ⌘↩ sends from any field, same as the reply box
+  const sendKey = (e: React.KeyboardEvent): void => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      send()
+    }
+  }
+
   return (
-    <div className="p-4 space-y-2 max-w-2xl">
+    // full-height column so the body takes every row the pane has
+    <div className="p-4 flex flex-col gap-2 h-full w-full max-w-4xl" onKeyDown={sendKey}>
       {accounts.length > 1 ? (
         <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-faint">
           <span className="shrink-0">new email · from</span>
@@ -3347,13 +3364,12 @@ function ComposePane({
         onChange={(e) => setSubject(e.target.value)}
       />
       <textarea
-        className="w-full bg-raised border border-border rounded-md px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none"
-        rows={10}
+        className="flex-1 min-h-[6rem] w-full bg-raised border border-border rounded-md px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none"
         placeholder="Message"
         value={body}
         onChange={(e) => setBody(e.target.value)}
       />
-      <div className="flex justify-end items-center gap-2">
+      <div className="flex justify-end items-center gap-2 shrink-0">
         {settings?.elevenLabsApiKey && (
           <MicButton
             size={14}
@@ -3362,11 +3378,7 @@ function ComposePane({
             onError={(message) => toast({ variant: 'error', text: 'Dictation failed', detail: message })}
           />
         )}
-        <Button
-          variant="accent"
-          disabled={!to.trim() || !subject.trim() || !body.trim()}
-          onClick={send}
-        >
+        <Button variant="accent" disabled={!canSend} onClick={send}>
           <Send size={13} className="inline mr-1" />
           send
         </Button>

@@ -262,7 +262,7 @@ export default function App(): React.JSX.Element {
 
   return (
     <div className="flex h-full">
-      {!sidebarHidden && <Sidebar view={view} onNavigate={setView} onHide={toggleSidebar} />}
+      <Sidebar view={view} onNavigate={setView} onHide={toggleSidebar} hidden={sidebarHidden} />
       <main className="relative flex-1 min-w-0 flex flex-col bg-bg">
         {/* headerless, but the window must stay draggable. With the sidebar
             hidden the traffic lights float over this column, so reserve a

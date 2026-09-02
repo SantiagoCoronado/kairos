@@ -63,7 +63,8 @@ import {
   writeWritingPref,
   writingActive,
   isWritingShortcut,
-  escapeExitsWriting
+  escapeExitsWriting,
+  useMorphing
 } from '../lib/writing-mode'
 import { gmailAccounts, defaultComposeAccount } from '../lib/compose-from'
 import { SettingsModal } from '../components/SettingsModal'
@@ -816,14 +817,18 @@ export function InboxView({
 
   return (
     <div ref={shellRef} className="flex h-full">
-      {/* account rail — folded to nothing in writing mode */}
+      {/* account rail — folds to nothing in writing mode; the inner keeps
+          its width so the tween never reflows the rows */}
       <div
-        className={cn(
-          'relative shrink-0 flex flex-col space-y-0.5 overflow-hidden',
-          writing ? 'p-0' : 'border-r border-border py-2 px-1.5'
-        )}
+        className="relative shrink-0 overflow-hidden t-fold"
+        data-folded={writing}
         style={{ width: writing ? 0 : railSpace }}
       >
+        <div
+          className="h-full border-r border-border flex flex-col py-2 px-1.5 space-y-0.5 t-fold-inner"
+          style={{ width: railSpace }}
+          inert={writing}
+        >
         <AccountRow
           active={accountId === null && provider === null}
           collapsed={railCollapsed}
@@ -883,17 +888,21 @@ export function InboxView({
             {railCollapsed ? <PanelLeftOpen size={13} /> : <PanelLeftClose size={13} />}
           </button>
         </div>
+        </div>
         {!railCollapsed && !writing && <ResizeHandle onMouseDown={startRailResize} />}
       </div>
 
-      {/* thread list / channel manager — folded to nothing in writing mode */}
+      {/* thread list / channel manager — same fold as the rail */}
       <div
-        className={cn(
-          'relative shrink-0 flex flex-col overflow-hidden',
-          !writing && 'border-r border-border'
-        )}
+        className="relative shrink-0 overflow-hidden t-fold"
+        data-folded={writing}
         style={{ width: writing ? 0 : listW }}
       >
+        <div
+          className="h-full border-r border-border flex flex-col t-fold-inner"
+          style={{ width: listW }}
+          inert={writing}
+        >
         <div className="p-3 space-y-2 border-b border-border">
           <Input
             id="inbox-search"
@@ -991,6 +1000,7 @@ export function InboxView({
               )}
             </>
           )}
+        </div>
         </div>
         {!writing && <ResizeHandle onMouseDown={startListResize} />}
       </div>
@@ -3212,7 +3222,11 @@ function Composer({
   // dictation is gated on the ElevenLabs key, same as every other MicButton
   const { data: settings } = useInvoke('settings:get', [], ['settings'])
   const boxRef = useRef<HTMLTextAreaElement>(null)
-  useAutoGrow(boxRef, body)
+  // writing mode opens the box into a taller, softer surface; the rows and
+  // padding change its floor, so the auto-grow refits on the flip
+  const open = writing?.active ?? false
+  useAutoGrow(boxRef, body, open)
+  const morphing = useMorphing(open)
 
   useEffect(() => {
     const merge = (text: string): void =>
@@ -3292,7 +3306,10 @@ function Composer({
   }
 
   return (
-    <div className="border-t border-border p-3 space-y-1.5">
+    <div
+      className={cn('border-t border-border p-3 space-y-1.5 t-morph', morphing && 'is-morphing')}
+      data-open={open}
+    >
       {error && <p className="text-[11.5px] text-danger">{error}</p>}
       {aiOpen && (
         <div className="flex gap-2 items-center">
@@ -3313,12 +3330,16 @@ function Composer({
           </Button>
         </div>
       )}
-      <div className="flex gap-2 items-end">
+      {/* open: the box takes the full width and the toolbar drops under it */}
+      <div className={open ? 'flex flex-col gap-2' : 'flex gap-2 items-end'}>
         <textarea
           ref={boxRef}
           id="inbox-reply"
-          className="flex-1 bg-raised border border-border rounded-md px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none"
-          rows={2}
+          className={cn(
+            'flex-1 bg-raised border border-border text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none t-morph-box',
+            open ? 'rounded-xl px-4 py-3' : 'rounded-md px-2.5 py-1.5'
+          )}
+          rows={open ? 5 : 2}
           placeholder={mobile ? 'Reply…' : 'Reply… ⌘↩ to send'}
           value={body}
           onChange={(e) => setBody(e.target.value)}
@@ -3337,6 +3358,7 @@ function Composer({
             }
           }}
         />
+        <div className={cn('flex gap-2 items-center shrink-0 t-morph-toolbar', open && 'self-end')}>
         {writing && !mobile && <WritingToggle writing={writing} />}
         {settings?.elevenLabsApiKey && (
           <MicButton
@@ -3365,6 +3387,7 @@ function Composer({
           <Send size={13} className="inline mr-1" />
           send
         </Button>
+        </div>
       </div>
     </div>
   )
@@ -3383,7 +3406,10 @@ function WritingToggle({ writing }: { writing: WritingMode }): React.JSX.Element
           : 'border-border text-muted hover:text-text'
       )}
     >
-      {writing.active ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+      <span className="t-icon-swap" data-state={writing.active ? 'b' : 'a'}>
+        <Maximize2 size={14} className="t-icon" data-icon="a" />
+        <Minimize2 size={14} className="t-icon" data-icon="b" />
+      </span>
     </button>
   )
 }
@@ -3462,9 +3488,16 @@ function ComposePane({
     }
   }
 
+  const open = writing?.active ?? false
+  const morphing = useMorphing(open)
+
   return (
     // full-height column so the body takes every row the pane has
-    <div className="p-4 flex flex-col gap-2 h-full w-full max-w-4xl" onKeyDown={sendKey}>
+    <div
+      className={cn('p-4 flex flex-col gap-2 h-full w-full max-w-4xl t-morph', morphing && 'is-morphing')}
+      data-open={open}
+      onKeyDown={sendKey}
+    >
       {accounts.length > 1 ? (
         <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-faint">
           <span className="shrink-0">new email · from</span>
@@ -3498,12 +3531,15 @@ function ComposePane({
         onChange={(e) => setSubject(e.target.value)}
       />
       <textarea
-        className="flex-1 min-h-[6rem] w-full bg-raised border border-border rounded-md px-2.5 py-1.5 text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none"
+        className={cn(
+          'flex-1 min-h-[6rem] w-full bg-raised border border-border text-[13px] text-text placeholder:text-faint focus:outline-none focus:border-border-strong resize-none t-morph-box',
+          open ? 'rounded-xl px-4 py-3' : 'rounded-md px-2.5 py-1.5'
+        )}
         placeholder="Message"
         value={body}
         onChange={(e) => setBody(e.target.value)}
       />
-      <div className="flex justify-end items-center gap-2 shrink-0">
+      <div className="flex justify-end items-center gap-2 shrink-0 t-morph-toolbar">
         {writing && <WritingToggle writing={writing} />}
         {settings?.elevenLabsApiKey && (
           <MicButton

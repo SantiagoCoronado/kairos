@@ -219,3 +219,155 @@ textarea,
     touch-action: none;
   }
 }
+
+/* ── Motion tokens (transitions.dev) ───────────────────────────────────
+   The shared scale plus the per-recipe variables the Inbox writing mode
+   reads. `transitions refine` maps ad-hoc durations back onto these. */
+:root {
+  /* Durations */
+  --duration-stagger: 40ms;
+  --duration-micro: 80ms;
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --duration-slow: 400ms;
+  --duration-very-slow: 500ms;
+  /* Easings */
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: ease-in-out;
+  --ease-out: ease-out;
+  --ease-linear: linear;
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --ease-bounce-strong: cubic-bezier(0.34, 3.85, 0.64, 1);
+  /* Distances */
+  --distance-micro: 4px;
+  --distance-small: 6px;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+  --distance-large: 30px;
+  /* Scales */
+  --scale-large: 0.96;
+  --scale-medium: 0.97;
+  --scale-small: 0.98;
+  --scale-tiny: 0.99;
+  /* Blur */
+  --blur-small: 2px;
+  --blur-medium: 3px;
+  --blur-large: 8px;
+  /* Card resize */
+  --resize-dur: 300ms;
+  --resize-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Plus to menu morph */
+  --morph-open-dur: 350ms;
+  --morph-close-dur: 250ms;
+  --morph-ease: cubic-bezier(0.34, 1.25, 0.64, 1);
+  --morph-close-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --morph-fade-dur: 200ms;
+  --morph-slide: 40px;
+  --morph-scale: 0.97;
+  --morph-blur: 2px;
+  /* Icon swap */
+  --icon-swap-dur: 250ms;
+  --icon-swap-blur: 2px;
+  --icon-swap-start-scale: 0.25;
+  --icon-swap-ease: ease-in-out;
+}
+
+/* Column fold — card resize on the outer, an X-axis panel reveal on the
+   inner. The outer tweens width; the inner keeps its unfolded width so
+   nothing reflows mid-tween, and fades + blurs out sideways. At rest the
+   inner sets NO transform or filter (and no will-change for them): any
+   value but `none` would make it the containing block for fixed-position
+   descendants — the settings modal opens from inside the sidebar. */
+.t-fold {
+  transition: width var(--resize-dur) var(--resize-ease);
+  will-change: width;
+}
+.t-fold-inner {
+  transition:
+    opacity var(--resize-dur) var(--resize-ease),
+    transform var(--resize-dur) var(--resize-ease),
+    filter var(--resize-dur) var(--resize-ease);
+}
+.t-fold[data-folded='true'] .t-fold-inner {
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--distance-medium)));
+  filter: blur(var(--blur-small));
+  pointer-events: none;
+}
+
+/* Composer morph — plus → menu morph, adapted. The box relaxes its corners
+   and grows into the writing surface on the bouncy open ease, and settles
+   back on the smoother close ease. Height is tweened only while
+   `.is-morphing`: the box also grows with every typed line (autogrow.ts)
+   and that must stay instant. The toolbar re-enters the way the recipe's
+   menu does, over a shorter slide than a menu panel needs. */
+.t-morph {
+  --_morph-dur: var(--morph-close-dur);
+  --_morph-ease: var(--morph-close-ease);
+  --morph-slide: 16px;
+}
+.t-morph[data-open='true'] {
+  --_morph-dur: var(--morph-open-dur);
+  --_morph-ease: var(--morph-ease);
+}
+.t-morph-box {
+  transition:
+    border-radius var(--_morph-dur) var(--_morph-ease),
+    padding var(--_morph-dur) var(--_morph-ease);
+}
+.t-morph.is-morphing .t-morph-box {
+  transition:
+    height var(--_morph-dur) var(--_morph-ease),
+    border-radius var(--_morph-dur) var(--_morph-ease),
+    padding var(--_morph-dur) var(--_morph-ease);
+}
+@keyframes t-morph-toolbar-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--morph-slide)) scale(var(--morph-scale));
+    filter: blur(var(--morph-blur));
+  }
+}
+.t-morph.is-morphing .t-morph-toolbar {
+  animation: t-morph-toolbar-in var(--morph-fade-dur) var(--morph-close-ease) both;
+}
+
+/* Icon swap — the fold toggle's expand ↔ collapse glyphs cross-fade in
+   one slot with blur and scale. */
+.t-icon-swap {
+  position: relative;
+  display: inline-grid;
+}
+.t-icon-swap .t-icon {
+  grid-area: 1 / 1;
+  transition:
+    opacity var(--icon-swap-dur) var(--icon-swap-ease),
+    filter var(--icon-swap-dur) var(--icon-swap-ease),
+    transform var(--icon-swap-dur) var(--icon-swap-ease);
+  will-change: opacity, filter, transform;
+}
+.t-icon-swap[data-state='a'] .t-icon[data-icon='a'],
+.t-icon-swap[data-state='b'] .t-icon[data-icon='b'] {
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+}
+.t-icon-swap[data-state='a'] .t-icon[data-icon='b'],
+.t-icon-swap[data-state='b'] .t-icon[data-icon='a'] {
+  opacity: 0;
+  filter: blur(var(--icon-swap-blur));
+  transform: scale(var(--icon-swap-start-scale));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-fold,
+  .t-fold-inner,
+  .t-morph-box,
+  .t-icon-swap .t-icon {
+    transition: none !important;
+  }
+  .t-morph.is-morphing .t-morph-toolbar {
+    animation: none !important;
+  }
+}

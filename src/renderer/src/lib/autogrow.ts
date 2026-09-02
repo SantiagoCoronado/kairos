@@ -32,7 +32,12 @@ export function autoGrowHeight(
  * `value` changes (typing, dictation, an AI draft, an undo restore) and
  * whenever the pane is resized — the columns yielding, the window shrinking.
  */
-export function useAutoGrow(ref: RefObject<HTMLTextAreaElement | null>, value: string): void {
+export function useAutoGrow(
+  ref: RefObject<HTMLTextAreaElement | null>,
+  value: string,
+  /** anything else that changes the box's floor — its rows= or padding */
+  layoutKey?: unknown
+): void {
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -56,5 +61,5 @@ export function useAutoGrow(ref: RefObject<HTMLTextAreaElement | null>, value: s
     const ro = new ResizeObserver(fit)
     ro.observe(pane)
     return () => ro.disconnect()
-  }, [ref, value])
+  }, [ref, value, layoutKey])
 }

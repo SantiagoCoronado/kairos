@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react'
+
 /**
  * Writing mode folds the Inbox columns (account rail, thread list) and the
  * app sidebar so a long email gets the width, while the thread being
@@ -49,4 +51,31 @@ export function isWritingShortcut(e: {
  *  Escape keeps its old job (blur) and the draft keeps its room. */
 export function escapeExitsWriting(active: boolean, body: string): boolean {
   return active && body.trim() === ''
+}
+
+/**
+ * True for one morph's duration after `active` flips, so the composer can
+ * tween its height for the mode change and nowhere else — the box also
+ * grows with every typed line, and that must stay instant. Set during the
+ * same render that carries the new `active`, so the CSS class is in place
+ * before the layout effect writes the new height.
+ */
+export function useMorphing(active: boolean): boolean {
+  const prev = useRef(active)
+  const [morphing, setMorphing] = useState(false)
+  if (prev.current !== active) {
+    prev.current = active
+    setMorphing(true)
+  }
+  useEffect(() => {
+    if (!morphing) return
+    // read the duration the CSS uses so a retuned token keeps them in step
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(
+      active ? '--morph-open-dur' : '--morph-close-dur'
+    )
+    const ms = Number.parseFloat(raw) || 350
+    const t = setTimeout(() => setMorphing(false), ms)
+    return () => clearTimeout(t)
+  }, [morphing, active])
+  return morphing
 }

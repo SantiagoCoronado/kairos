@@ -619,6 +619,92 @@ export function deleteThread(db: DbDriver, threadId: string): void {
   db.run('DELETE FROM comms_threads WHERE id = ?', threadId)
 }
 
+/** Re-key a thread (WhatsApp: a lid-keyed chat learns its phone jid). */
+export function setThreadExternalId(
+  db: DbDriver,
+  threadId: string,
+  externalId: string,
+  now: Date = new Date()
+): void {
+  db.run(
+    'UPDATE comms_threads SET external_id = ?, updated_at = ? WHERE id = ?',
+    externalId,
+    nowIso(now),
+    threadId
+  )
+}
+
+/**
+ * Fold `fromId` into `intoId` — the same WhatsApp chat keyed two ways (phone
+ * jid vs lid). Messages and queued sends move over; local flags survive
+ * (pinned if either was, archived only if both were, labels unioned); a real
+ * title beats a placeholder; snippet / last_message_at come from the newest
+ * message the survivor now holds; unread counts add. The absorbed thread is
+ * deleted.
+ */
+export function mergeThreads(db: DbDriver, fromId: string, intoId: string, now: Date = new Date()): void {
+  if (fromId === intoId) return
+  db.transaction(() => {
+    const from = getThread(db, fromId)
+    const into = getThread(db, intoId)
+    if (!from || !into) return
+    db.run('UPDATE comms_messages SET thread_id = ? WHERE thread_id = ?', intoId, fromId)
+    db.run('UPDATE comms_outbox SET thread_id = ? WHERE thread_id = ?', intoId, fromId)
+    const labels = new Set<string>()
+    for (const l of `${into.labels},${from.labels}`.split(',')) if (l) labels.add(l)
+    const title = isPlaceholderTitle(into.title) && !isPlaceholderTitle(from.title) ? from.title : into.title
+    const newest = db.get<{ sent_at: string; body_text: string }>(
+      'SELECT sent_at, body_text FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1',
+      intoId
+    )
+    db.run(
+      `UPDATE comms_threads SET
+         title = ?, labels = ?, pinned = ?, is_archived = ?,
+         unread_count = ?, last_message_at = ?, snippet = ?,
+         notify_eval_at = ?, updated_at = ?
+       WHERE id = ?`,
+      title,
+      [...labels].join(','),
+      into.pinned || from.pinned ? 1 : 0,
+      into.is_archived && from.is_archived ? 1 : 0,
+      into.unread_count + from.unread_count,
+      newest?.sent_at ?? into.last_message_at ?? from.last_message_at,
+      newest ? newest.body_text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN) : into.snippet,
+      [into.notify_eval_at, from.notify_eval_at].filter(Boolean).sort().pop() ?? null,
+      nowIso(now),
+      intoId
+    )
+    db.run('DELETE FROM comms_threads WHERE id = ?', fromId)
+  })
+}
+
+/**
+ * Re-key an account's inbound messages from one sender handle to another
+ * (WhatsApp: lid digits → phone digits) and link them to whoever the new
+ * handle resolves to. Returns rows changed.
+ */
+export function replaceSenderHandle(
+  db: DbDriver,
+  accountId: string,
+  provider: CommsProvider,
+  from: string,
+  to: string,
+  now: Date = new Date()
+): number {
+  if (!from || !to || from === to) return 0
+  return db.transaction(() => {
+    const personId = resolvePersonForHandle(db, provider, to, now)
+    return db.run(
+      `UPDATE comms_messages SET sender_handle = ?, person_id = COALESCE(person_id, ?)
+       WHERE account_id = ? AND sender_handle = ? AND is_me = 0`,
+      to,
+      personId,
+      accountId,
+      from
+    ).changes
+  })
+}
+
 /**
  * Fill body_html on an already-synced message that predates HTML capture —
  * re-syncs skip existing rows, so this is the only path that upgrades them.

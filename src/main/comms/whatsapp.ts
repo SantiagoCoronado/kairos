@@ -24,6 +24,7 @@ import * as repo from '../../core/repo/comms'
 import { deliveredMap, pendingUnits, sendUnits } from '../../core/outbox-units'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
+import { LidBook, isGroupJid, isLidJid, isPnJid, jidUser } from './wa-lid'
 
 const WA_DIR = join(DATA_DIR, 'wa')
 
@@ -49,15 +50,10 @@ const silentLogger: SilentLogger = {
   error: () => {}
 }
 
-const jidUser = (jid: string): string => jid.split('@')[0].split(':')[0]
-const isGroupJid = (jid: string): boolean => jid.endsWith('@g.us')
 // @lid is WhatsApp's privacy-preserving chat id — most modern DMs use it
 // instead of the phone-number jid, so it MUST be accepted as a chat.
 const isChatJid = (jid: string | null | undefined): jid is string =>
-  Boolean(
-    jid && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us') || jid.endsWith('@lid'))
-  )
-const isLidJid = (jid: string): boolean => jid.endsWith('@lid')
+  Boolean(jid && (isPnJid(jid) || isGroupJid(jid) || isLidJid(jid)))
 
 function extractText(msg: WAMessage): { text: string; hasAttachment: boolean } {
   const m = msg.message
@@ -129,6 +125,10 @@ export class WhatsAppConnection {
   private appliedNames = new Map<string, string>()
   /** address-book phones already looked up via onWhatsApp this session */
   private queriedPhones = new Set<string>()
+  /** lid ↔ phone jid pairings — the thread key is the phone jid once known */
+  private lids = new LidBook()
+  /** lids whose thread (if any) was already folded into the phone thread */
+  private absorbed = new Set<string>()
 
   constructor(
     private db: DbDriver,
@@ -239,6 +239,9 @@ export class WhatsAppConnection {
           repo.updateAccountIdentity(this.db, this.accountId, jid || this.accountId, `+${phone}`)
           this.opts.emit({ kind: 'sync', accountId: this.accountId, status: 'connected' })
           this.opts.onChanged()
+          // chats keyed by a lid whose phone jid is now known fold into the
+          // phone thread — heals splits left by earlier sessions
+          await this.reconcileLidThreads()
           // group subjects never arrive with messages — fetch them all once
           try {
             const groups = await sock.groupFetchAllParticipating()
@@ -288,32 +291,47 @@ export class WhatsAppConnection {
     })
 
     sock.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
-      for (const c of contacts ?? []) this.addContact(c)
-      for (const c of chats ?? []) {
-        if (c.id && c.name) this.names.set(c.id, c.name)
-      }
-      // history arrives already-read
-      for (const msg of messages ?? []) this.ingest(msg, true)
-      // names and messages come in separate chunks, in either order — retitle
-      // whatever placeholder threads the name book can now resolve
-      this.applyNames()
-      this.opts.onChanged()
+      void this.guard('history', async () => {
+        for (const c of contacts ?? []) this.addContact(c)
+        for (const c of chats ?? []) {
+          if (!c.id) continue
+          if (c.name) this.names.set(c.id, c.name)
+          // history chats carry both ids of a DM peer
+          this.lids.learn(c.id, c.lidJid)
+          this.lids.learn(c.id, c.pnJid)
+          this.lids.learn(c.lidJid, c.pnJid)
+        }
+        await this.resolveLids((messages ?? []).map((m) => m.key))
+        // history arrives already-read
+        for (const msg of messages ?? []) this.ingest(msg, true)
+        // lid chats this chunk created before a later chunk taught the phone
+        await this.reconcileLidThreads()
+        // names and messages come in separate chunks, in either order — retitle
+        // whatever placeholder threads the name book can now resolve
+        this.applyNames()
+        this.opts.onChanged()
+      })
     })
 
     sock.ev.on('messages.upsert', ({ messages, type }) => {
-      let any = false
-      let inbound = false
-      for (const msg of messages) {
-        if (this.ingest(msg, type !== 'notify')) {
-          any = true
-          if (type === 'notify' && !msg.key.fromMe) inbound = true
+      void this.guard('messages', async () => {
+        // inbound keys carry the phone jid next to the lid; outbound ones may
+        // not — ask the mapping store before a lid picks the thread
+        await this.resolveLids(messages.map((m) => m.key))
+        let any = false
+        let inbound = false
+        for (const msg of messages) {
+          if (this.ingest(msg, type !== 'notify')) {
+            any = true
+            if (type === 'notify' && !msg.key.fromMe) inbound = true
+          }
         }
-      }
-      // a pushName may have just named a chat that already exists as a
-      // placeholder thread — sweep so the list fixes itself immediately
-      if (this.namesLearned) this.applyNames()
-      if (any) this.opts.onChanged()
-      if (inbound) this.opts.onInbound?.()
+        // a pushName may have just named a chat that already exists as a
+        // placeholder thread — sweep so the list fixes itself immediately
+        if (this.namesLearned) this.applyNames()
+        if (any) this.opts.onChanged()
+        if (inbound) this.opts.onInbound?.()
+      })
     })
 
     // groups created or renamed after connect: subjects arrive out-of-band
@@ -333,7 +351,7 @@ export class WhatsAppConnection {
         if (!c.id) continue
         if (c.name) this.names.set(c.id, c.name)
         if (typeof c.unreadCount !== 'number') continue
-        const thread = repo.getThreadByExternal(this.db, this.accountId, c.id)
+        const thread = repo.getThreadByExternal(this.db, this.accountId, this.lids.canonical(c.id))
         if (!thread) continue
         if (c.unreadCount === 0 && thread.unread_count > 0) {
           repo.markThreadRead(this.db, thread.id)
@@ -348,14 +366,121 @@ export class WhatsAppConnection {
   }
 
   /** Contact records carry the lid AND the phone jid — key the name under every form. */
-  private addContact(c: { id?: string; lid?: string; jid?: string; name?: string; notify?: string; verifiedName?: string }): void {
+  private addContact(c: {
+    id?: string
+    lid?: string
+    jid?: string
+    phoneNumber?: string
+    name?: string
+    notify?: string
+    verifiedName?: string
+  }): void {
+    for (const [a, b] of [
+      [c.id, c.lid],
+      [c.id, c.jid],
+      [c.id, c.phoneNumber],
+      [c.lid, c.jid],
+      [c.lid, c.phoneNumber]
+    ]) {
+      this.lids.learn(a, b)
+    }
     const name = c.name || c.notify || c.verifiedName
     if (!name) return
-    for (const j of [c.id, c.lid, c.jid]) {
+    for (const j of [c.id, c.lid, c.jid, c.phoneNumber]) {
       if (j) {
         this.names.set(j, name)
         this.pushNamed.delete(j) // contact-store name outranks a pushName
       }
+    }
+  }
+
+  /** A name known under any jid of the account — canonical first. */
+  private nameFor(jid: string): string | undefined {
+    for (const alias of this.lids.aliases(jid)) {
+      const name = this.names.get(alias)
+      if (name) return name
+    }
+    return undefined
+  }
+
+  /** Event handlers are async now (mapping lookups) — never let one reject unseen. */
+  private guard(what: string, fn: () => Promise<void>): Promise<void> {
+    return fn().catch((err) => {
+      logLine('warn', 'comms', `${this.tag()} ${what} handler failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }
+
+  /**
+   * Learn every lid/phone pairing the keys disclose (inbound live messages
+   * carry remoteJidAlt / participantAlt), then ask Baileys' persisted
+   * mapping store about the lids still unknown. A local file read, no network.
+   */
+  private async resolveLids(keys: WAMessageKey[]): Promise<void> {
+    const want = new Set<string>()
+    for (const k of keys) {
+      for (const [jid, alt] of [
+        [k.remoteJid, k.remoteJidAlt],
+        [k.participant, k.participantAlt]
+      ]) {
+        if (!jid) continue
+        if (alt) this.lids.learn(jid, alt)
+        else if (isLidJid(jid) && !this.lids.pnFor(jid)) want.add(jid)
+      }
+    }
+    await this.lookupLids([...want])
+  }
+
+  private async lookupLids(lids: string[]): Promise<void> {
+    const sock = this.sock
+    if (lids.length === 0 || !sock) return
+    try {
+      const pairs = await sock.signalRepository.lidMapping.getPNsForLIDs(lids)
+      for (const p of pairs ?? []) this.lids.learn(p.lid, p.pn)
+    } catch (err) {
+      logLine('warn', 'comms', `${this.tag()} lid lookup failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
+   * A thread keyed by `lidJid` becomes part of the `pnJid` thread: merged
+   * into it when one exists, re-keyed in place otherwise (pins, labels and
+   * the thread id survive). Sender handles switch to the phone digits so the
+   * rows link to People. Returns true if anything changed.
+   */
+  private absorbLidThread(lidJid: string, pnJid: string): boolean {
+    if (this.absorbed.has(lidJid)) return false
+    const lidThread = repo.getThreadByExternal(this.db, this.accountId, lidJid)
+    if (!lidThread) return false
+    this.absorbed.add(lidJid)
+    const pnThread = repo.getThreadByExternal(this.db, this.accountId, pnJid)
+    if (pnThread) repo.mergeThreads(this.db, lidThread.id, pnThread.id)
+    else repo.setThreadExternalId(this.db, lidThread.id, pnJid)
+    repo.replaceSenderHandle(this.db, this.accountId, 'whatsapp', jidUser(lidJid), jidUser(pnJid))
+    // a lid could only ever be titled 'WhatsApp chat'; the number is better
+    // until a name turns up (applyNames / the address book take it from here)
+    const survivor = repo.getThreadByExternal(this.db, this.accountId, pnJid)
+    if (survivor && WhatsAppConnection.isPlaceholder(survivor.title) && !this.nameFor(pnJid)) {
+      repo.setThreadTitle(this.db, survivor.id, `+${jidUser(pnJid)}`)
+    }
+    logLine('info', 'comms', `${this.tag()} ${pnThread ? 'merged' : 're-keyed'} lid chat ${lidJid} → ${pnJid}`)
+    return true
+  }
+
+  /** Fold every lid-keyed thread whose phone jid the mapping store knows. */
+  private async reconcileLidThreads(): Promise<void> {
+    const lidThreads = repo
+      .listAccountThreads(this.db, this.accountId)
+      .filter((t) => isLidJid(t.external_id) && !this.absorbed.has(t.external_id))
+    if (lidThreads.length === 0) return
+    await this.lookupLids(this.lids.unresolved(lidThreads.map((t) => t.external_id)))
+    let changed = false
+    for (const t of lidThreads) {
+      const pn = this.lids.pnFor(t.external_id)
+      if (pn && this.absorbLidThread(t.external_id, pn)) changed = true
+    }
+    if (changed) {
+      this.applyNames()
+      this.opts.onChanged()
     }
   }
 
@@ -383,7 +508,7 @@ export class WhatsAppConnection {
     this.db.transaction(() => {
       for (const thread of repo.listAccountThreads(this.db, this.accountId)) {
         if (!WhatsAppConnection.isPlaceholder(thread.title)) continue
-        const name = this.names.get(thread.external_id)
+        const name = this.nameFor(thread.external_id)
         if (name) {
           repo.setThreadTitle(this.db, thread.id, name)
           changed = true
@@ -392,7 +517,10 @@ export class WhatsAppConnection {
       for (const [jid, name] of this.names) {
         if (isGroupJid(jid) || this.appliedNames.get(jid) === name) continue
         this.appliedNames.set(jid, name)
-        if (repo.updateSenderNames(this.db, this.accountId, jidUser(jid), name) > 0) changed = true
+        // messages carry the phone handle once the lid is known, the lid before
+        for (const alias of this.lids.aliases(jid)) {
+          if (repo.updateSenderNames(this.db, this.accountId, jidUser(alias), name) > 0) changed = true
+        }
       }
     })
     const ms = Date.now() - started
@@ -402,20 +530,24 @@ export class WhatsAppConnection {
 
   /** returns true if the message was new */
   private ingest(msg: WAMessage, asRead: boolean): boolean {
-    const chatJid = msg.key.remoteJid
-    if (!isChatJid(chatJid)) return false // status broadcasts, newsletters, …
+    const rawChat = msg.key.remoteJid
+    if (!isChatJid(rawChat)) return false // status broadcasts, newsletters, …
     const { text, hasAttachment } = extractText(msg)
     if (!text && !hasAttachment) return false // protocol/reaction/poll noise
 
+    // one chat, one thread: a lid resolves to its phone jid when known, and a
+    // thread an earlier session keyed by the lid folds into the phone thread
+    const chatJid = this.lids.canonical(rawChat)
+    if (chatJid !== rawChat) this.absorbLidThread(rawChat, chatJid)
     const isGroup = isGroupJid(chatJid)
     const isMe = Boolean(msg.key.fromMe)
-    const senderJid = isGroup ? (msg.key.participant ?? '') : chatJid
+    const senderJid = isGroup ? this.lids.canonical(msg.key.participant ?? '') : chatJid
     // DMs: an inbound pushName is the chat's name when nothing better is
     // known. Feeding it into the name book (not just this message's title)
     // is what keeps outbound messages from re-computing 'WhatsApp chat' and
     // lets applyNames() fix an already-placeholder thread.
     if (!isGroup && !isMe && msg.pushName) {
-      const known = this.names.get(chatJid)
+      const known = this.nameFor(chatJid)
       if (!known || (this.pushNamed.has(chatJid) && known !== msg.pushName)) {
         this.names.set(chatJid, msg.pushName)
         this.pushNamed.add(chatJid)
@@ -426,7 +558,7 @@ export class WhatsAppConnection {
     const jidLabel = (jid: string): string =>
       isLidJid(jid) || isGroupJid(jid) ? 'WhatsApp chat' : `+${jidUser(jid)}`
     const title =
-      this.names.get(chatJid) ||
+      this.nameFor(chatJid) ||
       (isGroup ? 'Group' : msg.pushName && !isMe ? msg.pushName : '') ||
       jidLabel(chatJid)
 
@@ -451,7 +583,7 @@ export class WhatsAppConnection {
       account_id: this.accountId,
       provider: 'whatsapp',
       external_id: externalId,
-      sender_name: isMe ? 'me' : msg.pushName || this.names.get(senderJid) || jidLabel(senderJid),
+      sender_name: isMe ? 'me' : msg.pushName || this.nameFor(senderJid) || jidLabel(senderJid),
       sender_handle: jidUser(senderJid),
       is_me: isMe,
       sent_at: new Date(ts || Date.now()).toISOString(),
@@ -554,7 +686,11 @@ export class WhatsAppConnection {
           if (!name) continue
           this.names.set(String(r.jid), name)
           const lid = (r as { lid?: string }).lid
-          if (lid) this.names.set(lid.includes('@') ? String(lid) : `${lid}@lid`, name)
+          if (lid) {
+            const lidJid = lid.includes('@') ? String(lid) : `${lid}@lid`
+            this.names.set(lidJid, name)
+            this.lids.learn(lidJid, String(r.jid))
+          }
           learned = true
         }
       } catch {

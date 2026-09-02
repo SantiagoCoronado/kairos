@@ -1300,3 +1300,95 @@ describe('migration 022', () => {
     old.close()
   })
 })
+
+describe('whatsapp lid/phone thread folding', () => {
+  const PN = '5215534002774@s.whatsapp.net'
+  const LID = '213365519610111@lid'
+  const waAccount = () =>
+    comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: '5215516273510@s.whatsapp.net', display_name: '+52…'
+    }, T0)
+  const thread = (accountId: string, jid: string, title: string) =>
+    comms.upsertThread(db, {
+      account_id: accountId, provider: 'whatsapp', external_id: jid, kind: 'dm', title
+    }, T0)
+  const message = (
+    accountId: string,
+    threadId: string,
+    id: string,
+    at: Date,
+    body: string,
+    opts: { handle?: string; me?: boolean; read?: boolean } = {}
+  ) =>
+    comms.upsertMessage(db, {
+      thread_id: threadId, account_id: accountId, provider: 'whatsapp', external_id: id,
+      sender_handle: opts.handle ?? '213365519610111', is_me: opts.me,
+      sent_at: at.toISOString(), body_text: body, is_read: opts.read ?? true
+    }, at)
+
+  it('mergeThreads moves messages and queued sends, keeps local flags, deletes the absorbed thread', () => {
+    const a = waAccount()
+    const pn = thread(a.id, PN, 'Stef Bolde')
+    const lid = thread(a.id, LID, 'Stef Bolde')
+    message(a.id, pn.id, 'old', later(1), 'antes del cambio', { handle: '5215534002774' })
+    message(a.id, lid.id, 'new', later(10), 'después del cambio', { read: false })
+    comms.setThreadPinned(db, pn.id, true, later(2))
+    comms.setThreadLabels(db, pn.id, ['personal'], later(2))
+    comms.setThreadLabels(db, lid.id, ['personal', 'action-needed'], later(2))
+    comms.setThreadArchived(db, pn.id, true, later(3))
+    const queued = comms.enqueueOutbox(db, {
+      account_id: a.id, thread_id: lid.id, provider: 'whatsapp', to_json: '{}', body_text: 'hola'
+    }, later(4))
+
+    comms.mergeThreads(db, lid.id, pn.id, later(11))
+
+    expect(comms.getThread(db, lid.id)).toBeUndefined()
+    const merged = comms.getThread(db, pn.id)!
+    expect(comms.listMessages(db, pn.id).map((m) => m.external_id).sort()).toEqual(['new', 'old'])
+    expect(merged.pinned).toBe(1)
+    expect(merged.is_archived).toBe(0) // only one side was archived
+    expect(merged.labels.split(',').sort()).toEqual(['action-needed', 'personal'])
+    expect(merged.unread_count).toBe(1)
+    expect(merged.last_message_at).toBe(later(10).toISOString())
+    expect(merged.snippet).toBe('después del cambio')
+    expect(comms.getOutboxItem(db, queued.id)!.thread_id).toBe(pn.id)
+  })
+
+  it('mergeThreads lets a real title replace a placeholder but never the reverse', () => {
+    const a = waAccount()
+    const placeholder = thread(a.id, PN, '+5215534002774')
+    const named = thread(a.id, LID, 'Stef Bolde')
+    comms.mergeThreads(db, named.id, placeholder.id, later(1))
+    expect(comms.getThread(db, placeholder.id)!.title).toBe('Stef Bolde')
+
+    const named2 = thread(a.id, '5215519544781@s.whatsapp.net', 'Santiago Turrent')
+    const pushNamed = thread(a.id, '42331348689117@lid', 'Santiago T')
+    comms.mergeThreads(db, pushNamed.id, named2.id, later(1))
+    expect(comms.getThread(db, named2.id)!.title).toBe('Santiago Turrent')
+  })
+
+  it('setThreadExternalId re-keys a lid thread onto its phone jid in place', () => {
+    const a = waAccount()
+    const lid = thread(a.id, LID, 'Stef Bolde')
+    comms.setThreadExternalId(db, lid.id, PN, later(1))
+    expect(comms.getThreadByExternal(db, a.id, PN)!.id).toBe(lid.id)
+    expect(comms.getThreadByExternal(db, a.id, LID)).toBeUndefined()
+  })
+
+  it('replaceSenderHandle re-keys inbound rows only and links them to the person the phone resolves to', () => {
+    const stef = people.upsertPerson(db, { name: 'Stef', phone: '+52 1 55 3400 2774' }, T0)
+    const a = waAccount()
+    const lid = thread(a.id, LID, 'Stef Bolde')
+    message(a.id, lid.id, 'in', later(1), 'hola')
+    message(a.id, lid.id, 'out', later(2), 'hey', { me: true, handle: '213365519610111' })
+    expect(comms.listMessages(db, lid.id).find((m) => m.external_id === 'in')!.person_id).toBeNull()
+
+    expect(comms.replaceSenderHandle(db, a.id, 'whatsapp', '213365519610111', '5215534002774')).toBe(1)
+
+    const rows = comms.listMessages(db, lid.id)
+    const inbound = rows.find((m) => m.external_id === 'in')!
+    expect(inbound.sender_handle).toBe('5215534002774')
+    expect(inbound.person_id).toBe(stef.id)
+    expect(rows.find((m) => m.external_id === 'out')!.sender_handle).toBe('213365519610111')
+  })
+})

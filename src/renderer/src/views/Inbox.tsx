@@ -735,10 +735,11 @@ export function InboxView({
     })
   }
 
-  // channel manager and compose are desktop modes; shrinking mid-mode
-  // must not strand the phone on a pane it has no button to leave
+  // the channel manager is a desktop mode; shrinking mid-mode must not
+  // strand the phone on a pane it has no button to leave. Compose has its
+  // own back chevron on the phone, so it survives the shrink.
   useEffect(() => {
-    if (mobile && mode !== 'threads') setMode('threads')
+    if (mobile && mode === 'channels') setMode('threads')
   }, [mobile, mode])
 
   if (accounts && accounts.length === 0) {
@@ -752,7 +753,36 @@ export function InboxView({
   if (mobile) {
     return (
       <div className="flex flex-col h-full">
-        {thread ? (
+        {mode === 'compose' && gmail.length > 0 ? (
+          <div data-pane className="flex-1 min-h-0 flex flex-col">
+            {/* same header shape as the thread pane's phone header */}
+            <div className="border-b border-border flex items-center gap-2 pl-1 pr-3 py-2">
+              <button
+                onClick={closeCompose}
+                title="Back to list"
+                className="shrink-0 h-9 w-9 rounded-md flex items-center justify-center text-muted active:bg-raised"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <span className="text-[13.5px] font-medium truncate flex-1">New email</span>
+            </div>
+            <ComposePane
+              key={composeDraft ? `draft-${composeDraft.nonce}` : 'blank'}
+              accounts={gmail}
+              defaultAccountId={
+                defaultComposeAccount(gmail, accountId, thread?.account_id ?? null)?.id ?? gmail[0].id
+              }
+              draft={composeDraft?.draft ?? null}
+              onSent={closeCompose}
+              onUndoRestore={(d) =>
+                withViewTransition(() => {
+                  setComposeDraft((prev) => ({ draft: d, nonce: (prev?.nonce ?? 0) + 1 }))
+                  setMode('compose')
+                })
+              }
+            />
+          </div>
+        ) : thread ? (
           <div data-pane className="flex-1 min-h-0 flex flex-col">
             <ThreadPane
               key={thread.id}
@@ -809,6 +839,17 @@ export function InboxView({
                 <FilterButton active={unreadOnly} onClick={() => setUnreadOnly((v) => !v)}>
                   Unread
                 </FilterButton>
+                {gmail.length > 0 && (
+                  <button
+                    onClick={openCompose}
+                    title="New email"
+                    // the list is unmounted while composing, so the name is never doubled
+                    style={{ viewTransitionName: 'compose' }}
+                    className="shrink-0 h-8 w-8 rounded-md border border-border flex items-center justify-center text-muted active:bg-raised"
+                  >
+                    <PenLine size={14} />
+                  </button>
+                )}
               </div>
               {actionError && (
                 <p className="text-[11px] text-danger truncate" title={actionError}>
@@ -3566,10 +3607,12 @@ function ComposePane({
       onKeyDown={sendKey}
     >
       {accounts.length > 1 ? (
-        <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-faint">
+        <label className="flex items-center gap-2 min-w-0 font-mono text-[10px] uppercase tracking-wider text-faint">
           <span className="shrink-0">new email · from</span>
+          {/* min-w-0 + flex-1: a select otherwise takes its longest option's
+              width and runs off a phone screen */}
           <Select
-            className="font-sans normal-case tracking-normal"
+            className="font-sans normal-case tracking-normal min-w-0 flex-1"
             value={account.id}
             onChange={(e) => setAccountId(e.target.value)}
           >

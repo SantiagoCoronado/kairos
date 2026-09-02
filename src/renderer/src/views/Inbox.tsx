@@ -3318,7 +3318,7 @@ function ComposePane({
         <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-faint">
           <span className="shrink-0">new email · from</span>
           <Select
-            className="font-sans normal-case tracking-normal text-[12px] py-1"
+            className="font-sans normal-case tracking-normal"
             value={account.id}
             onChange={(e) => setAccountId(e.target.value)}
           >

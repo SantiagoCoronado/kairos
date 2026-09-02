@@ -74,11 +74,23 @@ describe('composer morph', () => {
 describe('reduced motion', () => {
   const guard = css.slice(css.lastIndexOf('@media (prefers-reduced-motion: reduce)'))
 
-  it('zeroes every writing-mode transition and animation', () => {
-    for (const sel of ['.t-fold', '.t-fold-inner', '.t-morph-box', '.t-icon-swap .t-icon']) {
+  it('zeroes every tokenised transition and animation', () => {
+    for (const sel of ['.t-fold', '.t-fold-inner', '.t-morph-box', '.t-icon-swap .t-icon', '.thread-row']) {
       expect(guard, sel).toContain(sel)
     }
     expect(guard).toMatch(/transition: none !important/)
-    expect(guard).toMatch(/\.t-morph\.is-morphing \.t-morph-toolbar\s*\{\s*animation: none !important/)
+    expect(guard).toMatch(/\.t-morph\.is-morphing \.t-morph-toolbar,\s*\.fade-in\s*\{\s*animation: none !important/)
+  })
+})
+
+describe('refine', () => {
+  it('leaves no raw durations outside the token block', () => {
+    // every transition/animation in styles.css reads a token; a new literal
+    // is a value transitions refine would flag
+    const tokenBlockStart = css.indexOf('/* ── Motion tokens')
+    const tokenBlockEnd = css.indexOf('}', tokenBlockStart)
+    const outside = css.slice(0, tokenBlockStart) + css.slice(tokenBlockEnd)
+    const literals = outside.match(/\b\d+(\.\d+)?m?s\b/g) ?? []
+    expect(literals).toEqual([])
   })
 })

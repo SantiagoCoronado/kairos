@@ -97,15 +97,16 @@ textarea,
   background: transparent;
 }
 
-/* subtle content entrance (thread pane on open) */
+/* subtle content entrance (thread pane on open) — list → detail, so the
+   page-slide tokens: fast, smooth-out, base distance */
 @keyframes fade-in-up {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(var(--distance-base));
   }
 }
 .fade-in {
-  animation: fade-in-up 160ms ease-out;
+  animation: fade-in-up var(--duration-fast) var(--ease-smooth-out);
 }
 
 /* undo-toast countdown ring: the arc drains linearly over the undo window.
@@ -130,12 +131,15 @@ textarea,
      zone where the collapse animates without moving anything */
   max-height: 3.5rem;
   overflow: hidden;
+  /* a collapsing list row is a card resize; the fade is a close, so quick.
+     removeWithAnimation (Inbox.tsx) waits out --resize-dur — keep them
+     on the same token. */
   transition:
-    opacity 160ms ease-out,
-    transform 220ms cubic-bezier(0.3, 0, 0.2, 1),
-    max-height 220ms cubic-bezier(0.3, 0, 0.2, 1),
-    padding 220ms cubic-bezier(0.3, 0, 0.2, 1),
-    border-width 220ms cubic-bezier(0.3, 0, 0.2, 1);
+    opacity var(--duration-quick) var(--ease-smooth-out),
+    transform var(--resize-dur) var(--resize-ease),
+    max-height var(--resize-dur) var(--resize-ease),
+    padding var(--resize-dur) var(--resize-ease),
+    border-width var(--resize-dur) var(--resize-ease);
 }
 .thread-row:focus,
 .thread-row:focus-visible {
@@ -360,14 +364,18 @@ textarea,
   transform: scale(var(--icon-swap-start-scale));
 }
 
+/* every tokenised motion is zeroed here — the writing-mode recipes and the
+   older thread-pane entrance and row fold they were refined onto */
 @media (prefers-reduced-motion: reduce) {
   .t-fold,
   .t-fold-inner,
   .t-morph-box,
-  .t-icon-swap .t-icon {
+  .t-icon-swap .t-icon,
+  .thread-row {
     transition: none !important;
   }
-  .t-morph.is-morphing .t-morph-toolbar {
+  .t-morph.is-morphing .t-morph-toolbar,
+  .fade-in {
     animation: none !important;
   }
 }

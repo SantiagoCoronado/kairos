@@ -82,8 +82,10 @@ function useModifierHeld(): boolean {
       if (!isModifier(e) || e.repeat || timer) return
       timer = setTimeout(() => setHeld(true), HINT_HOLD_MS)
     }
+    // only clear once no modifier survives — releasing Ctrl while ⌘ is
+    // still down must not drop the hints until ⌘ itself comes up
     const up = (e: KeyboardEvent): void => {
-      if (isModifier(e)) clear()
+      if (isModifier(e) && !e.metaKey && !e.ctrlKey) clear()
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
@@ -166,7 +168,7 @@ export function Sidebar({
             }`}
           >
             <Icon size={15} strokeWidth={1.75} />
-            <span className="text-[13px] flex-1">{label}</span>
+            <span className="text-[13px] flex-1 min-w-0 truncate">{label}</span>
             {id === 'pending' && pendingBadge > 0 && (
               <span
                 title={
@@ -218,7 +220,7 @@ export function Sidebar({
             {hasSlot && (
               <kbd
                 aria-hidden
-                className={`font-mono text-[10px] tabular-nums text-faint transition-opacity duration-150 ${
+                className={`shrink-0 font-mono text-[10px] tabular-nums text-faint transition-opacity duration-150 ${
                   showSlots ? 'opacity-100' : 'opacity-0'
                 }`}
               >

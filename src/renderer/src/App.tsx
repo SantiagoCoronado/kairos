@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Sidebar, SidebarToggle, VIEW_ORDER, type ViewId } from './components/Sidebar'
+import { Sidebar, SidebarToggle, SHORTCUT_SLOTS, VIEW_ORDER, type ViewId } from './components/Sidebar'
 import { MobileTabBar } from './components/MobileTabBar'
 import { CommandPalette } from './components/CommandPalette'
 import { RecordingBar } from './components/meeting/RecordingBar'
@@ -151,9 +151,9 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         toggleSidebar()
       }
-      // ⌘1–⌘N jump between views
+      // ⌘1–⌘9 jump between views, numbered in sidebar order
       const n = Number(e.key)
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && n >= 1 && n <= VIEW_ORDER.length) {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && n >= 1 && n <= Math.min(SHORTCUT_SLOTS, VIEW_ORDER.length)) {
         e.preventDefault()
         setView(VIEW_ORDER[n - 1])
       }

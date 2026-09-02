@@ -1,4 +1,4 @@
-import { useLayoutEffect, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, type RefObject } from 'react'
 
 /** Share of the message pane the reply box may take before it scrolls inside. */
 export const COMPOSER_CAP_FRACTION = 0.45
@@ -32,29 +32,48 @@ export function autoGrowHeight(
  * `value` changes (typing, dictation, an AI draft, an undo restore) and
  * whenever the pane is resized — the columns yielding, the window shrinking.
  */
-export function useAutoGrow(ref: RefObject<HTMLTextAreaElement | null>, value: string): void {
-  useLayoutEffect(() => {
+export function useAutoGrow(
+  ref: RefObject<HTMLTextAreaElement | null>,
+  value: string,
+  /** anything else that changes the box's floor — its rows= or padding */
+  layoutKey?: unknown
+): void {
+  const fit = useCallback((): void => {
     const el = ref.current
     if (!el) return
     const pane = el.closest<HTMLElement>('[data-pane]')
-    const fit = (): void => {
-      // height:auto puts the box back at its rows= size, which is both the
-      // floor and the state scrollHeight must be read in
-      el.style.height = 'auto'
-      const floor = el.offsetHeight
-      const borders = el.offsetHeight - el.clientHeight
-      const { height, overflow } = autoGrowHeight(
-        el.scrollHeight + borders,
-        floor,
-        composerCap(pane?.clientHeight ?? window.innerHeight, floor)
-      )
-      el.style.height = `${height}px`
-      el.style.overflowY = overflow ? 'auto' : 'hidden'
-    }
-    fit()
+    // what's on screen now — restored below so a height transition has a
+    // length to start from
+    const from = el.offsetHeight
+    // height:auto puts the box back at its rows= size, which is both the
+    // floor and the state scrollHeight must be read in
+    el.style.height = 'auto'
+    const floor = el.offsetHeight
+    const borders = el.offsetHeight - el.clientHeight
+    const { height, overflow } = autoGrowHeight(
+      el.scrollHeight + borders,
+      floor,
+      composerCap(pane?.clientHeight ?? window.innerHeight, floor)
+    )
+    // the measuring read above flushed style with height:auto, and
+    // auto → <length> never interpolates: put the previous length back and
+    // flush once more so the before-change style is a length again. Only
+    // the writing-mode morph transitions height, but this costs nothing.
+    el.style.height = `${from}px`
+    void el.offsetHeight
+    el.style.height = `${height}px`
+    el.style.overflowY = overflow ? 'auto' : 'hidden'
+  }, [ref])
+  // refit on every value change — typing, dictation, an AI draft, an undo
+  // restore — and whenever the box's own floor changes
+  useLayoutEffect(fit, [fit, value, layoutKey])
+  // ...and whenever the pane is resized: the columns yielding, the window
+  // shrinking. Observed once, not per keystroke.
+  useLayoutEffect(() => {
+    const pane = ref.current?.closest<HTMLElement>('[data-pane]')
     if (!pane) return
     const ro = new ResizeObserver(fit)
     ro.observe(pane)
     return () => ro.disconnect()
-  }, [ref, value])
+  }, [ref, fit])
 }

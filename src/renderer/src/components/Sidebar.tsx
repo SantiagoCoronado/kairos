@@ -103,11 +103,15 @@ function useModifierHeld(): boolean {
 export function Sidebar({
   view,
   onNavigate,
-  onHide
+  onHide,
+  hidden = false
 }: {
   view: ViewId
   onNavigate: (v: ViewId) => void
   onHide: () => void
+  /** folded to nothing (⌘B, or the Inbox writing mode) — stays mounted so
+   *  the width can tween and the nav state survives */
+  hidden?: boolean
 }): React.JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const { data: unread } = useInvoke('comms:unreadTotal', [], ['comms'])
@@ -147,9 +151,17 @@ export function Sidebar({
   const showSlots = useModifierHeld()
   return (
     <aside
-      className="relative shrink-0 border-r border-border surface-sidebar flex flex-col select-none"
-      style={{ width }}
+      className="relative shrink-0 overflow-hidden t-fold"
+      data-folded={hidden}
+      style={{ width: hidden ? 0 : width }}
     >
+      {/* the inner keeps its full width while the outer folds, so nothing
+          reflows mid-tween; inert keeps focus and shortcuts out of it */}
+      <div
+        className="h-full border-r border-border surface-sidebar flex flex-col select-none t-fold-inner"
+        style={{ width }}
+        inert={hidden}
+      >
       {/* space for macOS traffic lights */}
       <div className="drag-region h-11 shrink-0 relative">
         <SidebarToggle hidden={false} onToggle={onHide} />
@@ -244,7 +256,8 @@ export function Sidebar({
         </button>
       </div>
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      <ResizeHandle onMouseDown={startResize} />
+      </div>
+      {!hidden && <ResizeHandle onMouseDown={startResize} />}
     </aside>
   )
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { motionMs } from './motion'
 
 /**
  * Writing mode folds the Inbox columns (account rail, thread list) and the
@@ -80,17 +81,6 @@ export function escapeExitsWriting(active: boolean, body: string): boolean {
 }
 
 /**
- * A CSS <time> as milliseconds. The build minifies `350ms` to `.35s`, so
- * a bare parseFloat would read 0.35 and end the morph on the next tick.
- */
-export function cssTimeToMs(raw: string, fallback: number): number {
-  const m = raw.trim().match(/^(-?\d*\.?\d+)(ms|s)$/i)
-  if (!m) return fallback
-  const n = Number(m[1])
-  return m[2].toLowerCase() === 's' ? n * 1000 : n
-}
-
-/**
  * True for one morph's duration after `active` flips, so the composer can
  * tween its height for the mode change and nowhere else — the box also
  * grows with every typed line, and that must stay instant. Set during the
@@ -111,10 +101,10 @@ export function useMorphing(active: boolean): boolean {
   useEffect(() => {
     if (!morphing) return
     // read the duration the CSS uses so a retuned token keeps them in step
-    const raw = getComputedStyle(document.documentElement).getPropertyValue(
-      active ? '--morph-open-dur' : '--morph-close-dur'
+    const t = setTimeout(
+      () => setMorphing(false),
+      motionMs(active ? '--morph-open-dur' : '--morph-close-dur', 350)
     )
-    const t = setTimeout(() => setMorphing(false), cssTimeToMs(raw, 350))
     return () => clearTimeout(t)
   }, [morphing, active])
   return morphing

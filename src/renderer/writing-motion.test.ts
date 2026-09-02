@@ -82,3 +82,15 @@ describe('reduced motion', () => {
     expect(guard).toMatch(/\.t-morph\.is-morphing \.t-morph-toolbar\s*\{\s*animation: none !important/)
   })
 })
+
+describe('refine', () => {
+  it('leaves no raw durations outside the token block', () => {
+    // every transition/animation in styles.css reads a token; a new literal
+    // is a value transitions refine would flag
+    const tokenBlockStart = css.indexOf('/* ── Motion tokens')
+    const tokenBlockEnd = css.indexOf('}', tokenBlockStart)
+    const outside = css.slice(0, tokenBlockStart) + css.slice(tokenBlockEnd)
+    const literals = outside.match(/\b\d+(\.\d+)?m?s\b/g) ?? []
+    expect(literals).toEqual([])
+  })
+})

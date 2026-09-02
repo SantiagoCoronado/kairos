@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { cssTimeToMs } from './src/lib/motion'
 import {
   approxLines,
   autoEnterWriting,
-  cssTimeToMs,
   escapeExitsWriting,
   isWritingShortcut,
   longEnoughForWriting,

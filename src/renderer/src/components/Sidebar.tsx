@@ -232,7 +232,7 @@ export function Sidebar({
             {hasSlot && (
               <kbd
                 aria-hidden
-                className={`shrink-0 font-mono text-[10px] tabular-nums text-faint transition-opacity duration-150 ${
+                className={`shrink-0 font-mono text-[10px] tabular-nums text-faint transition-opacity duration-(--duration-quick) ${
                   showSlots ? 'opacity-100' : 'opacity-0'
                 }`}
               >

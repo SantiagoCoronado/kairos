@@ -58,6 +58,7 @@ import { Linkified } from '../components/Linkify'
 import { clamp, useResizableWidth, useMeasuredWidth, ResizeHandle } from '../components/ResizeHandle'
 import { fitMax } from '../lib/inbox-columns'
 import { useAutoGrow } from '../lib/autogrow'
+import { motionMs } from '../lib/motion'
 import {
   readWritingPref,
   writeWritingPref,
@@ -221,7 +222,8 @@ function PullToRefreshList({
         className="flex items-end justify-center overflow-hidden"
         style={{
           height: pull,
-          transition: dragging ? 'none' : 'height 200ms cubic-bezier(0.25, 1, 0.5, 1)'
+          // release settle is a height resize
+          transition: dragging ? 'none' : 'height var(--resize-dur) var(--resize-ease)'
         }}
       >
         <RefreshCw
@@ -528,7 +530,9 @@ export function InboxView({
     const idx = list.findIndex((x) => x.id === t.id)
     const next = idx >= 0 ? (list[idx + 1] ?? list[idx - 1] ?? null) : null
     setLeaving((prev) => new Map(prev).set(t.id, t))
-    const fold = new Promise((r) => setTimeout(r, 240))
+    // the row's fold runs on --resize-dur (styles.css); a little slack so
+    // the swap lands after the last frame, never mid-fold
+    const fold = new Promise((r) => setTimeout(r, motionMs('--resize-dur', 300) + 20))
     const pending = action()
     void (async () => {
       await fold
@@ -1549,7 +1553,10 @@ function ThreadRow({
           swipe
             ? {
                 transform: `translateX(${offset}px)`,
-                transition: dragging ? 'none' : 'transform 200ms cubic-bezier(0.25, 1, 0.5, 1)',
+                // snap-back is a position change: fast, smooth-out
+                transition: dragging
+                  ? 'none'
+                  : 'transform var(--duration-fast) var(--ease-smooth-out)',
                 // opaque while sliding so the strips don't show through the row
                 background: offset !== 0 ? 'var(--color-overlay)' : undefined
               }

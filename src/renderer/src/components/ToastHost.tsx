@@ -20,7 +20,7 @@ function CountdownRing({ ms }: { ms: number }): React.JSX.Element {
         pathLength={1}
         strokeDasharray="1"
         strokeDashoffset="0"
-        style={{ animation: `undo-ring-drain ${ms}ms linear forwards` }}
+        style={{ animation: `undo-ring-drain ${ms}ms var(--ease-linear) forwards` }}
       />
     </svg>
   )

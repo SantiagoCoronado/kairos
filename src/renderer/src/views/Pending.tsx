@@ -314,7 +314,8 @@ export function PendingView({
                   data-pending-key={item.key}
                   className={cn(
                     'relative flex items-center gap-3 py-1.5 px-1.5 -mx-1.5 rounded-md group',
-                    'transition-colors duration-700',
+                    // deep-link highlight fading is an emphasis moment
+                    'transition-colors duration-(--duration-very-slow)',
                     highlightKey === item.key && 'bg-accent/10'
                   )}
                 >

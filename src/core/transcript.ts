@@ -28,12 +28,19 @@ export function mergeChannelSegments(me: Untagged[], them: Untagged[]): Transcri
 // overlapping system segment concatenated: a bleed echo that straddles two
 // system segments still matches, while the user's own words in between
 // ("Hola, muy bien, ¿y tú?") stay because they never appear over there.
+/** whisper's timestamps for the same sound differ per channel by this much */
 const BLEED_WINDOW_S = 1.5
 /** shorter mic segments ("sí", "ok") are too often a genuine echo of
  *  agreement to call bleed on text alone */
 const BLEED_MIN_WORDS = 3
 /** fraction of the mic segment's words found in order on the system side */
 const BLEED_MATCH_RATIO = 0.8
+/** an echo's words sit contiguously on the system side, so the match is
+ *  bounded to a span not much longer than the mic segment — otherwise a
+ *  3-word "sí, claro, perfecto" is found scattered across any long Them
+ *  monologue of common words. 1.5× leaves room for words whisper split
+ *  across two system segments ("pesos mex" / "icanos") */
+const BLEED_SPAN_FACTOR = 1.5
 
 export function dropMicBleed(me: Untagged[], them: Untagged[]): Untagged[] {
   if (them.length === 0) return me
@@ -41,11 +48,21 @@ export function dropMicBleed(me: Untagged[], them: Untagged[]): Untagged[] {
   return me.filter((seg) => {
     const words = normalizeWords(seg.text)
     if (words.length < BLEED_MIN_WORDS) return true
+    // an echo starts while Them is still talking (a few hundred ms after
+    // the system segment does), so the trailing edge gets no tolerance:
+    // a reply that repeats Them's words right after they finish is the
+    // user's own
     const overlapping = themWords
-      .filter((t) => t.t0 < seg.t1 + BLEED_WINDOW_S && t.t1 > seg.t0 - BLEED_WINDOW_S)
+      .filter((t) => t.t0 < seg.t1 + BLEED_WINDOW_S && t.t1 > seg.t0)
       .flatMap((t) => t.words)
     if (overlapping.length === 0) return true
-    return orderedOverlap(words, overlapping) / words.length < BLEED_MATCH_RATIO
+    const span = Math.ceil(words.length * BLEED_SPAN_FACTOR)
+    let best = 0
+    for (let i = 0; i + Math.min(span, overlapping.length) <= overlapping.length; i++) {
+      best = Math.max(best, orderedOverlap(words, overlapping.slice(i, i + span)))
+      if (best === words.length) break
+    }
+    return best / words.length < BLEED_MATCH_RATIO
   })
 }
 

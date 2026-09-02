@@ -68,6 +68,36 @@ describe('dropMicBleed', () => {
     expect(dropMicBleed(me, them)).toHaveLength(1)
   })
 
+  it('keeps a short interjection whose words are scattered across a long Them segment', () => {
+    // review finding: every word of "sí, claro, perfecto" appears in order
+    // somewhere in the monologue, but an echo would be contiguous
+    const them = [
+      {
+        t0: 0,
+        t1: 20,
+        text: 'sí, bueno, lo que pasa es que claro, la idea es tener algo perfecto para el lunes y después vemos'
+      }
+    ]
+    const me = [{ t0: 5, t1: 6.2, text: 'sí, claro, perfecto' }]
+    expect(dropMicBleed(me, them)).toHaveLength(1)
+  })
+
+  it('keeps a reply that repeats Them right after they finish', () => {
+    // review finding: an echo starts while Them is still talking; a mic
+    // segment that begins after the system segment ended is the user
+    const them = [{ t0: 0, t1: 3.0, text: '¿nos vemos el viernes?' }]
+    const me = [{ t0: 3.2, t1: 4.5, text: 'nos vemos el viernes' }]
+    expect(dropMicBleed(me, them)).toHaveLength(1)
+  })
+
+  it('still drops an echo whose mic timestamps start before the system copy', () => {
+    // whisper's per-channel timestamps can put the mic copy a few seconds
+    // early (seen at 878.0 vs 881.3 in the Primero AI call)
+    const them = [{ t0: 881.3, t1: 884.5, text: 'Pues depende mucho, pero me lo puedes decir en pesos mex' }]
+    const me = [{ t0: 878.0, t1: 884.3, text: 'Pues depende mucho, pero me lo puedes decir en pesos mex' }]
+    expect(dropMicBleed(me, them)).toEqual([])
+  })
+
   it('keeps short interjections and genuinely different overlapping speech', () => {
     const them = [{ t0: 0, t1: 3, text: 'sí, claro, y luego mandamos la propuesta' }]
     const me = [

@@ -29,14 +29,28 @@ PRAGMA busy_timeout = 5000;
 PRAGMA synchronous = NORMAL;
 `
 
-export function runTransaction<T>(exec: (sql: string) => void, fn: () => T): T {
-  exec('BEGIN IMMEDIATE')
-  try {
-    const result = fn()
-    exec('COMMIT')
-    return result
-  } catch (err) {
-    exec('ROLLBACK')
-    throw err
+/**
+ * Build a `transaction` for an adapter. Nested calls become savepoints, so a
+ * repo primitive that opens its own transaction still composes into a caller's
+ * larger one: an inner throw rolls back to its savepoint and rethrows; whether
+ * the outer work survives is the outer caller's decision. `db.exec` runs a
+ * multi-statement string, which is what the rollback-and-release relies on.
+ */
+export function makeTransaction(exec: (sql: string) => void): <T>(fn: () => T) => T {
+  let depth = 0
+  return <T>(fn: () => T): T => {
+    const sp = depth > 0 ? `sp${depth}` : null
+    exec(sp ? `SAVEPOINT ${sp}` : 'BEGIN IMMEDIATE')
+    depth++
+    try {
+      const result = fn()
+      exec(sp ? `RELEASE ${sp}` : 'COMMIT')
+      return result
+    } catch (err) {
+      exec(sp ? `ROLLBACK TO ${sp}; RELEASE ${sp}` : 'ROLLBACK')
+      throw err
+    } finally {
+      depth--
+    }
   }
 }

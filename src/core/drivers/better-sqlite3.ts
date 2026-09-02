@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import type { DbDriver, SqlValue, RunResult } from '../driver'
-import { OPEN_PRAGMAS, runTransaction } from '../driver'
+import { OPEN_PRAGMAS, makeTransaction } from '../driver'
 
 export function openBetterSqliteDb(path: string): DbDriver {
   const db = new Database(path)
@@ -25,7 +25,7 @@ export function openBetterSqliteDb(path: string): DbDriver {
       return { changes: Number(r.changes) }
     },
     exec: (sql: string) => db.exec(sql),
-    transaction: <T>(fn: () => T) => runTransaction((s) => db.exec(s), fn),
+    transaction: makeTransaction((s) => db.exec(s)),
     close: () => db.close()
   }
 }

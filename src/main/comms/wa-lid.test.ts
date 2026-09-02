@@ -7,7 +7,7 @@ const PN = '5215534002774@s.whatsapp.net'
 describe('LidBook', () => {
   it('learns a pairing in either order and resolves the lid to the phone jid', () => {
     const book = new LidBook()
-    expect(book.learn(LID, PN)).toBe(true)
+    expect(book.learn(LID, PN)).toBe('new')
     expect(book.canonical(LID)).toBe(PN)
     expect(book.canonical(PN)).toBe(PN)
     const reversed = new LidBook()
@@ -35,6 +35,14 @@ describe('LidBook', () => {
     const book = new LidBook()
     book.learn(LID, PN)
     expect(book.learn(LID, PN)).toBe(false)
+  })
+
+  it('flags a lid moving to another phone and drops the stale reverse entry', () => {
+    const book = new LidBook()
+    book.learn(LID, PN)
+    expect(book.learn(LID, '5215519544781@s.whatsapp.net')).toBe('remap')
+    expect(book.canonical(LID)).toBe('5215519544781@s.whatsapp.net')
+    expect(book.aliases(PN)).toEqual([PN])
   })
 
   it('lists aliases canonical-first from either side', () => {

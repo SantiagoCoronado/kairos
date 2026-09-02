@@ -20,19 +20,25 @@ export class LidBook {
   /**
    * Record a lid/phone pairing from any source — message keys (remoteJid +
    * remoteJidAlt), contact records, history chats, Baileys' mapping store.
-   * Either order; device suffixes tolerated. Returns true if newly learned.
+   * Either order; device suffixes tolerated. Returns 'new' for a first
+   * pairing, 'remap' when a lid already pointed at another phone (numbers get
+   * recycled — the caller should log it), false when nothing changed.
    */
-  learn(a?: string | null, b?: string | null): boolean {
+  learn(a?: string | null, b?: string | null): false | 'new' | 'remap' {
     if (!a || !b) return false
     const x = norm(a)
     const y = norm(b)
     const lid = isLidJid(x) ? x : isLidJid(y) ? y : null
     const pn = isPnJid(x) ? x : isPnJid(y) ? y : null
     if (!lid || !pn) return false
-    if (this.lidToPn.get(lid) === pn) return false
+    const before = this.lidToPn.get(lid)
+    if (before === pn) return false
+    if (before) this.pnToLid.delete(before)
+    const prevLid = this.pnToLid.get(pn)
+    if (prevLid && prevLid !== lid) this.lidToPn.delete(prevLid)
     this.lidToPn.set(lid, pn)
     this.pnToLid.set(pn, lid)
-    return true
+    return before ? 'remap' : 'new'
   }
 
   pnFor(lid: string): string | undefined {

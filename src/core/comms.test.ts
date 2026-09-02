@@ -5,6 +5,7 @@ import { openNodeSqliteDb } from './drivers/node-sqlite'
 import { migrate, applyMigration } from './migrations'
 import * as comms from './repo/comms'
 import * as people from './repo/people'
+import * as pending from './repo/pending'
 import { pendingUnits } from './outbox-units'
 
 const T0 = new Date('2026-07-01T12:00:00Z')
@@ -1390,5 +1391,90 @@ describe('whatsapp lid/phone thread folding', () => {
     expect(inbound.sender_handle).toBe('5215534002774')
     expect(inbound.person_id).toBe(stef.id)
     expect(rows.find((m) => m.external_id === 'out')!.sender_handle).toBe('213365519610111')
+  })
+})
+
+describe('foldLidThread', () => {
+  const PN = '5215534002774@s.whatsapp.net'
+  const LID = '213365519610111@lid'
+  const waAccount = () =>
+    comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: '5215516273510@s.whatsapp.net', display_name: '+52…'
+    }, T0)
+  const thread = (accountId: string, jid: string, title: string) =>
+    comms.upsertThread(db, {
+      account_id: accountId, provider: 'whatsapp', external_id: jid, kind: 'dm', title
+    }, T0)
+  const inbound = (accountId: string, threadId: string, id: string, at: Date, handle = '213365519610111') =>
+    comms.upsertMessage(db, {
+      thread_id: threadId, account_id: accountId, provider: 'whatsapp', external_id: id,
+      sender_handle: handle, sent_at: at.toISOString(), body_text: id, is_read: false
+    }, at)
+
+  it('merges into an existing phone thread, atomically, and reports what moved', () => {
+    const a = waAccount()
+    const pn = thread(a.id, PN, 'Stef Bolde')
+    const lid = thread(a.id, LID, 'Stef Bolde')
+    inbound(a.id, pn.id, 'old', later(1), '5215534002774')
+    inbound(a.id, lid.id, 'new1', later(5))
+    inbound(a.id, lid.id, 'new2', later(6))
+    const r = comms.foldLidThread(db, a.id, LID, PN, undefined, later(7))
+    expect(r).toEqual({ action: 'merged', threadId: pn.id, messages: 2, handles: 2 })
+    expect(comms.getThreadByExternal(db, a.id, LID)).toBeUndefined()
+    expect(comms.listMessages(db, pn.id).every((m) => m.sender_handle === '5215534002774')).toBe(true)
+  })
+
+  it('re-keys in place when no phone thread exists, keeping the id and naming from the number', () => {
+    const a = waAccount()
+    const lid = thread(a.id, LID, 'WhatsApp chat')
+    inbound(a.id, lid.id, 'm', later(1))
+    const r = comms.foldLidThread(db, a.id, LID, PN, undefined, later(2))
+    expect(r).toEqual({ action: 'rekeyed', threadId: lid.id, messages: 1, handles: 1 })
+    const t = comms.getThread(db, lid.id)!
+    expect(t.external_id).toBe(PN)
+    expect(t.title).toBe('+5215534002774')
+  })
+
+  it('prefers a known name over the number for a placeholder title, and never touches a real one', () => {
+    const a = waAccount()
+    const placeholder = thread(a.id, LID, 'WhatsApp chat')
+    comms.foldLidThread(db, a.id, LID, PN, 'Stef Bolde', later(1))
+    expect(comms.getThread(db, placeholder.id)!.title).toBe('Stef Bolde')
+
+    const named = thread(a.id, '42331348689117@lid', 'Santiago T')
+    comms.foldLidThread(db, a.id, '42331348689117@lid', '5215519544781@s.whatsapp.net', 'Turrent', later(2))
+    expect(comms.getThread(db, named.id)!.title).toBe('Santiago T')
+  })
+
+  it('is a no-op when the lid has no thread', () => {
+    const a = waAccount()
+    expect(comms.foldLidThread(db, a.id, LID, PN)).toEqual({ action: 'none', messages: 0, handles: 0 })
+  })
+
+  it('carries a pending-inbox dismissal over when the survivor has none', () => {
+    const a = waAccount()
+    const pn = thread(a.id, PN, 'Stef Bolde')
+    const lid = thread(a.id, LID, 'Stef Bolde')
+    inbound(a.id, pn.id, 'old', later(1), '5215534002774')
+    inbound(a.id, lid.id, 'new', later(5))
+    pending.dismissItem(db, `thread:${lid.id}`, later(6))
+    comms.foldLidThread(db, a.id, LID, PN, undefined, later(7))
+    const rows = db.all<{ item_key: string; fingerprint: string }>('SELECT item_key, fingerprint FROM pending_overlay')
+    expect(rows).toEqual([{ item_key: `thread:${pn.id}`, fingerprint: later(5).toISOString() }])
+    // the merged thread's newest message is the one the dismissal was stamped at — still hidden
+    expect(comms.getThread(db, pn.id)!.last_message_at).toBe(later(5).toISOString())
+  })
+
+  it('keeps the survivor’s own overlay and drops the absorbed one', () => {
+    const a = waAccount()
+    const pn = thread(a.id, PN, 'Stef Bolde')
+    const lid = thread(a.id, LID, 'Stef Bolde')
+    inbound(a.id, pn.id, 'old', later(1), '5215534002774')
+    inbound(a.id, lid.id, 'new', later(5))
+    pending.dismissItem(db, `thread:${pn.id}`, later(2))
+    pending.dismissItem(db, `thread:${lid.id}`, later(6))
+    comms.foldLidThread(db, a.id, LID, PN, undefined, later(7))
+    const rows = db.all<{ item_key: string; fingerprint: string }>('SELECT item_key, fingerprint FROM pending_overlay')
+    expect(rows).toEqual([{ item_key: `thread:${pn.id}`, fingerprint: later(1).toISOString() }])
   })
 })

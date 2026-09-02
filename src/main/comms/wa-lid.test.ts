@@ -45,6 +45,13 @@ describe('LidBook', () => {
     expect(book.aliases(PN)).toEqual([PN])
   })
 
+  it('isKnownPn answers for paired phone digits only', () => {
+    const book = new LidBook()
+    book.learn(LID, PN)
+    expect(book.isKnownPn('5215534002774')).toBe(true)
+    expect(book.isKnownPn('213365519610111')).toBe(false)
+  })
+
   it('lists aliases canonical-first from either side', () => {
     const book = new LidBook()
     book.learn(LID, PN)

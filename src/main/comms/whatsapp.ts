@@ -515,8 +515,12 @@ export class WhatsAppConnection {
     const lidThreads = repo
       .listAccountThreads(this.db, this.accountId)
       .filter((t) => isLidJid(t.external_id) && !this.absorbed.has(t.external_id))
-    const handleLids = repo.listInboundSenderHandles(this.db, this.accountId).map((h) => `${h}@lid`)
-    // phone-digit handles simply miss in the store; `tried` makes that one read per session
+    // handles that key a phone thread or are a paired phone are numbers, not
+    // lids — never fabricate `<phone>@lid` from them (see listInboundSenderHandles)
+    const handleLids = repo
+      .listInboundSenderHandles(this.db, this.accountId)
+      .filter((h) => !this.lids.isKnownPn(h))
+      .map((h) => `${h}@lid`)
     await this.lookupLids([...lidThreads.map((t) => t.external_id), ...handleLids])
     let changed = false
     for (const t of lidThreads) {

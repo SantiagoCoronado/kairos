@@ -45,6 +45,11 @@ export class LidBook {
     return this.lidToPn.get(norm(lid))
   }
 
+  /** Whether these digits are a phone user already paired with a lid. */
+  isKnownPn(user: string): boolean {
+    return this.pnToLid.has(`${user}@s.whatsapp.net`)
+  }
+
   /** The thread key for a chat jid: its phone jid when the lid is known, else itself. */
   canonical(jid: string): string {
     return isLidJid(jid) ? (this.lidToPn.get(norm(jid)) ?? jid) : jid

@@ -737,11 +737,21 @@ export function foldLidThread(
   })
 }
 
-/** Every inbound sender handle stored for an account — the lid→phone handle sweep's candidates. */
+/**
+ * Inbound sender handles that may still be lid digits — the lid→phone handle
+ * sweep's candidates. A handle that keys a phone-jid thread of the account is
+ * a phone number and is left out: asking the store about `<phone>@lid` is a
+ * miss today, but a collision with a real lid would rewrite genuine phone
+ * handles onto another number, account-wide.
+ */
 export function listInboundSenderHandles(db: DbDriver, accountId: string): string[] {
   return db
     .all<{ sender_handle: string }>(
-      "SELECT DISTINCT sender_handle FROM comms_messages WHERE account_id = ? AND is_me = 0 AND sender_handle != ''",
+      `SELECT DISTINCT m.sender_handle FROM comms_messages m
+       WHERE m.account_id = ? AND m.is_me = 0 AND m.sender_handle != ''
+         AND NOT EXISTS (SELECT 1 FROM comms_threads t
+                         WHERE t.account_id = m.account_id
+                           AND t.external_id = m.sender_handle || '@s.whatsapp.net')`,
       accountId
     )
     .map((r) => r.sender_handle)

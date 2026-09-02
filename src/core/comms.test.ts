@@ -1446,6 +1446,18 @@ describe('foldLidThread', () => {
     expect(comms.getThread(db, named.id)!.title).toBe('Santiago T')
   })
 
+  it('listInboundSenderHandles leaves out handles that key a phone thread', () => {
+    const a = waAccount()
+    const pn = thread(a.id, PN, 'Stef Bolde')
+    const group = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: '1-2@g.us', kind: 'group', title: 'G'
+    }, T0)
+    inbound(a.id, pn.id, 'dm', later(1), '5215534002774')
+    inbound(a.id, group.id, 'g1', later(2), '5215534002774')
+    inbound(a.id, group.id, 'g2', later(3), '199982317617381')
+    expect(comms.listInboundSenderHandles(db, a.id)).toEqual(['199982317617381'])
+  })
+
   it('is a no-op when the lid has no thread', () => {
     const a = waAccount()
     expect(comms.foldLidThread(db, a.id, LID, PN)).toEqual({ action: 'none', messages: 0, handles: 0 })

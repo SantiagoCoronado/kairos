@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { cssTimeToMs, escapeExitsWriting, isWritingShortcut, writingActive } from './src/lib/writing-mode'
+import {
+  approxLines,
+  autoEnterWriting,
+  cssTimeToMs,
+  escapeExitsWriting,
+  isWritingShortcut,
+  longEnoughForWriting,
+  writingActive
+} from './src/lib/writing-mode'
 
 describe('writingActive', () => {
   it('folds only while a composer is on screen', () => {
@@ -74,5 +82,46 @@ describe('cssTimeToMs', () => {
   it('falls back when the token is missing or not a time', () => {
     expect(cssTimeToMs('', 350)).toBe(350)
     expect(cssTimeToMs('fast', 350)).toBe(350)
+  })
+})
+
+describe('autoEnterWriting', () => {
+  const ok = { enabled: true, armed: true, active: false, hasComposer: true, mobile: false }
+
+  it('folds when everything lines up', () => {
+    expect(autoEnterWriting(ok)).toBe(true)
+  })
+
+  it('respects the setting', () => {
+    expect(autoEnterWriting({ ...ok, enabled: false })).toBe(false)
+  })
+
+  it('stays out after a manual exit until re-armed', () => {
+    expect(autoEnterWriting({ ...ok, armed: false })).toBe(false)
+  })
+
+  it('is a no-op once already folded, with no composer, or on the phone', () => {
+    expect(autoEnterWriting({ ...ok, active: true })).toBe(false)
+    expect(autoEnterWriting({ ...ok, hasComposer: false })).toBe(false)
+    expect(autoEnterWriting({ ...ok, mobile: true })).toBe(false)
+  })
+})
+
+describe('approxLines / longEnoughForWriting', () => {
+  it('counts hard breaks, an empty line included', () => {
+    expect(approxLines('a\n\nb', 90)).toBe(3)
+  })
+
+  it('wraps long lines at the column width', () => {
+    expect(approxLines('x'.repeat(181), 90)).toBe(3)
+  })
+
+  it('two short lines are not yet long', () => {
+    expect(longEnoughForWriting('Hola Olimpia,\ngracias por los documentos.')).toBe(false)
+  })
+
+  it('a third line, hard or wrapped, is', () => {
+    expect(longEnoughForWriting('one\ntwo\nthree')).toBe(true)
+    expect(longEnoughForWriting('w'.repeat(200))).toBe(true)
   })
 })

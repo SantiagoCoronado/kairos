@@ -12,6 +12,7 @@ const DEFAULTS: Settings = {
   translucency: 0,
   showClaudeUsage: true,
   autoLabel: false,
+  inboxAutoWriting: true,
   notifyInbox: 'important',
   meetingCaptureBackend: 'sck',
   meetingModel: 'large-v3-turbo',

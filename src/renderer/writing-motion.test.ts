@@ -94,3 +94,11 @@ describe('refine', () => {
     expect(literals).toEqual([])
   })
 })
+
+describe('compose morph (view transitions)', () => {
+  it('leaves the page alone and moves only the named pair', () => {
+    expect(rule('::view-transition-old(root),\n::view-transition-new(root)')).toMatch(/animation: none/)
+    expect(rule('::view-transition-group(compose)')).toMatch(/var\(--morph-open-dur\)/)
+    expect(rule('html.vt-closing::view-transition-group(compose)')).toMatch(/var\(--morph-close-dur\)/)
+  })
+})

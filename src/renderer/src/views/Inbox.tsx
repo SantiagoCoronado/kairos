@@ -59,6 +59,7 @@ import { clamp, useResizableWidth, useMeasuredWidth, ResizeHandle } from '../com
 import { fitMax } from '../lib/inbox-columns'
 import { useAutoGrow } from '../lib/autogrow'
 import { motionMs } from '../lib/motion'
+import { withViewTransition } from '../lib/view-transition'
 import {
   readWritingPref,
   writeWritingPref,
@@ -512,6 +513,15 @@ export function InboxView({
     setHeldThread(null)
   }
 
+  // the Compose button morphs into the new-email pane and back: the
+  // view-transition-name 'compose' sits on whichever of the two is showing
+  const openCompose = (): void =>
+    withViewTransition(() => {
+      setComposeDraft(null)
+      setMode('compose')
+    })
+  const closeCompose = (): void => withViewTransition(() => setMode('threads'), { closing: true })
+
   /**
    * Archive/delete UX: the row folds away in one motion (the pane swap waits
    * for the fold, so building the next email never steals animation frames),
@@ -675,7 +685,7 @@ export function InboxView({
     const down = (e: KeyboardEvent): void => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping()) return
       if (mode !== 'threads') {
-        if (e.key === 'Escape') setMode('threads')
+        if (e.key === 'Escape') mode === 'compose' ? closeCompose() : setMode('threads')
         return
       }
       const list = displayThreads ?? []
@@ -698,8 +708,7 @@ export function InboxView({
         document.getElementById('inbox-search')?.focus()
       } else if (e.key === 'c' && gmail.length > 0) {
         e.preventDefault()
-        setComposeDraft(null)
-        setMode('compose')
+        openCompose()
       }
     }
     window.addEventListener('keydown', down)
@@ -968,10 +977,10 @@ export function InboxView({
             )}
             {gmail.length > 0 && (
               <button
-                onClick={() => {
-                  if (mode !== 'compose') setComposeDraft(null)
-                  setMode(mode === 'compose' ? 'threads' : 'compose')
-                }}
+                onClick={() => (mode === 'compose' ? closeCompose() : openCompose())}
+                // the trigger carries the name only while it is the trigger —
+                // two live elements with one name would abort the transition
+                style={{ viewTransitionName: mode === 'compose' ? undefined : 'compose' }}
                 className={cn(
                   'px-2 py-1 rounded text-[11.5px] border transition-colors inline-flex items-center gap-1',
                   mode === 'compose'
@@ -1050,14 +1059,16 @@ export function InboxView({
             draft={composeDraft?.draft ?? null}
             writing={writingMode}
             onSent={() => {
-              setMode('threads')
+              closeCompose()
               setWriting(false)
               setAutoArmed(true)
             }}
-            onUndoRestore={(d) => {
-              setComposeDraft((prev) => ({ draft: d, nonce: (prev?.nonce ?? 0) + 1 }))
-              setMode('compose')
-            }}
+            onUndoRestore={(d) =>
+              withViewTransition(() => {
+                setComposeDraft((prev) => ({ draft: d, nonce: (prev?.nonce ?? 0) + 1 }))
+                setMode('compose')
+              })
+            }
           />
         ) : thread ? (
           <ThreadPane
@@ -3551,6 +3562,7 @@ function ComposePane({
     <div
       className={cn('p-4 flex flex-col gap-2 flex-1 min-h-0 w-full max-w-4xl t-morph', morphing && 'is-morphing')}
       data-open={open}
+      style={{ viewTransitionName: 'compose' }}
       onKeyDown={sendKey}
     >
       {accounts.length > 1 ? (

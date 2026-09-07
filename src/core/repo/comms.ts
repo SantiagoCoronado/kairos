@@ -307,27 +307,47 @@ export function listUnlabeledEmailThreads(
   )
 }
 
-/** WhatsApp DM threads with fresh unread messages the notification triage
- *  hasn't evaluated yet (last_message_at past the notify_eval_at watermark). */
+/** WhatsApp DM threads with fresh unread INBOUND messages the notification
+ *  triage hasn't evaluated yet (newest inbound past the notify_eval_at
+ *  watermark). Keyed on the inbound side, not last_message_at: your own
+ *  reply from the phone advances the thread but is nothing to triage. */
 export function listWhatsappTriageCandidates(
   db: DbDriver,
   sinceIso: string,
   limit: number
-): (CommsThread & { sender: string })[] {
-  return db.all<CommsThread & { sender: string }>(
-    `SELECT t.*, COALESCE((
-       SELECT COALESCE(NULLIF(m.sender_name, ''), m.sender_handle)
-       FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
-       ORDER BY m.sent_at DESC LIMIT 1
-     ), t.title) AS sender
-     FROM comms_threads t
-     WHERE t.provider = 'whatsapp' AND t.kind = 'dm' AND t.unread_count > 0
-       AND t.is_archived = 0 AND t.sync_enabled = 1
-       AND t.last_message_at >= ?
-       AND (t.notify_eval_at IS NULL OR t.last_message_at > t.notify_eval_at)
-     ORDER BY t.last_message_at DESC LIMIT ?`,
+): (CommsThread & { sender: string; last_inbound_at: string })[] {
+  return db.all<CommsThread & { sender: string; last_inbound_at: string }>(
+    `SELECT * FROM (
+       SELECT t.*,
+         COALESCE((
+           SELECT COALESCE(NULLIF(m.sender_name, ''), m.sender_handle)
+           FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
+           ORDER BY m.sent_at DESC LIMIT 1
+         ), t.title) AS sender,
+         (SELECT MAX(m.sent_at) FROM comms_messages m
+          WHERE m.thread_id = t.id AND m.is_me = 0) AS last_inbound_at
+       FROM comms_threads t
+       WHERE t.provider = 'whatsapp' AND t.kind = 'dm' AND t.unread_count > 0
+         AND t.is_archived = 0 AND t.sync_enabled = 1
+     )
+     WHERE last_inbound_at >= ?
+       AND (notify_eval_at IS NULL OR last_inbound_at > notify_eval_at)
+     ORDER BY last_inbound_at DESC LIMIT ?`,
     sinceIso,
     limit
+  )
+}
+
+/** The newest message someone else sent in a thread — what a notification
+ *  is about. Undefined for a thread that is all your own messages. */
+export function latestInboundMessage(
+  db: DbDriver,
+  threadId: string
+): Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender_name'> | undefined {
+  return db.get<Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender_name'>>(
+    `SELECT sent_at, body_text, sender_name FROM comms_messages
+     WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC LIMIT 1`,
+    threadId
   )
 }
 

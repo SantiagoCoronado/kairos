@@ -647,6 +647,11 @@ export class WhatsAppConnection {
       const row = repo.getMessageByExternal(this.db, this.accountId, externalId)
       if (row) repo.addAttachments(this.db, row.id, [{ ...meta, external_ref: externalId }])
     }
+    // a live message of yours (sent from the phone or another device, or
+    // our own send echoing back) means you had the chat open — it's read.
+    // The phone's app-state sync says the same, but late or not at all, and
+    // meanwhile the thread sat unread with your reply as its newest message.
+    if (added && isMe && !asRead) repo.markThreadRead(this.db, thread.id)
     return added
   }
 

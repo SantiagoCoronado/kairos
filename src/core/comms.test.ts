@@ -814,6 +814,59 @@ describe('attachments', () => {
   })
 })
 
+describe('own reply from the phone (whatsapp)', () => {
+  function waDm() {
+    const a = comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: '5215500000000@s.whatsapp.net', display_name: 'me'
+    }, T0)
+    const t = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: '5215511111111@s.whatsapp.net',
+      kind: 'dm', title: 'Junior'
+    }, T0)
+    const say = (ext: string, mins: number, body: string, me = false): void => {
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: a.id, provider: 'whatsapp', external_id: ext,
+        sender_name: me ? 'me' : 'Junior', sender_handle: me ? '5215500000000' : '5215511111111',
+        is_me: me, sent_at: later(mins).toISOString(), body_text: body
+      }, later(mins))
+    }
+    return { a, t, say }
+  }
+
+  it('latestInboundMessage skips your own newer message', () => {
+    const { t, say } = waDm()
+    expect(comms.latestInboundMessage(db, t.id)).toBeUndefined()
+    say('in1', 0, 'where are you?')
+    say('me1', 5, 'on my way', true)
+    const m = comms.latestInboundMessage(db, t.id)!
+    expect(m.body_text).toBe('where are you?')
+    expect(m.sent_at).toBe(later(0).toISOString())
+    expect(m.sender_name).toBe('Junior')
+  })
+
+  it('triage candidates key on the newest inbound, not on your reply', () => {
+    const { t, say } = waDm()
+    const since = later(-60).toISOString()
+    say('in1', 0, 'where are you?')
+    let cands = comms.listWhatsappTriageCandidates(db, since, 10)
+    expect(cands.map((c) => c.id)).toEqual([t.id])
+    expect(cands[0].last_inbound_at).toBe(later(0).toISOString())
+    comms.setThreadNotifyEval(db, t.id, cands[0].last_inbound_at)
+
+    // your reply advances last_message_at past the watermark — still nothing to triage
+    say('me1', 5, 'on my way', true)
+    expect(comms.getThread(db, t.id)!.last_message_at).toBe(later(5).toISOString())
+    expect(comms.listWhatsappTriageCandidates(db, since, 10)).toHaveLength(0)
+
+    // a new inbound message is
+    say('in2', 10, 'hurry')
+    cands = comms.listWhatsappTriageCandidates(db, since, 10)
+    expect(cands.map((c) => c.id)).toEqual([t.id])
+    expect(cands[0].last_inbound_at).toBe(later(10).toISOString())
+    expect(cands[0].sender).toBe('Junior')
+  })
+})
+
 describe('countNewInbound', () => {
   it('counts fresh inbound unread but not backfilled old mail', () => {
     const a = gmailAccount()

@@ -322,7 +322,7 @@ export function listWhatsappTriageCandidates(
          COALESCE((
            SELECT COALESCE(NULLIF(m.sender_name, ''), m.sender_handle)
            FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
-           ORDER BY m.sent_at DESC LIMIT 1
+           ORDER BY m.sent_at DESC, m.id DESC LIMIT 1
          ), t.title) AS sender,
          (SELECT MAX(m.sent_at) FROM comms_messages m
           WHERE m.thread_id = t.id AND m.is_me = 0) AS last_inbound_at
@@ -338,15 +338,30 @@ export function listWhatsappTriageCandidates(
   )
 }
 
-/** The newest message someone else sent in a thread — what a notification
- *  is about. Undefined for a thread that is all your own messages. */
-export function latestInboundMessage(
-  db: DbDriver,
-  threadId: string
-): Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender_name'> | undefined {
-  return db.get<Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender_name'>>(
+/** What a notification for a thread is about: when it happened and what it said. */
+export type NotifySubject = Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender_name'>
+
+// `, id DESC` on both: WhatsApp timestamps are whole seconds, so rapid-fire
+// messages tie on sent_at and the index order would hand back the OLDER one;
+// ids are monotonic ulids, so they break the tie in ingest order.
+
+/** The newest message someone else sent in a thread. Undefined for a thread
+ *  that is all your own messages. */
+export function latestInboundMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
+  return db.get<NotifySubject>(
     `SELECT sent_at, body_text, sender_name FROM comms_messages
-     WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC LIMIT 1`,
+     WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC, id DESC LIMIT 1`,
+    threadId
+  )
+}
+
+/** The newest still-unread message in a thread — the gmail notification
+ *  subject, where UNREAD is authoritative and mail to yourself arrives unread
+ *  (upsertMessage counts it) while your own sent replies never do. */
+export function latestUnreadMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
+  return db.get<NotifySubject>(
+    `SELECT sent_at, body_text, sender_name FROM comms_messages
+     WHERE thread_id = ? AND is_read = 0 ORDER BY sent_at DESC, id DESC LIMIT 1`,
     threadId
   )
 }
@@ -1002,7 +1017,10 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
       input.body_text ?? '',
       input.body_html ?? null,
       input.has_attachments ? 1 : 0,
-      input.is_me || input.is_read ? 1 : 0,
+      // gmail: the row mirrors UNREAD even for your own mail (mail to yourself
+      // arrives unread), matching the unread_count below and the recompute's
+      // is_me-blind count; other providers never treat own outbound as unread
+      (input.provider === 'gmail' ? input.is_read : input.is_me || input.is_read) ? 1 : 0,
       input.is_inbox === false ? 0 : 1,
       input.raw_json ?? null,
       nowIso(now)

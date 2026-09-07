@@ -129,6 +129,9 @@ export class WhatsAppConnection {
   private lids = new LidBook()
   /** lids already folded (or found to have no thread) — one fold per lid per session */
   private absorbed = new Set<string>()
+  /** key.ids of messages THIS device sent — their upsert echo is not a phone
+   *  send and must not mark anything read (bounded, insertion-ordered) */
+  private ownSendIds = new Set<string>()
   /** lids already asked of the mapping store this socket — a miss is a file read each time */
   private tried = new Set<string>()
 
@@ -619,6 +622,7 @@ export class WhatsAppConnection {
       title
     })
     const ts = Number(msg.messageTimestamp ?? 0) * 1000
+    const sentAt = new Date(ts || Date.now()).toISOString()
     const externalId = msg.key.id ?? `${chatJid}:${ts}`
     // media messages keep their full content node (proto → base64-safe JSON)
     // so downloadMediaMessage() can fetch the bytes later; text messages only
@@ -635,7 +639,7 @@ export class WhatsAppConnection {
       sender_name: isMe ? 'me' : msg.pushName || this.nameFor(senderJid) || jidLabel(senderJid),
       sender_handle: jidUser(senderJid),
       is_me: isMe,
-      sent_at: new Date(ts || Date.now()).toISOString(),
+      sent_at: sentAt,
       body_text: text,
       has_attachments: hasAttachment,
       is_read: asRead,
@@ -647,11 +651,22 @@ export class WhatsAppConnection {
       const row = repo.getMessageByExternal(this.db, this.accountId, externalId)
       if (row) repo.addAttachments(this.db, row.id, [{ ...meta, external_ref: externalId }])
     }
-    // a live message of yours (sent from the phone or another device, or
-    // our own send echoing back) means you had the chat open — it's read.
-    // The phone's app-state sync says the same, but late or not at all, and
-    // meanwhile the thread sat unread with your reply as its newest message.
-    if (added && isMe && !asRead) repo.markThreadRead(this.db, thread.id)
+    // A live message of yours from the phone or another linked device means
+    // you had the chat open there — it's read, and that device already sent
+    // the receipts. The phone's app-state sync says the same, but late or not
+    // at all, and meanwhile the thread sat unread with your reply as its
+    // newest message. Two guards:
+    //  - only when it's at least as new as everything inbound: a notify batch
+    //    is not sorted, and a message you composed offline can flush after a
+    //    peer's newer reply — that reply must stay unread and get its banner
+    //  - never for our own Kairos sends: Baileys emits those as 'append'
+    //    (asRead) and ownSendIds catches them regardless. An agent/MCP reply
+    //    must not clear a badge for messages you never saw, and markRead's
+    //    receipt path needs those rows still unread when you do open it.
+    if (added && isMe && !asRead && !this.ownSendIds.has(externalId)) {
+      const newestInbound = repo.latestInboundMessage(this.db, thread.id)
+      if (!newestInbound || sentAt >= newestInbound.sent_at) repo.markThreadRead(this.db, thread.id)
+    }
     return added
   }
 
@@ -769,6 +784,14 @@ export class WhatsAppConnection {
     return !this.stopped && !(this.open && this.sock?.ws.isOpen === true)
   }
 
+  private noteOwnSend(id: string): void {
+    this.ownSendIds.add(id)
+    if (this.ownSendIds.size > 500) {
+      const oldest = this.ownSendIds.values().next().value
+      if (oldest !== undefined) this.ownSendIds.delete(oldest)
+    }
+  }
+
   async send(item: OutboxItem, attachments: OutboundAttachment[] = []): Promise<string> {
     if (!this.sock) throw new Error('WhatsApp is not connected')
     const to = JSON.parse(item.to_json) as { jid?: string }
@@ -819,6 +842,7 @@ export class WhatsAppConnection {
         )
       }
       lastId = sent?.key.id ?? lastId
+      if (sent?.key.id) this.noteOwnSend(sent.key.id)
       sentNow++
       done[unitKey] = sent?.key.id ?? ''
       // The message IS delivered from here on — the ledger write lives

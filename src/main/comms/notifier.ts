@@ -11,8 +11,9 @@
 // than RECENT_WINDOW_MS (a first sync/backfill can't storm); at most
 // MAX_PER_BATCH individual banners per event, the rest coalesce into one.
 // Freshness and the banner body come from the thread's newest INBOUND
-// message, never last_message_at/snippet — those follow your own reply from
-// the phone too, which used to re-arm a banner quoting you to yourself.
+// message (gmail: newest UNREAD one — mail to yourself arrives unread there),
+// never last_message_at/snippet — those follow your own reply from the phone
+// too, which used to re-arm a banner quoting you to yourself.
 import { Notification, BrowserWindow } from 'electron'
 import type { DbDriver } from '../../core/driver'
 import type { NavView } from '../../shared/ipc-contract'
@@ -100,19 +101,25 @@ export class CommsNotifier {
     const cutoff = new Date(Date.now() - RECENT_WINDOW_MS).toISOString()
     const fresh: { thread: CommsThreadListItem; body: string }[] = []
     for (const t of candidates) {
-      const inbound = repo.latestInboundMessage(this.db, t.id)
-      if (!inbound || inbound.sent_at < cutoff) continue // backlog or self-only, not news
+      // gmail: UNREAD is authoritative and mail-to-self arrives unread, so the
+      // subject is the newest unread message; elsewhere it's the newest one
+      // someone else sent — your own reply from the phone is never news
+      const subject =
+        t.provider === 'gmail'
+          ? repo.latestUnreadMessage(this.db, t.id)
+          : repo.latestInboundMessage(this.db, t.id)
+      if (!subject || subject.sent_at < cutoff) continue // backlog or self-only, not news
       const seen = this.notified.get(t.id)
-      if (seen && seen >= inbound.sent_at) continue
+      if (seen && seen >= subject.sent_at) continue
       // delete-then-set keeps Map iteration order = least-recently-touched,
       // so the cap evicts genuinely stale entries (true LRU)
       this.notified.delete(t.id)
-      this.notified.set(t.id, inbound.sent_at)
+      this.notified.set(t.id, subject.sent_at)
       if (this.notified.size > NOTIFIED_CAP) {
         const oldest = this.notified.keys().next().value
         if (oldest !== undefined) this.notified.delete(oldest)
       }
-      fresh.push({ thread: t, body: inbound.body_text.replace(/\s+/g, ' ').trim().slice(0, 120) })
+      fresh.push({ thread: t, body: subject.body_text.replace(/\s+/g, ' ').trim().slice(0, 120) })
     }
     for (const f of fresh.slice(0, MAX_PER_BATCH)) this.show(f.thread, f.body)
     // a labeler sweep can classify a batch of recent mail at once — coalesce

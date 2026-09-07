@@ -844,6 +844,33 @@ describe('own reply from the phone (whatsapp)', () => {
     expect(m.sender_name).toBe('Junior')
   })
 
+  it('latestInboundMessage breaks a sent_at tie in ingest order', () => {
+    // WhatsApp timestamps are whole seconds: two quick messages tie exactly
+    const { t, say } = waDm()
+    say('in1', 0, 'first')
+    say('in2', 0, 'second')
+    expect(comms.latestInboundMessage(db, t.id)!.body_text).toBe('second')
+  })
+
+  it('latestUnreadMessage counts gmail mail-to-self and forgets it once read', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'self',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note to self'
+    }, later(0))
+    expect(comms.latestInboundMessage(db, t.id)).toBeUndefined()
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note to self')
+    // your own SENT reply is read on arrival — never the subject
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'sent',
+      is_me: true, is_read: true, sent_at: later(1).toISOString(), body_text: 'my reply'
+    }, later(1))
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note to self')
+    comms.markThreadRead(db, t.id, later(2))
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+  })
+
   it('triage candidates key on the newest inbound, not on your reply', () => {
     const { t, say } = waDm()
     const since = later(-60).toISOString()
@@ -976,6 +1003,10 @@ describe('unread_count for self-sent mail on ingest', () => {
       external_id: 'g1', sent_at: later(0).toISOString(), body_text: 'note to self'
     }, later(0))
     expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+    // the row mirrors the label too, so the label-history recompute agrees
+    expect(comms.getMessageByExternal(db, a.id, 'g1')!.is_read).toBe(0)
+    comms.recomputeThreadState(db, t.id, later(1))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
 
     const wa = comms.upsertAccount(db, {
       provider: 'whatsapp', external_id: 'me@s.whatsapp.net', display_name: 'me'
@@ -988,6 +1019,7 @@ describe('unread_count for self-sent mail on ingest', () => {
       external_id: 'w1', sent_at: later(0).toISOString(), body_text: 'own outbound'
     }, later(0))
     expect(comms.getThread(db, wt.id)!.unread_count).toBe(0)
+    expect(comms.getMessageByExternal(db, wa.id, 'w1')!.is_read).toBe(1)
   })
 })
 

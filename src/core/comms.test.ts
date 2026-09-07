@@ -814,6 +814,35 @@ describe('attachments', () => {
   })
 })
 
+describe('migration 026: attachment cache collisions', () => {
+  it('forgets local_path only on rows that share a file', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail',
+      external_id: 'm1', sent_at: T0.toISOString(), body_text: 'photos',
+      has_attachments: true
+    }, T0)
+    const msg = comms.getMessageByExternal(db, a.id, 'm1')!
+    comms.addAttachments(db, msg.id, [
+      { filename: 'photo.jpeg', mime_type: 'image/jpeg', size_bytes: 1, external_ref: 'p1' },
+      { filename: 'photo.jpeg', mime_type: 'image/jpeg', size_bytes: 1, external_ref: 'p2' },
+      { filename: 'photo.jpeg', mime_type: 'image/jpeg', size_bytes: 1, external_ref: 'p3' }
+    ], T0)
+    const [p1, p2, p3] = comms.listThreadAttachments(db, t.id)
+    // two rows collided on the 8-char-prefix name; the third has its own file
+    comms.setAttachmentLocalPath(db, p1.id, '/k/attachments/01KXHT3A-photo.jpeg')
+    comms.setAttachmentLocalPath(db, p2.id, '/k/attachments/01KXHT3A-photo.jpeg')
+    comms.setAttachmentLocalPath(db, p3.id, '/k/attachments/01KXHT3B-photo.jpeg')
+
+    // re-run the repair by its literal index — 026 already ran inside migrate()
+    applyMigration(db, 25)
+    expect(comms.getAttachment(db, p1.id)!.local_path).toBeNull()
+    expect(comms.getAttachment(db, p2.id)!.local_path).toBeNull()
+    expect(comms.getAttachment(db, p3.id)!.local_path).toBe('/k/attachments/01KXHT3B-photo.jpeg')
+  })
+})
+
 describe('countNewInbound', () => {
   it('counts fresh inbound unread but not backfilled old mail', () => {
     const a = gmailAccount()

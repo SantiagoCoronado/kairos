@@ -437,9 +437,12 @@ export class CommsSyncManager {
 
     const dir = join(DATA_DIR, 'attachments')
     mkdirSync(dir, { recursive: true })
-    // id prefix keeps same-named files from different messages apart
+    // the FULL id keeps same-named files apart. Ids are ULIDs, so an 8-char
+    // prefix is just the timestamp: every photo.jpeg ingested in the same
+    // second collided on one path and showed the last download's bytes
+    // (migration 026 cleared the rows that had been sharing a file)
     const safeName = (att.filename || 'attachment').replace(/[/\\:]/g, '_')
-    const path = join(dir, `${att.id.slice(0, 8)}-${safeName}`)
+    const path = join(dir, `${att.id}-${safeName}`)
     writeFileSync(path, bytes)
     repo.setAttachmentLocalPath(this.db, att.id, path)
     this.notifyChanged()

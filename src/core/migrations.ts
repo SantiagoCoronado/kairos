@@ -666,6 +666,21 @@ UPDATE calendar_calendars SET sync_token = NULL;
 DROP TABLE IF EXISTS task_key_results;
 DROP TABLE IF EXISTS key_results;
 DROP TABLE IF EXISTS objectives;
+`,
+  // 026 — attachment cache collisions. Until Sep 2026 the on-disk cache
+  // file was named by the first 8 chars of the attachment id — a ULID, so
+  // that prefix is only the timestamp, and every same-named file (WhatsApp
+  // photos are all photo.jpeg) ingested in the same second landed on one
+  // path, each download overwriting the last. The file holds ONE of those
+  // attachments' bytes and nothing says which, so every row sharing a path
+  // forgets it; the next open re-downloads under the full-id name. The
+  // orphaned files stay on disk (cache, harmless).
+  `
+UPDATE comms_attachments SET local_path = NULL
+ WHERE local_path IN (
+   SELECT local_path FROM comms_attachments
+   WHERE local_path IS NOT NULL GROUP BY local_path HAVING COUNT(*) > 1
+ );
 `
 ]
 

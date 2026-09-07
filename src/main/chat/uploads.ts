@@ -18,8 +18,10 @@ const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 function stage(srcPath: string): ChatAttachment {
   mkdirSync(CHAT_UPLOADS_DIR, { recursive: true })
   const name = basename(srcPath)
-  // ulid prefix: same-named files never collide, and age is encoded for pruning
-  const dest = join(CHAT_UPLOADS_DIR, `${ulid().slice(0, 8).toLowerCase()}-${name}`)
+  // full ulid prefix: same-named files never collide (an 8-char prefix is
+  // only the timestamp — two screenshot.png in one drop shared a path), and
+  // the leading time bits still sort by age
+  const dest = join(CHAT_UPLOADS_DIR, `${ulid().toLowerCase()}-${name}`)
   copyFileSync(srcPath, dest)
   return { name, path: dest, size: statSync(dest).size }
 }
@@ -29,7 +31,7 @@ export function stageBuffer(name: string, data: Buffer): ChatAttachment {
   mkdirSync(CHAT_UPLOADS_DIR, { recursive: true })
   // basename + separator strip: a crafted name must never escape the uploads dir
   const safe = basename(name).replace(/[/\\]/g, '') || 'file'
-  const dest = join(CHAT_UPLOADS_DIR, `${ulid().slice(0, 8).toLowerCase()}-${safe}`)
+  const dest = join(CHAT_UPLOADS_DIR, `${ulid().toLowerCase()}-${safe}`)
   writeFileSync(dest, data)
   return { name: safe, path: dest, size: data.length }
 }

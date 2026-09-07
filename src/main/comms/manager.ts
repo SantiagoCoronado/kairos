@@ -24,6 +24,7 @@ import {
 import { connectSlack, syncSlackAccount, sendSlack, refreshSlackChannels, SlackAuthError } from './slack'
 import { CommsLabeler } from './labeler'
 import { WhatsAppConnection, deleteWaAuthState } from './whatsapp'
+import { cacheFileName, repairLegacyAttachmentCache } from './attachment-cache'
 import { loadMacContacts } from '../contacts'
 import { logLine } from '../logger'
 
@@ -81,6 +82,16 @@ export class CommsSyncManager {
 
   start(): void {
     repo.requeueStuckSending(this.db)
+    // cache files a pre-Sep-2026 build wrote under a colliding name scheme —
+    // cheap no-op once repaired (see attachment-cache.ts)
+    const repaired = repairLegacyAttachmentCache(this.db)
+    if (repaired.kept + repaired.cleared + repaired.removed > 0) {
+      logLine(
+        'info',
+        'comms',
+        `attachment cache repaired: ${repaired.kept} kept, ${repaired.cleared} cleared, ${repaired.removed} files removed`
+      )
+    }
     this.labeler.start()
     for (const account of repo.listAccounts(this.db)) {
       if (account.status === 'disabled' || account.status === 'needs_auth') continue
@@ -414,8 +425,13 @@ export class CommsSyncManager {
     const account = repo.getAccount(this.db, msg.account_id)
     if (!account) return { ok: false, message: 'account was disconnected' }
 
-    let bytes: Buffer
+    // download AND write inside one try: a filesystem refusal (ENAMETOOLONG,
+    // ENOSPC) must surface as { ok: false } like a network one, not escape
+    // through IPC into a renderer click handler with no catch
+    const dir = join(DATA_DIR, 'attachments')
+    const path = join(dir, cacheFileName(att.id, att.filename))
     try {
+      let bytes: Buffer
       if (msg.provider === 'gmail') {
         bytes = await downloadGmailAttachment(this.db, account, msg.external_id, att.external_ref)
       } else if (msg.provider === 'whatsapp') {
@@ -425,6 +441,8 @@ export class CommsSyncManager {
       } else {
         return { ok: false, message: 'downloads are not supported for this provider yet' }
       }
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path, bytes)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (err instanceof GmailAuthError) {
@@ -434,16 +452,6 @@ export class CommsSyncManager {
       }
       return { ok: false, message }
     }
-
-    const dir = join(DATA_DIR, 'attachments')
-    mkdirSync(dir, { recursive: true })
-    // the FULL id keeps same-named files apart. Ids are ULIDs, so an 8-char
-    // prefix is just the timestamp: every photo.jpeg ingested in the same
-    // second collided on one path and showed the last download's bytes
-    // (migration 026 cleared the rows that had been sharing a file)
-    const safeName = (att.filename || 'attachment').replace(/[/\\:]/g, '_')
-    const path = join(dir, `${att.id}-${safeName}`)
-    writeFileSync(path, bytes)
     repo.setAttachmentLocalPath(this.db, att.id, path)
     this.notifyChanged()
     return { ok: true, path }

@@ -1129,8 +1129,20 @@ export function listThreadAttachments(db: DbDriver, threadId: string): CommsAtta
   )
 }
 
-export function setAttachmentLocalPath(db: DbDriver, id: string, localPath: string): void {
+/** null forgets a cached copy — the next open downloads again */
+export function setAttachmentLocalPath(db: DbDriver, id: string, localPath: string | null): void {
   db.run('UPDATE comms_attachments SET local_path = ? WHERE id = ?', localPath, id)
+}
+
+export type CachedAttachment = Pick<CommsAttachment, 'id' | 'filename' | 'size_bytes'> & {
+  local_path: string
+}
+
+/** Every attachment with a cached copy on disk — the cache repair's worklist. */
+export function listCachedAttachments(db: DbDriver): CachedAttachment[] {
+  return db.all<CachedAttachment>(
+    'SELECT id, filename, size_bytes, local_path FROM comms_attachments WHERE local_path IS NOT NULL'
+  )
 }
 
 // ---------- outbox ----------

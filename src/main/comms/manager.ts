@@ -24,7 +24,7 @@ import {
 import { connectSlack, syncSlackAccount, sendSlack, refreshSlackChannels, SlackAuthError } from './slack'
 import { CommsLabeler } from './labeler'
 import { WhatsAppConnection, deleteWaAuthState } from './whatsapp'
-import { cacheFileName, repairLegacyAttachmentCache } from './attachment-cache'
+import { cacheFileName, repairLegacyAttachmentCache, UNCLAIMED_DIR } from './attachment-cache'
 import { loadMacContacts } from '../contacts'
 import { logLine } from '../logger'
 
@@ -88,11 +88,11 @@ export class CommsSyncManager {
     // DB, say) must never take the launch down with it
     try {
       const r = repairLegacyAttachmentCache(this.db)
-      if (r.kept + r.cleared + r.orphaned > 0) {
+      if (r.kept + r.cleared + r.unclaimed > 0) {
         logLine(
           'info',
           'comms',
-          `attachment cache repaired: ${r.kept} kept, ${r.cleared} cleared, ${r.orphaned} unclaimed files left in place`
+          `attachment cache repaired: ${r.kept} kept, ${r.cleared} cleared, ${r.unclaimed} unclaimed files moved to ${join(DATA_DIR, 'attachments', UNCLAIMED_DIR)}`
         )
       }
     } catch (err) {

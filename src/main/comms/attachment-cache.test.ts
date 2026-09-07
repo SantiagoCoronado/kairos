@@ -6,7 +6,7 @@ import type { DbDriver } from '../../core/driver'
 import { openNodeSqliteDb } from '../../core/drivers/node-sqlite'
 import { migrate } from '../../core/migrations'
 import * as comms from '../../core/repo/comms'
-import { cacheFileName, isLegacyCachePath, repairLegacyAttachmentCache } from './attachment-cache'
+import { cacheFileName, isLegacyCachePath, repairLegacyAttachmentCache, UNCLAIMED_DIR } from './attachment-cache'
 
 const ID = '01KXHT3AZZZZZZZZZZZZZZZZZZ'
 
@@ -76,6 +76,7 @@ describe('repairLegacyAttachmentCache', () => {
     return p
   }
   const pathOf = (id: string): string | null => comms.getAttachment(db, id)!.local_path
+  const unclaimed = (legacyName: string): string => join(dir, UNCLAIMED_DIR, legacyName)
 
   it('keeps the one row whose size matches, renamed; siblings forget the path', () => {
     const shared = file('01KXHT3A-photo.jpeg', 5)
@@ -85,11 +86,24 @@ describe('repairLegacyAttachmentCache', () => {
     comms.setAttachmentLocalPath(db, b, shared)
 
     const r = repairLegacyAttachmentCache(db)
-    expect(r).toEqual({ kept: 1, cleared: 1, orphaned: 0 })
+    expect(r).toEqual({ kept: 1, cleared: 1, unclaimed: 0 })
     expect(pathOf(a)).toBeNull()
     expect(pathOf(b)).toBe(join(dir, `${b}-photo.jpeg`))
     expect(existsSync(shared)).toBe(false)
     expect(existsSync(pathOf(b)!)).toBe(true)
+  })
+
+  it('an unknown-size sibling makes the whole group ambiguous', () => {
+    // A (null size) was the last to download, so the file holds A's bytes;
+    // B happens to match the file size — it must NOT win A's photo
+    const shared = file('01KXHT3H-photo.jpeg', 5)
+    const a = att('a', null)
+    const b = att('b', 5)
+    comms.setAttachmentLocalPath(db, a, shared)
+    comms.setAttachmentLocalPath(db, b, shared)
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 2, unclaimed: 1 })
+    expect([a, b].map(pathOf)).toEqual([null, null])
+    expect(existsSync(unclaimed('01KXHT3H-photo.jpeg'))).toBe(true)
   })
 
   it('a size match under a different filename proves nothing', () => {
@@ -99,15 +113,15 @@ describe('repairLegacyAttachmentCache', () => {
     const sticker = att('b', 9, 'sticker.webp')
     comms.setAttachmentLocalPath(db, photo, shared)
     comms.setAttachmentLocalPath(db, sticker, shared)
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 2, orphaned: 1 })
-    expect(existsSync(shared)).toBe(true)
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 2, unclaimed: 1 })
+    expect(existsSync(unclaimed('01KXHT3F-sticker.webp'))).toBe(true)
   })
 
   it('a zero-size file is never claimed', () => {
     const shared = file('01KXHT3G-photo.jpeg', 0)
     const a = att('a', 0)
     comms.setAttachmentLocalPath(db, a, shared)
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 1, orphaned: 1 })
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 1, unclaimed: 1 })
   })
 
   it('a lone survivor of a collision group is checked by size too', () => {
@@ -116,28 +130,30 @@ describe('repairLegacyAttachmentCache', () => {
     const a = att('a', 3)
     comms.setAttachmentLocalPath(db, a, orphaned)
     const r = repairLegacyAttachmentCache(db)
-    expect(r).toEqual({ kept: 0, cleared: 1, orphaned: 1 })
+    expect(r).toEqual({ kept: 0, cleared: 1, unclaimed: 1 })
     expect(pathOf(a)).toBeNull()
-    // the bytes stay: they may be the last copy of media the CDN has expired
-    expect(existsSync(orphaned)).toBe(true)
+    // the bytes stay, findable: they may be the last copy of expired media
+    expect(existsSync(orphaned)).toBe(false)
+    expect(existsSync(unclaimed('01KXHT3B-photo.jpeg'))).toBe(true)
   })
 
-  it('ambiguous sizes and unknown sizes clear every row and leave the file', () => {
+  it('ambiguous sizes clear every row and set the file aside', () => {
     const shared = file('01KXHT3C-photo.jpeg', 7)
     const a = att('a', 7)
     const b = att('b', 7)
     const c = att('c', null)
     for (const id of [a, b, c]) comms.setAttachmentLocalPath(db, id, shared)
     const r = repairLegacyAttachmentCache(db)
-    expect(r).toEqual({ kept: 0, cleared: 3, orphaned: 1 })
+    expect(r).toEqual({ kept: 0, cleared: 3, unclaimed: 1 })
     expect([a, b, c].map(pathOf)).toEqual([null, null, null])
-    expect(readdirSync(dir)).toEqual(['01KXHT3C-photo.jpeg'])
+    expect(readdirSync(dir)).toEqual([UNCLAIMED_DIR])
+    expect(readdirSync(join(dir, UNCLAIMED_DIR))).toEqual(['01KXHT3C-photo.jpeg'])
   })
 
   it('a missing file just clears its rows', () => {
     const a = att('a', 3)
     comms.setAttachmentLocalPath(db, a, join(dir, '01KXHT3D-photo.jpeg'))
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 1, orphaned: 0 })
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 1, unclaimed: 0 })
     expect(pathOf(a)).toBeNull()
   })
 
@@ -149,10 +165,10 @@ describe('repairLegacyAttachmentCache', () => {
     const b = att('b', 5)
     comms.setAttachmentLocalPath(db, b, shared)
 
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 1, cleared: 0, orphaned: 0 })
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 1, cleared: 0, unclaimed: 0 })
     expect(pathOf(a)).toBe(fresh)
     expect(basename(pathOf(b)!)).toBe(`${b}-photo.jpeg`)
     // second pass: nothing legacy left
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 0, orphaned: 0 })
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 0, unclaimed: 0 })
   })
 })

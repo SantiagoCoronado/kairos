@@ -9,19 +9,24 @@ import { ulid } from 'ulid'
 import type { ChatAttachment } from '../../shared/ipc-contract'
 import { DATA_DIR } from '../db'
 import { logLine } from '../logger'
+import { capFileNameBytes } from '../fs-names'
 
 export const CHAT_UPLOADS_DIR = join(DATA_DIR, 'chat-uploads')
 
 /** staged copies are transient prompt inputs, not documents — a week is plenty */
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
+/** Where a staged copy lands: full ulid prefix so same-named files never
+ *  collide (an 8-char prefix is only the timestamp — two screenshot.png in
+ *  one drop shared a path) and the leading time bits still sort by age; the
+ *  name part is byte-capped so a long filename can't hit ENAMETOOLONG. */
+const stagedPath = (name: string): string =>
+  join(CHAT_UPLOADS_DIR, `${ulid().toLowerCase()}-${capFileNameBytes(name)}`)
+
 function stage(srcPath: string): ChatAttachment {
   mkdirSync(CHAT_UPLOADS_DIR, { recursive: true })
   const name = basename(srcPath)
-  // full ulid prefix: same-named files never collide (an 8-char prefix is
-  // only the timestamp — two screenshot.png in one drop shared a path), and
-  // the leading time bits still sort by age
-  const dest = join(CHAT_UPLOADS_DIR, `${ulid().toLowerCase()}-${name}`)
+  const dest = stagedPath(name)
   copyFileSync(srcPath, dest)
   return { name, path: dest, size: statSync(dest).size }
 }
@@ -31,7 +36,7 @@ export function stageBuffer(name: string, data: Buffer): ChatAttachment {
   mkdirSync(CHAT_UPLOADS_DIR, { recursive: true })
   // basename + separator strip: a crafted name must never escape the uploads dir
   const safe = basename(name).replace(/[/\\]/g, '') || 'file'
-  const dest = join(CHAT_UPLOADS_DIR, `${ulid().toLowerCase()}-${safe}`)
+  const dest = stagedPath(safe)
   writeFileSync(dest, data)
   return { name: safe, path: dest, size: data.length }
 }
@@ -43,7 +48,8 @@ export async function attachViaDialog(): Promise<ChatAttachment[]> {
     properties: ['openFile', 'multiSelections']
   })
   if (res.canceled) return []
-  return res.filePaths.map(stage)
+  // per-file: one unreadable pick must not lose the whole selection
+  return attachPaths(res.filePaths)
 }
 
 /** Drag-drop entry point: the renderer resolves File → path via webUtils. */

@@ -83,14 +83,20 @@ export class CommsSyncManager {
   start(): void {
     repo.requeueStuckSending(this.db)
     // cache files a pre-Sep-2026 build wrote under a colliding name scheme —
-    // cheap no-op once repaired (see attachment-cache.ts)
-    const repaired = repairLegacyAttachmentCache(this.db)
-    if (repaired.kept + repaired.cleared + repaired.removed > 0) {
-      logLine(
-        'info',
-        'comms',
-        `attachment cache repaired: ${repaired.kept} kept, ${repaired.cleared} cleared, ${repaired.removed} files removed`
-      )
+    // cheap no-op once repaired (see attachment-cache.ts). start() runs in
+    // whenReady() before the main window exists, so a failure here (a busy
+    // DB, say) must never take the launch down with it
+    try {
+      const r = repairLegacyAttachmentCache(this.db)
+      if (r.kept + r.cleared + r.orphaned > 0) {
+        logLine(
+          'info',
+          'comms',
+          `attachment cache repaired: ${r.kept} kept, ${r.cleared} cleared, ${r.orphaned} unclaimed files left in place`
+        )
+      }
+    } catch (err) {
+      logLine('warn', 'comms', `attachment cache repair skipped: ${err instanceof Error ? err.message : String(err)}`)
     }
     this.labeler.start()
     for (const account of repo.listAccounts(this.db)) {

@@ -85,11 +85,29 @@ describe('repairLegacyAttachmentCache', () => {
     comms.setAttachmentLocalPath(db, b, shared)
 
     const r = repairLegacyAttachmentCache(db)
-    expect(r).toEqual({ kept: 1, cleared: 1, removed: 0 })
+    expect(r).toEqual({ kept: 1, cleared: 1, orphaned: 0 })
     expect(pathOf(a)).toBeNull()
     expect(pathOf(b)).toBe(join(dir, `${b}-photo.jpeg`))
     expect(existsSync(shared)).toBe(false)
     expect(existsSync(pathOf(b)!)).toBe(true)
+  })
+
+  it('a size match under a different filename proves nothing', () => {
+    // the file was written as a sticker; the only same-sized row is a photo
+    const shared = file('01KXHT3F-sticker.webp', 5)
+    const photo = att('a', 5, 'photo.jpeg')
+    const sticker = att('b', 9, 'sticker.webp')
+    comms.setAttachmentLocalPath(db, photo, shared)
+    comms.setAttachmentLocalPath(db, sticker, shared)
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 2, orphaned: 1 })
+    expect(existsSync(shared)).toBe(true)
+  })
+
+  it('a zero-size file is never claimed', () => {
+    const shared = file('01KXHT3G-photo.jpeg', 0)
+    const a = att('a', 0)
+    comms.setAttachmentLocalPath(db, a, shared)
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 1, orphaned: 1 })
   })
 
   it('a lone survivor of a collision group is checked by size too', () => {
@@ -98,27 +116,28 @@ describe('repairLegacyAttachmentCache', () => {
     const a = att('a', 3)
     comms.setAttachmentLocalPath(db, a, orphaned)
     const r = repairLegacyAttachmentCache(db)
-    expect(r).toEqual({ kept: 0, cleared: 1, removed: 1 })
+    expect(r).toEqual({ kept: 0, cleared: 1, orphaned: 1 })
     expect(pathOf(a)).toBeNull()
-    expect(existsSync(orphaned)).toBe(false)
+    // the bytes stay: they may be the last copy of media the CDN has expired
+    expect(existsSync(orphaned)).toBe(true)
   })
 
-  it('ambiguous sizes and unknown sizes clear every row and drop the file', () => {
+  it('ambiguous sizes and unknown sizes clear every row and leave the file', () => {
     const shared = file('01KXHT3C-photo.jpeg', 7)
     const a = att('a', 7)
     const b = att('b', 7)
     const c = att('c', null)
     for (const id of [a, b, c]) comms.setAttachmentLocalPath(db, id, shared)
     const r = repairLegacyAttachmentCache(db)
-    expect(r).toEqual({ kept: 0, cleared: 3, removed: 1 })
+    expect(r).toEqual({ kept: 0, cleared: 3, orphaned: 1 })
     expect([a, b, c].map(pathOf)).toEqual([null, null, null])
-    expect(readdirSync(dir)).toEqual([])
+    expect(readdirSync(dir)).toEqual(['01KXHT3C-photo.jpeg'])
   })
 
   it('a missing file just clears its rows', () => {
     const a = att('a', 3)
     comms.setAttachmentLocalPath(db, a, join(dir, '01KXHT3D-photo.jpeg'))
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 1, removed: 0 })
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 1, orphaned: 0 })
     expect(pathOf(a)).toBeNull()
   })
 
@@ -130,10 +149,10 @@ describe('repairLegacyAttachmentCache', () => {
     const b = att('b', 5)
     comms.setAttachmentLocalPath(db, b, shared)
 
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 1, cleared: 0, removed: 0 })
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 1, cleared: 0, orphaned: 0 })
     expect(pathOf(a)).toBe(fresh)
     expect(basename(pathOf(b)!)).toBe(`${b}-photo.jpeg`)
     // second pass: nothing legacy left
-    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 0, removed: 0 })
+    expect(repairLegacyAttachmentCache(db)).toEqual({ kept: 0, cleared: 0, orphaned: 0 })
   })
 })

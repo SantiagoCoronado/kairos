@@ -342,8 +342,10 @@ export function listWhatsappTriageCandidates(
 export type NotifySubject = Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender_name'>
 
 // `, id DESC` on both: WhatsApp timestamps are whole seconds, so rapid-fire
-// messages tie on sent_at and the index order would hand back the OLDER one;
-// ids are monotonic ulids, so they break the tie in ingest order.
+// messages tie on sent_at and the index order would hand back the OLDER one.
+// Ids minted since newId() went monotonic (Sep 2026) break the tie in ingest
+// order; older rows carry random ulids, so for them the pick is arbitrary —
+// still deterministic, no longer the index's implementation-defined one.
 
 /** The newest message someone else sent in a thread. Undefined for a thread
  *  that is all your own messages. */
@@ -355,13 +357,18 @@ export function latestInboundMessage(db: DbDriver, threadId: string): NotifySubj
   )
 }
 
-/** The newest still-unread message in a thread — the gmail notification
- *  subject, where UNREAD is authoritative and mail to yourself arrives unread
- *  (upsertMessage counts it) while your own sent replies never do. */
+/** The newest still-unread message someone else sent in a thread — the
+ *  gmail notification subject, where UNREAD is authoritative. A thread with
+ *  no inbound mail at all (mail to yourself, automation mail) falls back to
+ *  its newest unread own message; one that has inbound mail never does, so a
+ *  list echoing your own post back as UNREAD can't banner you to yourself. */
 export function latestUnreadMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
   return db.get<NotifySubject>(
     `SELECT sent_at, body_text, sender_name FROM comms_messages
-     WHERE thread_id = ? AND is_read = 0 ORDER BY sent_at DESC, id DESC LIMIT 1`,
+     WHERE thread_id = ? AND is_read = 0
+       AND (is_me = 0 OR NOT EXISTS (SELECT 1 FROM comms_messages WHERE thread_id = ? AND is_me = 0))
+     ORDER BY sent_at DESC, id DESC LIMIT 1`,
+    threadId,
     threadId
   )
 }
@@ -632,16 +639,21 @@ export function markThreadUnread(db: DbDriver, threadId: string, now: Date = new
       threadId
     )
   if (!msg) return null
+  // gmail rows mirror UNREAD even when is_me, and recomputeThreadState counts
+  // every is_read = 0 row there — this count must agree with it, or the next
+  // label-history sync silently changes the number. Other providers never
+  // count own outbound, except the one row just flagged.
+  const gmail = getThread(db, threadId)?.provider === 'gmail'
   db.transaction(() => {
     db.run('UPDATE comms_messages SET is_read = 0 WHERE id = ?', msg.id)
     db.run(
       `UPDATE comms_threads SET
          unread_count = (SELECT COUNT(*) FROM comms_messages
-                         WHERE thread_id = ? AND is_read = 0 AND (is_me = 0 OR id = ?)),
+                         WHERE thread_id = ? AND is_read = 0 ${gmail ? '' : 'AND (is_me = 0 OR id = ?)'}),
          updated_at = ?
        WHERE id = ?`,
       threadId,
-      msg.id,
+      ...(gmail ? [] : [msg.id]),
       nowIso(now),
       threadId
     )

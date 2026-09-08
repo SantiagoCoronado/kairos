@@ -871,6 +871,44 @@ describe('own reply from the phone (whatsapp)', () => {
     expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
   })
 
+  it('latestUnreadMessage never quotes your own list echo once the thread has inbound mail', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-list')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'them',
+      sent_at: later(0).toISOString(), body_text: 'question for the list'
+    }, later(0))
+    // a Google Group delivers your own post back with INBOX+UNREAD
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'echo',
+      is_me: true, is_read: false, sent_at: later(5).toISOString(), body_text: 'my answer'
+    }, later(5))
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('question for the list')
+    // once the inbound is read, the unread echo alone is not news
+    db.run("UPDATE comms_messages SET is_read = 1 WHERE external_id = 'them'")
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+  })
+
+  it('markThreadUnread on gmail agrees with the label-history recompute', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-recount')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'self',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note to self'
+    }, later(0))
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'in',
+      sent_at: later(1).toISOString(), body_text: 'hello'
+    }, later(1))
+    comms.markThreadRead(db, t.id, later(2))
+    db.run("UPDATE comms_messages SET is_read = 0 WHERE external_id = 'self'") // label sync re-flags the self mail
+    expect(comms.markThreadUnread(db, t.id, later(3))).toBe('in')
+    const after = comms.getThread(db, t.id)!.unread_count
+    comms.recomputeThreadState(db, t.id, later(4))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(after)
+    expect(after).toBe(2)
+  })
+
   it('triage candidates key on the newest inbound, not on your reply', () => {
     const { t, say } = waDm()
     const since = later(-60).toISOString()

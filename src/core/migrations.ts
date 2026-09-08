@@ -675,7 +675,13 @@ DROP TABLE IF EXISTS objectives;
   // so stored overlay rows that currently MATCH their thread (live dismissals,
   // snoozes, seen stamps) are rewritten to the new value and keep holding;
   // rows that no longer match were already stale and stay that way.
+  // Before the backfill, mail this account SENT from a send-as alias becomes
+  // yours (gmail's SENT label is authoritative; ingest applies the same rule
+  // from here on) — otherwise your own alias mail would stamp last_inbound_at.
   `
+UPDATE comms_messages SET is_me = 1, person_id = NULL
+ WHERE provider = 'gmail' AND is_me = 0
+   AND (CASE WHEN json_valid(raw_json) THEN json_extract(raw_json, '$.labelIds') END) LIKE '%"SENT"%';
 ALTER TABLE comms_threads ADD COLUMN last_inbound_at TEXT;
 UPDATE comms_threads SET last_inbound_at = (
   SELECT MAX(m.sent_at) FROM comms_messages m WHERE m.thread_id = comms_threads.id AND m.is_me = 0

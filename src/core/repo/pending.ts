@@ -209,11 +209,16 @@ function threadItems(db: DbDriver, ts: string): PendingItem[] {
     snippet: string
     last_message_at: string | null
     fingerprint: string
+    inbound_snippet: string | null
     labels: string
   }>(
-    `SELECT id, title, snippet, last_message_at, ${THREAD_FP} AS fingerprint, labels FROM comms_threads t
+    `SELECT id, title, snippet, last_message_at, ${THREAD_FP} AS fingerprint,
+       (SELECT m.body_text FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
+        ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS inbound_snippet,
+       labels
+     FROM comms_threads t
      WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE}
-     ORDER BY instr(',' || labels || ',', ',action-needed,') > 0 DESC, last_message_at DESC
+     ORDER BY instr(',' || labels || ',', ',action-needed,') > 0 DESC, ${THREAD_FP} DESC
      LIMIT ${THREAD_CAP}`,
     ts
   )
@@ -224,11 +229,15 @@ function threadItems(db: DbDriver, ts: string): PendingItem[] {
       kind: 'thread' as const,
       id: r.id,
       title: r.title,
-      subtitle: r.snippet,
+      // what THEY last said, not your reply — the thread snippet follows your
+      // own messages too; a thread with no inbound mail keeps its snippet
+      subtitle:
+        r.inbound_snippet != null ? r.inbound_snippet.replace(/\s+/g, ' ').trim().slice(0, 120) : r.snippet,
       // autoLabel is off by default, so plain unread is the baseline signal
       // and the classifier's action-needed verdict is the elevation
       tone: actionNeeded ? ('accent' as const) : ('muted' as const),
-      at: r.last_message_at,
+      // ordered and stamped by the same moment: when someone else last wrote
+      at: r.fingerprint || r.last_message_at,
       fingerprint: r.fingerprint
     }
   })

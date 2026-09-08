@@ -18,7 +18,7 @@ import type {
   CommsProvider
 } from '../comms-types'
 import { newId, nowIso } from '../ids'
-import { isMailToSelf } from '../addresses'
+import { isMailToSelf, recipientEmails } from '../addresses'
 import { deliveredMap } from '../outbox-units'
 
 // ---------- accounts ----------
@@ -376,13 +376,16 @@ export function latestUnreadMessage(db: DbDriver, threadId: string): NotifySubje
   if (!own?.raw_json) return undefined
   const account = getAccount(db, thread.account_id)
   if (!account) return undefined
-  let headers: { to?: string; cc?: string } | undefined
+  let headers: { from?: string; to?: string; cc?: string } | undefined
   try {
-    headers = (JSON.parse(own.raw_json) as { headers?: { to?: string; cc?: string } }).headers
+    headers = (JSON.parse(own.raw_json) as { headers?: { from?: string; to?: string; cc?: string } }).headers
   } catch {
     return undefined
   }
-  if (!isMailToSelf(headers, account.external_id)) return undefined
+  // the row is yours (SENT), so its From is one of your addresses — an alias
+  // mailing itself is mail to self even though it isn't the primary address
+  const selves = [account.external_id, ...recipientEmails(headers?.from ?? '').slice(0, 1)]
+  if (!isMailToSelf(headers, selves)) return undefined
   return { id: own.id, sent_at: own.sent_at, body_text: own.body_text, sender_name: own.sender_name }
 }
 

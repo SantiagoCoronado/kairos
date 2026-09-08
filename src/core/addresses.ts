@@ -24,18 +24,24 @@ export function recipientEmails(header: string): string[] {
   return parts
     .map((p) => {
       const m = p.match(/<([^>]*)>/)
-      return (m ? m[1] : p).trim().toLowerCase()
+      // a bare address may itself be quoted: "me@x.com"
+      return (m ? m[1] : p).trim().replace(/^"+|"+$/g, '').trim().toLowerCase()
     })
     .filter((e) => e.length > 0)
 }
 
-/** True only when every To and Cc recipient is `self` and there is at least
- *  one. A list address anywhere on the line, or an unparsable header, is not
- *  mail to yourself. */
-export function isMailToSelf(headers: { to?: string; cc?: string } | undefined, self: string): boolean {
+/** True only when every To and Cc recipient is one of YOUR addresses and
+ *  there is at least one. `selves` is the account's primary address plus the
+ *  message's own From (a send-as alias mailing itself). A list address
+ *  anywhere on the line, or an unparsable header, is not mail to yourself. */
+export function isMailToSelf(
+  headers: { to?: string; cc?: string } | undefined,
+  selves: readonly string[]
+): boolean {
   if (!headers) return false
-  const me = self.trim().toLowerCase()
+  const mine = new Set(selves.map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0))
+  if (mine.size === 0) return false
   const to = recipientEmails(headers.to ?? '')
   const cc = recipientEmails(headers.cc ?? '')
-  return to.length > 0 && [...to, ...cc].every((e) => e === me)
+  return to.length > 0 && [...to, ...cc].every((e) => mine.has(e))
 }

@@ -208,6 +208,27 @@ describe('overlay', () => {
     expect(items[0].fingerprint).toBe('2026-07-01T09:00:00Z')
   })
 
+  it('a thread row shows and sorts by what THEY last said, not your reply', () => {
+    // 'a': they wrote at 10:00, you replied at 11:00 — the row must not jump
+    // ahead of 'b' (they wrote at 10:30) nor quote your reply
+    seedThread('a', { lastMessageAt: '2026-06-30T11:00:00Z' })
+    seedThread('b', { lastMessageAt: '2026-06-30T10:30:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z', snippet = 'ok, on my way' WHERE id = 'a'`)
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:30:00Z' WHERE id = 'b'`)
+    db.run(
+      `INSERT INTO comms_messages (id, thread_id, account_id, provider, external_id, sender_name, sender_handle, is_me, sent_at, body_text, is_read, created_at)
+       VALUES ('m1', 'a', ?, 'gmail', 'x1', 'Ana', 'ana@x', 0, '2026-06-30T10:00:00Z', 'where   are you?', 0, '2026-06-30T10:00:00Z'),
+              ('m2', 'a', ?, 'gmail', 'x2', 'me', 'me@x', 1, '2026-06-30T11:00:00Z', 'ok, on my way', 1, '2026-06-30T11:00:00Z')`,
+      accountId,
+      accountId
+    )
+    const items = pendingItems(db, T0).items
+    expect(items.map((i) => i.id)).toEqual(['b', 'a'])
+    const a = items.find((i) => i.id === 'a')!
+    expect(a.subtitle).toBe('where are you?')
+    expect(a.at).toBe('2026-06-30T10:00:00Z')
+  })
+
   it('materializes visible threads even when dismissed rows dominate recency', () => {
     // 60 unread, the 50 newest dismissed: the fetch bound applies to VISIBLE
     // rows, so the 10 older pending threads must all render — never an empty

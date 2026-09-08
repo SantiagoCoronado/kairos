@@ -894,6 +894,17 @@ describe('own reply from the phone (whatsapp)', () => {
     expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
   })
 
+  it('latestUnreadMessage treats an alias mailing itself as mail-to-self', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-alias')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'alias',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note via alias',
+      raw_json: JSON.stringify({ headers: { from: 'Me <me@alias-domain.com>', to: 'me@alias-domain.com' }, labelIds: ['UNREAD', 'SENT', 'INBOX'] })
+    }, later(0))
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note via alias')
+  })
+
   it('latestUnreadMessage needs you to be the SOLE recipient — a list beside you is not mail-to-self', () => {
     const a = gmailAccount()
     const t = emailThread(a.id, 'thr-reply-all')

@@ -852,12 +852,16 @@ describe('own reply from the phone (whatsapp)', () => {
     expect(comms.latestInboundMessage(db, t.id)!.body_text).toBe('second')
   })
 
+  /** gmail ingest stores the header snapshot the mail-to-self check reads */
+  const toHeader = (to: string): string => JSON.stringify({ headers: { to }, labelIds: ['UNREAD', 'SENT', 'INBOX'] })
+
   it('latestUnreadMessage counts gmail mail-to-self and forgets it once read', () => {
     const a = gmailAccount()
     const t = emailThread(a.id)
     comms.upsertMessage(db, {
       thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'self',
-      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note to self'
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note to self',
+      raw_json: toHeader('Me <me@example.com>')
     }, later(0))
     expect(comms.latestInboundMessage(db, t.id)).toBeUndefined()
     expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note to self')
@@ -868,6 +872,25 @@ describe('own reply from the phone (whatsapp)', () => {
     }, later(1))
     expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note to self')
     comms.markThreadRead(db, t.id, later(2))
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+  })
+
+  it('latestUnreadMessage ignores your own post echoed back by a list into an empty thread', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-group')
+    // a Google Group delivers your post back with INBOX+UNREAD before any reply exists
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'post',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'my post',
+      raw_json: toHeader('devs@googlegroups.com')
+    }, later(0))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+    // a row synced without a header snapshot can't prove it's mail to self either
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'bare',
+      is_me: true, is_read: false, sent_at: later(1).toISOString(), body_text: 'no headers'
+    }, later(1))
     expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
   })
 
@@ -887,6 +910,18 @@ describe('own reply from the phone (whatsapp)', () => {
     // once the inbound is read, the unread echo alone is not news
     db.run("UPDATE comms_messages SET is_read = 1 WHERE external_id = 'them'")
     expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+  })
+
+  it('same-second ties resolve in ingest order everywhere', () => {
+    const { t, say } = waDm()
+    say('in1', 0, 'can you call me')
+    say('in2', 0, 'urgent')
+    say('me1', 0, 'calling', true)
+    // subject, mark-unread pick and the thread view all agree on "urgent" as newest inbound
+    expect(comms.latestInboundMessage(db, t.id)!.body_text).toBe('urgent')
+    comms.markThreadRead(db, t.id, later(1))
+    expect(comms.markThreadUnread(db, t.id, later(2))).toBe('in2')
+    expect(comms.listMessages(db, t.id).map((m) => m.external_id)).toEqual(['in1', 'in2', 'me1'])
   })
 
   it('markThreadUnread on gmail agrees with the label-history recompute', () => {

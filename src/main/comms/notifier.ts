@@ -30,7 +30,9 @@ const NOTIFIED_CAP = 500
 const MAX_PER_BATCH = 3
 
 export class CommsNotifier {
-  /** threadId → sent_at of the inbound message already notified; a newer one re-arms */
+  /** threadId → id of the message already notified; a different newest one
+   *  re-arms. Keyed on the id, not sent_at: WhatsApp stamps whole seconds, so
+   *  two messages a second apart in separate batches would tie and lose one. */
   private notified = new Map<string, string>()
 
   constructor(
@@ -109,12 +111,11 @@ export class CommsNotifier {
           ? repo.latestUnreadMessage(this.db, t.id)
           : repo.latestInboundMessage(this.db, t.id)
       if (!subject || subject.sent_at < cutoff) continue // backlog or self-only, not news
-      const seen = this.notified.get(t.id)
-      if (seen && seen >= subject.sent_at) continue
+      if (this.notified.get(t.id) === subject.id) continue
       // delete-then-set keeps Map iteration order = least-recently-touched,
       // so the cap evicts genuinely stale entries (true LRU)
       this.notified.delete(t.id)
-      this.notified.set(t.id, subject.sent_at)
+      this.notified.set(t.id, subject.id)
       if (this.notified.size > NOTIFIED_CAP) {
         const oldest = this.notified.keys().next().value
         if (oldest !== undefined) this.notified.delete(oldest)

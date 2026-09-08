@@ -338,8 +338,8 @@ export function listWhatsappTriageCandidates(
   )
 }
 
-/** What a notification for a thread is about: when it happened and what it said. */
-export type NotifySubject = Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender_name'>
+/** What a notification for a thread is about: which message, when, what it said. */
+export type NotifySubject = Pick<CommsMessage, 'id' | 'sent_at' | 'body_text' | 'sender_name'>
 
 // `, id DESC` on both: WhatsApp timestamps are whole seconds, so rapid-fire
 // messages tie on sent_at and the index order would hand back the OLDER one.
@@ -351,24 +351,29 @@ export type NotifySubject = Pick<CommsMessage, 'sent_at' | 'body_text' | 'sender
  *  that is all your own messages. */
 export function latestInboundMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
   return db.get<NotifySubject>(
-    `SELECT sent_at, body_text, sender_name FROM comms_messages
+    `SELECT id, sent_at, body_text, sender_name FROM comms_messages
      WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC, id DESC LIMIT 1`,
     threadId
   )
 }
 
 /** The newest still-unread message someone else sent in a thread — the
- *  gmail notification subject, where UNREAD is authoritative. A thread with
- *  no inbound mail at all (mail to yourself, automation mail) falls back to
- *  its newest unread own message; one that has inbound mail never does, so a
- *  list echoing your own post back as UNREAD can't banner you to yourself. */
+ *  gmail notification subject, where UNREAD is authoritative. Your own unread
+ *  mail counts only when it is mail to YOURSELF: the thread has no inbound
+ *  mail and the message's To header names the account's own address (the
+ *  raw_json header snapshot). A list echoing your post back as UNREAD has
+ *  the list in To, so it can never banner you to yourself. */
 export function latestUnreadMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
   return db.get<NotifySubject>(
-    `SELECT sent_at, body_text, sender_name FROM comms_messages
-     WHERE thread_id = ? AND is_read = 0
-       AND (is_me = 0 OR NOT EXISTS (SELECT 1 FROM comms_messages WHERE thread_id = ? AND is_me = 0))
-     ORDER BY sent_at DESC, id DESC LIMIT 1`,
-    threadId,
+    `SELECT m.id, m.sent_at, m.body_text, m.sender_name FROM comms_messages m
+     WHERE m.thread_id = ? AND m.is_read = 0
+       AND (m.is_me = 0 OR (
+         NOT EXISTS (SELECT 1 FROM comms_messages o WHERE o.thread_id = m.thread_id AND o.is_me = 0)
+         AND lower(COALESCE(json_extract(m.raw_json, '$.headers.to'), '')) LIKE
+           '%' || lower((SELECT a.external_id FROM comms_threads t
+                         JOIN comms_accounts a ON a.id = t.account_id WHERE t.id = m.thread_id)) || '%'
+       ))
+     ORDER BY m.sent_at DESC, m.id DESC LIMIT 1`,
     threadId
   )
 }
@@ -631,11 +636,11 @@ export function applyGmailLabelEvent(
 export function markThreadUnread(db: DbDriver, threadId: string, now: Date = new Date()): string | null {
   const msg =
     db.get<{ id: string; external_id: string }>(
-      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC LIMIT 1',
+      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC, id DESC LIMIT 1',
       threadId
     ) ??
     db.get<{ id: string; external_id: string }>(
-      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1',
+      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT 1',
       threadId
     )
   if (!msg) return null
@@ -1082,10 +1087,11 @@ export function countNewInbound(db: DbDriver, accountId: string, sinceIso: strin
 }
 
 export function listMessages(db: DbDriver, threadId: string, limit = 200): CommsMessage[] {
-  // newest N, presented oldest-first
+  // newest N, presented oldest-first; id breaks same-second ties in ingest
+  // order, matching the snippet and the notification body
   return db
     .all<CommsMessage>(
-      'SELECT * FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT ?',
+      'SELECT * FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?',
       threadId,
       limit
     )

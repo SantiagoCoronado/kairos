@@ -191,6 +191,23 @@ describe('overlay', () => {
     expect(items.map((i) => i.key)).toEqual(['thread:a'])
   })
 
+  it('your own reply does not resurface a dismissed thread; a new inbound one does', () => {
+    seedThread('a', { lastMessageAt: '2026-06-30T10:00:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z' WHERE id = 'a'`)
+    overlayRow('thread:a', '2026-06-30T10:00:00Z', { dismissed_at: T0.toISOString() })
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+
+    // you reply from the phone: last_message_at advances, nobody else wrote
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T08:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+
+    // they answer: the fingerprint moves and the thread is back
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-07-01T09:00:00Z', last_message_at = '2026-07-01T09:00:00Z' WHERE id = 'a'`)
+    const { items } = pendingItems(db, T0)
+    expect(items.map((i) => i.key)).toEqual(['thread:a'])
+    expect(items[0].fingerprint).toBe('2026-07-01T09:00:00Z')
+  })
+
   it('materializes visible threads even when dismissed rows dominate recency', () => {
     // 60 unread, the 50 newest dismissed: the fetch bound applies to VISIBLE
     // rows, so the 10 older pending threads must all render — never an empty

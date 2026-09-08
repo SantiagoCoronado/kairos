@@ -18,6 +18,7 @@ import type {
   CommsProvider
 } from '../comms-types'
 import { newId, nowIso } from '../ids'
+import { isMailToSelf } from '../addresses'
 import { deliveredMap } from '../outbox-units'
 
 // ---------- accounts ----------
@@ -317,22 +318,17 @@ export function listWhatsappTriageCandidates(
   limit: number
 ): (CommsThread & { sender: string; last_inbound_at: string })[] {
   return db.all<CommsThread & { sender: string; last_inbound_at: string }>(
-    `SELECT * FROM (
-       SELECT t.*,
-         COALESCE((
-           SELECT COALESCE(NULLIF(m.sender_name, ''), m.sender_handle)
-           FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
-           ORDER BY m.sent_at DESC, m.id DESC LIMIT 1
-         ), t.title) AS sender,
-         (SELECT MAX(m.sent_at) FROM comms_messages m
-          WHERE m.thread_id = t.id AND m.is_me = 0) AS last_inbound_at
-       FROM comms_threads t
-       WHERE t.provider = 'whatsapp' AND t.kind = 'dm' AND t.unread_count > 0
-         AND t.is_archived = 0 AND t.sync_enabled = 1
-     )
-     WHERE last_inbound_at >= ?
-       AND (notify_eval_at IS NULL OR last_inbound_at > notify_eval_at)
-     ORDER BY last_inbound_at DESC LIMIT ?`,
+    `SELECT t.*, COALESCE((
+       SELECT COALESCE(NULLIF(m.sender_name, ''), m.sender_handle)
+       FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
+       ORDER BY m.sent_at DESC, m.id DESC LIMIT 1
+     ), t.title) AS sender
+     FROM comms_threads t
+     WHERE t.provider = 'whatsapp' AND t.kind = 'dm' AND t.unread_count > 0
+       AND t.is_archived = 0 AND t.sync_enabled = 1
+       AND t.last_inbound_at >= ?
+       AND (t.notify_eval_at IS NULL OR t.last_inbound_at > t.notify_eval_at)
+     ORDER BY t.last_inbound_at DESC LIMIT ?`,
     sinceIso,
     limit
   )
@@ -357,25 +353,37 @@ export function latestInboundMessage(db: DbDriver, threadId: string): NotifySubj
   )
 }
 
-/** The newest still-unread message someone else sent in a thread — the
- *  gmail notification subject, where UNREAD is authoritative. Your own unread
- *  mail counts only when it is mail to YOURSELF: the thread has no inbound
- *  mail and the message's To header names the account's own address (the
- *  raw_json header snapshot). A list echoing your post back as UNREAD has
- *  the list in To, so it can never banner you to yourself. */
+/** The gmail notification subject, where UNREAD is authoritative: the newest
+ *  unread message someone else sent. Your own unread mail counts only when it
+ *  is mail to YOURSELF — the thread has never had inbound mail and you are
+ *  the sole To/Cc recipient (exact match on the ingest header snapshot, no
+ *  substring or LIKE wildcards). A list echoing your post back as UNREAD has
+ *  the list on the line, so it can never banner you to yourself. */
 export function latestUnreadMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
-  return db.get<NotifySubject>(
-    `SELECT m.id, m.sent_at, m.body_text, m.sender_name FROM comms_messages m
-     WHERE m.thread_id = ? AND m.is_read = 0
-       AND (m.is_me = 0 OR (
-         NOT EXISTS (SELECT 1 FROM comms_messages o WHERE o.thread_id = m.thread_id AND o.is_me = 0)
-         AND lower(COALESCE(json_extract(m.raw_json, '$.headers.to'), '')) LIKE
-           '%' || lower((SELECT a.external_id FROM comms_threads t
-                         JOIN comms_accounts a ON a.id = t.account_id WHERE t.id = m.thread_id)) || '%'
-       ))
-     ORDER BY m.sent_at DESC, m.id DESC LIMIT 1`,
+  const inbound = db.get<NotifySubject>(
+    `SELECT id, sent_at, body_text, sender_name FROM comms_messages
+     WHERE thread_id = ? AND is_read = 0 AND is_me = 0 ORDER BY sent_at DESC, id DESC LIMIT 1`,
     threadId
   )
+  if (inbound) return inbound
+  const thread = getThread(db, threadId)
+  if (!thread || thread.last_inbound_at) return undefined // has inbound mail: an unread own row is an echo
+  const own = db.get<NotifySubject & { raw_json: string | null }>(
+    `SELECT id, sent_at, body_text, sender_name, raw_json FROM comms_messages
+     WHERE thread_id = ? AND is_read = 0 AND is_me = 1 ORDER BY sent_at DESC, id DESC LIMIT 1`,
+    threadId
+  )
+  if (!own?.raw_json) return undefined
+  const account = getAccount(db, thread.account_id)
+  if (!account) return undefined
+  let headers: { to?: string; cc?: string } | undefined
+  try {
+    headers = (JSON.parse(own.raw_json) as { headers?: { to?: string; cc?: string } }).headers
+  } catch {
+    return undefined
+  }
+  if (!isMailToSelf(headers, account.external_id)) return undefined
+  return { id: own.id, sent_at: own.sent_at, body_text: own.body_text, sender_name: own.sender_name }
 }
 
 /** Stamp the triage watermark. No updated_at bump — bookkeeping, not content. */
@@ -719,10 +727,14 @@ export function mergeThreads(db: DbDriver, fromId: string, intoId: string, now: 
       'SELECT sent_at, body_text FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT 1',
       intoId
     )
+    const newestInbound = db.get<{ at: string | null }>(
+      'SELECT MAX(sent_at) AS at FROM comms_messages WHERE thread_id = ? AND is_me = 0',
+      intoId
+    )
     db.run(
       `UPDATE comms_threads SET
          title = ?, labels = ?, pinned = ?, is_archived = ?,
-         unread_count = ?, last_message_at = ?, snippet = ?,
+         unread_count = ?, last_message_at = ?, last_inbound_at = ?, snippet = ?,
          notify_eval_at = ?, updated_at = ?
        WHERE id = ?`,
       title,
@@ -731,6 +743,7 @@ export function mergeThreads(db: DbDriver, fromId: string, intoId: string, now: 
       into.is_archived && from.is_archived ? 1 : 0,
       into.unread_count + from.unread_count,
       newest?.sent_at ?? into.last_message_at ?? from.last_message_at,
+      newestInbound?.at ?? into.last_inbound_at ?? from.last_inbound_at,
       newest ? newest.body_text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN) : into.snippet,
       [into.notify_eval_at, from.notify_eval_at].filter(Boolean).sort().pop() ?? null,
       nowIso(now),
@@ -1058,6 +1071,15 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
         snippet,
         nowIso(now),
         input.thread_id
+      )
+    }
+    if (!input.is_me) {
+      db.run(
+        `UPDATE comms_threads SET last_inbound_at = ?
+         WHERE id = ? AND (last_inbound_at IS NULL OR last_inbound_at < ?)`,
+        input.sent_at,
+        input.thread_id,
+        input.sent_at
       )
     }
     // gmail: UNREAD is authoritative for self-sent mail too (mail to yourself

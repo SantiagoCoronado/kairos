@@ -666,6 +666,16 @@ UPDATE calendar_calendars SET sync_token = NULL;
 DROP TABLE IF EXISTS task_key_results;
 DROP TABLE IF EXISTS key_results;
 DROP TABLE IF EXISTS objectives;
+`,
+  // 026 — when someone ELSE last wrote in a thread. last_message_at follows
+  // your own replies too, and everything that means "something new for you"
+  // (notification freshness, the triage watermark, the pending-inbox
+  // dismissal fingerprint) must not. Maintained by upsertMessage / mergeThreads.
+  `
+ALTER TABLE comms_threads ADD COLUMN last_inbound_at TEXT;
+UPDATE comms_threads SET last_inbound_at = (
+  SELECT MAX(m.sent_at) FROM comms_messages m WHERE m.thread_id = comms_threads.id AND m.is_me = 0
+);
 `
 ]
 

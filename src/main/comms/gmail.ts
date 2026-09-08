@@ -363,7 +363,9 @@ export function ingestGmailMessage(db: DbDriver, account: CommsAccount, msg: Gma
   // which takes ids with no query attached.
   if ((msg.labelIds ?? []).includes('DRAFT')) return false
   const from = parseAddress(header(msg, 'From'))
-  const isMe = from.email === account.external_id
+  // SENT is gmail's own verdict that this account sent it — it covers "send
+  // mail as" aliases and secondary domains the From comparison can't know
+  const isMe = from.email === account.external_id || (msg.labelIds ?? []).includes('SENT')
   const subject = header(msg, 'Subject')
   const thread = repo.upsertThread(db, {
     account_id: account.id,

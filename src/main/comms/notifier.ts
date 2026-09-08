@@ -30,10 +30,12 @@ const NOTIFIED_CAP = 500
 const MAX_PER_BATCH = 3
 
 export class CommsNotifier {
-  /** threadId → id of the message already notified; a different newest one
-   *  re-arms. Keyed on the id, not sent_at: WhatsApp stamps whole seconds, so
-   *  two messages a second apart in separate batches would tie and lose one. */
-  private notified = new Map<string, string>()
+  /** threadId → the message already notified. Re-arms only for a DIFFERENT
+   *  message that is not older: the id alone would re-banner when the gmail
+   *  subject moves backwards (you read the newest on your phone, the older
+   *  unread one becomes the subject); sent_at alone would drop the second of
+   *  two same-second WhatsApp messages arriving in separate batches. */
+  private notified = new Map<string, { id: string; sent_at: string }>()
 
   constructor(
     private db: DbDriver,
@@ -111,11 +113,12 @@ export class CommsNotifier {
           ? repo.latestUnreadMessage(this.db, t.id)
           : repo.latestInboundMessage(this.db, t.id)
       if (!subject || subject.sent_at < cutoff) continue // backlog or self-only, not news
-      if (this.notified.get(t.id) === subject.id) continue
+      const seen = this.notified.get(t.id)
+      if (seen && (seen.id === subject.id || subject.sent_at < seen.sent_at)) continue
       // delete-then-set keeps Map iteration order = least-recently-touched,
       // so the cap evicts genuinely stale entries (true LRU)
       this.notified.delete(t.id)
-      this.notified.set(t.id, subject.id)
+      this.notified.set(t.id, { id: subject.id, sent_at: subject.sent_at })
       if (this.notified.size > NOTIFIED_CAP) {
         const oldest = this.notified.keys().next().value
         if (oldest !== undefined) this.notified.delete(oldest)

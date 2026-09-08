@@ -894,6 +894,50 @@ describe('own reply from the phone (whatsapp)', () => {
     expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
   })
 
+  it('latestUnreadMessage needs you to be the SOLE recipient — a list beside you is not mail-to-self', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-reply-all')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'post',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'my post',
+      raw_json: toHeader('devs@googlegroups.com, me@example.com')
+    }, later(0))
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+    const t2 = emailThread(a.id, 'thr-cc')
+    comms.upsertMessage(db, {
+      thread_id: t2.id, account_id: a.id, provider: 'gmail', external_id: 'cc',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'fyi',
+      raw_json: JSON.stringify({ headers: { to: 'me@example.com', cc: 'boss@example.com' }, labelIds: ['UNREAD'] })
+    }, later(0))
+    expect(comms.latestUnreadMessage(db, t2.id)).toBeUndefined()
+  })
+
+  it('last_inbound_at follows only other people, and survives a thread fold', () => {
+    const { a, t, say } = waDm()
+    expect(comms.getThread(db, t.id)!.last_inbound_at).toBeNull()
+    say('in1', 0, 'hi')
+    say('me1', 5, 'hey', true)
+    const th = comms.getThread(db, t.id)!
+    expect(th.last_message_at).toBe(later(5).toISOString())
+    expect(th.last_inbound_at).toBe(later(0).toISOString())
+    // an older inbound arriving late (history chunk) does not move it backwards
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'whatsapp', external_id: 'old',
+      sender_handle: '5215511111111', sender_name: 'Junior', sent_at: later(-10).toISOString(), body_text: 'earlier'
+    }, later(6))
+    expect(comms.getThread(db, t.id)!.last_inbound_at).toBe(later(0).toISOString())
+    // fold: the survivor takes the newest inbound across both
+    const lid = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: '999@lid', kind: 'dm', title: 'Junior'
+    }, T0)
+    comms.upsertMessage(db, {
+      thread_id: lid.id, account_id: a.id, provider: 'whatsapp', external_id: 'lid1',
+      sender_handle: '999', sender_name: 'Junior', sent_at: later(20).toISOString(), body_text: 'via lid'
+    }, later(20))
+    comms.mergeThreads(db, lid.id, t.id, later(21))
+    expect(comms.getThread(db, t.id)!.last_inbound_at).toBe(later(20).toISOString())
+  })
+
   it('latestUnreadMessage never quotes your own list echo once the thread has inbound mail', () => {
     const a = gmailAccount()
     const t = emailThread(a.id, 'thr-list')

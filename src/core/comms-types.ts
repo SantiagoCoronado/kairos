@@ -32,6 +32,8 @@ export interface CommsThread {
   title: string
   snippet: string
   last_message_at: string | null
+  /** newest message someone else sent — what "new for you" is measured by */
+  last_inbound_at: string | null
   unread_count: number
   /** slack channels default off (opt-in); everything else on */
   sync_enabled: number

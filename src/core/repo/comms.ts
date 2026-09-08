@@ -18,6 +18,7 @@ import type {
   CommsProvider
 } from '../comms-types'
 import { newId, nowIso } from '../ids'
+import { isMailToSelf, recipientEmails } from '../addresses'
 import { deliveredMap } from '../outbox-units'
 
 // ---------- accounts ----------
@@ -307,28 +308,85 @@ export function listUnlabeledEmailThreads(
   )
 }
 
-/** WhatsApp DM threads with fresh unread messages the notification triage
- *  hasn't evaluated yet (last_message_at past the notify_eval_at watermark). */
+/** WhatsApp DM threads with fresh unread INBOUND messages the notification
+ *  triage hasn't evaluated yet (newest inbound past the notify_eval_at
+ *  watermark). Keyed on the inbound side, not last_message_at: your own
+ *  reply from the phone advances the thread but is nothing to triage. */
 export function listWhatsappTriageCandidates(
   db: DbDriver,
   sinceIso: string,
   limit: number
-): (CommsThread & { sender: string })[] {
-  return db.all<CommsThread & { sender: string }>(
+): (CommsThread & { sender: string; last_inbound_at: string })[] {
+  return db.all<CommsThread & { sender: string; last_inbound_at: string }>(
     `SELECT t.*, COALESCE((
        SELECT COALESCE(NULLIF(m.sender_name, ''), m.sender_handle)
        FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
-       ORDER BY m.sent_at DESC LIMIT 1
+       ORDER BY m.sent_at DESC, m.id DESC LIMIT 1
      ), t.title) AS sender
      FROM comms_threads t
      WHERE t.provider = 'whatsapp' AND t.kind = 'dm' AND t.unread_count > 0
        AND t.is_archived = 0 AND t.sync_enabled = 1
-       AND t.last_message_at >= ?
-       AND (t.notify_eval_at IS NULL OR t.last_message_at > t.notify_eval_at)
-     ORDER BY t.last_message_at DESC LIMIT ?`,
+       AND t.last_inbound_at >= ?
+       AND (t.notify_eval_at IS NULL OR t.last_inbound_at > t.notify_eval_at)
+     ORDER BY t.last_inbound_at DESC LIMIT ?`,
     sinceIso,
     limit
   )
+}
+
+/** What a notification for a thread is about: which message, when, what it said. */
+export type NotifySubject = Pick<CommsMessage, 'id' | 'sent_at' | 'body_text' | 'sender_name'>
+
+// `, id DESC` on both: WhatsApp timestamps are whole seconds, so rapid-fire
+// messages tie on sent_at and the index order would hand back the OLDER one.
+// Ids minted since newId() went monotonic (Sep 2026) break the tie in ingest
+// order; older rows carry random ulids, so for them the pick is arbitrary —
+// still deterministic, no longer the index's implementation-defined one.
+
+/** The newest message someone else sent in a thread. Undefined for a thread
+ *  that is all your own messages. */
+export function latestInboundMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
+  return db.get<NotifySubject>(
+    `SELECT id, sent_at, body_text, sender_name FROM comms_messages
+     WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC, id DESC LIMIT 1`,
+    threadId
+  )
+}
+
+/** The gmail notification subject, where UNREAD is authoritative: the newest
+ *  unread message someone else sent. Your own unread mail counts only when it
+ *  is mail to YOURSELF — the thread has never had inbound mail and you are
+ *  the sole To/Cc recipient (exact match on the ingest header snapshot, no
+ *  substring or LIKE wildcards). A list echoing your post back as UNREAD has
+ *  the list on the line, so it can never banner you to yourself. */
+export function latestUnreadMessage(db: DbDriver, threadId: string): NotifySubject | undefined {
+  const inbound = db.get<NotifySubject>(
+    `SELECT id, sent_at, body_text, sender_name FROM comms_messages
+     WHERE thread_id = ? AND is_read = 0 AND is_me = 0 ORDER BY sent_at DESC, id DESC LIMIT 1`,
+    threadId
+  )
+  if (inbound) return inbound
+  const thread = getThread(db, threadId)
+  if (!thread || thread.last_inbound_at) return undefined // has inbound mail: an unread own row is an echo
+  const own = db.get<NotifySubject & { raw_json: string | null }>(
+    `SELECT id, sent_at, body_text, sender_name, raw_json FROM comms_messages
+     WHERE thread_id = ? AND is_read = 0 AND is_me = 1 ORDER BY sent_at DESC, id DESC LIMIT 1`,
+    threadId
+  )
+  if (!own?.raw_json) return undefined
+  const account = getAccount(db, thread.account_id)
+  if (!account) return undefined
+  let headers: { from?: string; to?: string; cc?: string } | undefined
+  try {
+    headers = (JSON.parse(own.raw_json) as { headers?: { from?: string; to?: string; cc?: string } }).headers
+  } catch {
+    return undefined
+  }
+  // the row is yours (SENT), so its From is one of your addresses — an alias
+  // mailing itself is mail to self even though it isn't the primary address
+  const selves = [account.external_id, ...recipientEmails(headers?.from ?? '').slice(0, 1)]
+  if (!isMailToSelf(headers, selves)) return undefined
+  return { id: own.id, sent_at: own.sent_at, body_text: own.body_text, sender_name: own.sender_name }
 }
 
 /** Stamp the triage watermark. No updated_at bump — bookkeeping, not content. */
@@ -589,24 +647,29 @@ export function applyGmailLabelEvent(
 export function markThreadUnread(db: DbDriver, threadId: string, now: Date = new Date()): string | null {
   const msg =
     db.get<{ id: string; external_id: string }>(
-      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC LIMIT 1',
+      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? AND is_me = 0 ORDER BY sent_at DESC, id DESC LIMIT 1',
       threadId
     ) ??
     db.get<{ id: string; external_id: string }>(
-      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1',
+      'SELECT id, external_id FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT 1',
       threadId
     )
   if (!msg) return null
+  // gmail rows mirror UNREAD even when is_me, and recomputeThreadState counts
+  // every is_read = 0 row there — this count must agree with it, or the next
+  // label-history sync silently changes the number. Other providers never
+  // count own outbound, except the one row just flagged.
+  const gmail = getThread(db, threadId)?.provider === 'gmail'
   db.transaction(() => {
     db.run('UPDATE comms_messages SET is_read = 0 WHERE id = ?', msg.id)
     db.run(
       `UPDATE comms_threads SET
          unread_count = (SELECT COUNT(*) FROM comms_messages
-                         WHERE thread_id = ? AND is_read = 0 AND (is_me = 0 OR id = ?)),
+                         WHERE thread_id = ? AND is_read = 0 ${gmail ? '' : 'AND (is_me = 0 OR id = ?)'}),
          updated_at = ?
        WHERE id = ?`,
       threadId,
-      msg.id,
+      ...(gmail ? [] : [msg.id]),
       nowIso(now),
       threadId
     )
@@ -667,10 +730,14 @@ export function mergeThreads(db: DbDriver, fromId: string, intoId: string, now: 
       'SELECT sent_at, body_text FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT 1',
       intoId
     )
+    const newestInbound = db.get<{ at: string | null }>(
+      'SELECT MAX(sent_at) AS at FROM comms_messages WHERE thread_id = ? AND is_me = 0',
+      intoId
+    )
     db.run(
       `UPDATE comms_threads SET
          title = ?, labels = ?, pinned = ?, is_archived = ?,
-         unread_count = ?, last_message_at = ?, snippet = ?,
+         unread_count = ?, last_message_at = ?, last_inbound_at = ?, snippet = ?,
          notify_eval_at = ?, updated_at = ?
        WHERE id = ?`,
       title,
@@ -679,6 +746,7 @@ export function mergeThreads(db: DbDriver, fromId: string, intoId: string, now: 
       into.is_archived && from.is_archived ? 1 : 0,
       into.unread_count + from.unread_count,
       newest?.sent_at ?? into.last_message_at ?? from.last_message_at,
+      newestInbound?.at ?? into.last_inbound_at ?? from.last_inbound_at,
       newest ? newest.body_text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_LEN) : into.snippet,
       [into.notify_eval_at, from.notify_eval_at].filter(Boolean).sort().pop() ?? null,
       nowIso(now),
@@ -982,7 +1050,10 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
       input.body_text ?? '',
       input.body_html ?? null,
       input.has_attachments ? 1 : 0,
-      input.is_me || input.is_read ? 1 : 0,
+      // gmail: the row mirrors UNREAD even for your own mail (mail to yourself
+      // arrives unread), matching the unread_count below and the recompute's
+      // is_me-blind count; other providers never treat own outbound as unread
+      (input.provider === 'gmail' ? input.is_read : input.is_me || input.is_read) ? 1 : 0,
       input.is_inbox === false ? 0 : 1,
       input.raw_json ?? null,
       nowIso(now)
@@ -1003,6 +1074,15 @@ export function upsertMessage(db: DbDriver, input: MessageUpsert, now: Date = ne
         snippet,
         nowIso(now),
         input.thread_id
+      )
+    }
+    if (!input.is_me) {
+      db.run(
+        `UPDATE comms_threads SET last_inbound_at = ?
+         WHERE id = ? AND (last_inbound_at IS NULL OR last_inbound_at < ?)`,
+        input.sent_at,
+        input.thread_id,
+        input.sent_at
       )
     }
     // gmail: UNREAD is authoritative for self-sent mail too (mail to yourself
@@ -1032,10 +1112,11 @@ export function countNewInbound(db: DbDriver, accountId: string, sinceIso: strin
 }
 
 export function listMessages(db: DbDriver, threadId: string, limit = 200): CommsMessage[] {
-  // newest N, presented oldest-first
+  // newest N, presented oldest-first; id breaks same-second ties in ingest
+  // order, matching the snippet and the notification body
   return db
     .all<CommsMessage>(
-      'SELECT * FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT ?',
+      'SELECT * FROM comms_messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?',
       threadId,
       limit
     )

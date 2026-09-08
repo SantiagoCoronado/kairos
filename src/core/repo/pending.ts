@@ -179,8 +179,17 @@ function inviteItems(db: DbDriver, now: Date): PendingItem[] {
 
 const UNREAD_THREAD = `sync_enabled = 1 AND is_archived = 0 AND unread_count > 0`
 
+/** The thread fingerprint: when someone ELSE last wrote. Your own reply from
+ *  the phone advances last_message_at but is not news, so it must not
+ *  resurface a dismissed thread or make a seen one unseen. Falls back to
+ *  last_message_at for threads that never had inbound mail (mail to self).
+ *  Read (THREAD_VISIBLE, THREAD_SEEN, threadItems) and write
+ *  (currentFingerprint, markAllSeen) sides MUST use this one expression;
+ *  migration 026 rewrote stored rows when it changed. */
+const THREAD_FP = `COALESCE(t.last_inbound_at, t.last_message_at, '')`
+
 /** THE copy of the thread overlay-visibility predicate: hidden while snoozed,
- *  or while dismissed with an unchanged fingerprint (= last_message_at).
+ *  or while dismissed with an unchanged fingerprint (THREAD_FP).
  *  Fetch and count both use it, so LIMIT applies to *visible* rows and the
  *  materialized list can never go empty while the count says otherwise.
  *  Takes one `?` (now as ISO). */
@@ -189,7 +198,7 @@ const THREAD_VISIBLE = `NOT EXISTS (
   WHERE o.item_key = 'thread:' || t.id
     AND ((o.snoozed_until IS NOT NULL AND o.snoozed_until > ?)
       OR (o.dismissed_at IS NOT NULL
-          AND o.fingerprint = COALESCE(t.last_message_at, '')))
+          AND o.fingerprint = ${THREAD_FP}))
 )`
 
 /** Visible unread threads — action-needed first, capped for display. */
@@ -199,11 +208,17 @@ function threadItems(db: DbDriver, ts: string): PendingItem[] {
     title: string
     snippet: string
     last_message_at: string | null
+    fingerprint: string
+    inbound_snippet: string | null
     labels: string
   }>(
-    `SELECT id, title, snippet, last_message_at, labels FROM comms_threads t
+    `SELECT id, title, snippet, last_message_at, ${THREAD_FP} AS fingerprint,
+       (SELECT m.body_text FROM comms_messages m WHERE m.thread_id = t.id AND m.is_me = 0
+        ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS inbound_snippet,
+       labels
+     FROM comms_threads t
      WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE}
-     ORDER BY instr(',' || labels || ',', ',action-needed,') > 0 DESC, last_message_at DESC
+     ORDER BY instr(',' || labels || ',', ',action-needed,') > 0 DESC, ${THREAD_FP} DESC
      LIMIT ${THREAD_CAP}`,
     ts
   )
@@ -214,12 +229,16 @@ function threadItems(db: DbDriver, ts: string): PendingItem[] {
       kind: 'thread' as const,
       id: r.id,
       title: r.title,
-      subtitle: r.snippet,
+      // what THEY last said, not your reply — the thread snippet follows your
+      // own messages too; a thread with no inbound mail keeps its snippet
+      subtitle:
+        r.inbound_snippet != null ? r.inbound_snippet.replace(/\s+/g, ' ').trim().slice(0, 120) : r.snippet,
       // autoLabel is off by default, so plain unread is the baseline signal
       // and the classifier's action-needed verdict is the elevation
       tone: actionNeeded ? ('accent' as const) : ('muted' as const),
-      at: r.last_message_at,
-      fingerprint: r.last_message_at ?? ''
+      // ordered and stamped by the same moment: when someone else last wrote
+      at: r.fingerprint || r.last_message_at,
+      fingerprint: r.fingerprint
     }
   })
 }
@@ -230,7 +249,7 @@ const THREAD_SEEN = `EXISTS (
   SELECT 1 FROM pending_overlay o
   WHERE o.item_key = 'thread:' || t.id
     AND o.seen_at IS NOT NULL
-    AND o.fingerprint = COALESCE(t.last_message_at, '')
+    AND o.fingerprint = ${THREAD_FP}
 )`
 
 /** Exact count of visible unread threads (uncapped); unseen-only variant. */
@@ -445,9 +464,11 @@ export function unseenRunCount(db: DbDriver, now: Date = new Date()): number {
 /** Current fingerprint of a still-pending item; undefined once resolved. */
 function currentFingerprint(db: DbDriver, key: string, now: Date): string | undefined {
   if (key.startsWith('thread:')) {
+    // THE same expression the read side compares against — a stamp under any
+    // other value can never match, and the item becomes un-dismissable
     const row = db.get<{ fp: string }>(
-      `SELECT COALESCE(last_message_at, '') AS fp FROM comms_threads
-       WHERE id = ? AND ${UNREAD_THREAD}`,
+      `SELECT ${THREAD_FP} AS fp FROM comms_threads t
+       WHERE t.id = ? AND ${UNREAD_THREAD}`,
       key.slice('thread:'.length)
     )
     return row?.fp
@@ -545,7 +566,7 @@ export function markAllSeen(
   }
   if (!onlyKind || onlyKind === 'thread') {
     const threads = db.all<{ id: string; fp: string }>(
-      `SELECT id, COALESCE(last_message_at, '') AS fp FROM comms_threads t
+      `SELECT id, ${THREAD_FP} AS fp FROM comms_threads t
        WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE} AND NOT ${THREAD_SEEN}`,
       ts
     )

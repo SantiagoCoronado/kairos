@@ -207,7 +207,7 @@ export class CommsLabeler {
     for (const t of threads) {
       const messages = repo.recentInboundBodies(this.db, t.id, TRIAGE_CONTEXT_MESSAGES)
       if (heuristicMessageTriage(messages) === 'routine') {
-        repo.setThreadNotifyEval(this.db, t.id, t.last_message_at!)
+        repo.setThreadNotifyEval(this.db, t.id, t.last_inbound_at)
         heuristic++
       } else {
         needModel.push({ thread: t, messages })
@@ -246,7 +246,7 @@ export class CommsLabeler {
             for (const { thread } of split.toModel) {
               const v = verdicts.get(thread.id)
               if (!v) continue // skipped by the model: retry next sweep while fresh
-              repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
+              repo.setThreadNotifyEval(this.db, thread.id, thread.last_inbound_at)
               if (v === 'important') important.push(thread.id)
               modeled++
             }
@@ -276,12 +276,12 @@ export class CommsLabeler {
 
   /** model OUTAGE path: stamp + notify unfiltered rather than risk silence */
   private failOpen(
-    items: { thread: { id: string; last_message_at: string | null } }[],
+    items: { thread: { id: string; last_inbound_at: string } }[],
     important: string[],
     reason: string
   ): void {
     for (const { thread } of items) {
-      repo.setThreadNotifyEval(this.db, thread.id, thread.last_message_at!)
+      repo.setThreadNotifyEval(this.db, thread.id, thread.last_inbound_at)
       if (!important.includes(thread.id)) important.push(thread.id)
     }
     logLine('warn', 'comms', `whatsapp triage unavailable (${reason}) — notifying ${items.length} unfiltered`)

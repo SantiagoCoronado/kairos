@@ -10,6 +10,10 @@
 // Guardrails: suppressed while an app window is focused; only messages newer
 // than RECENT_WINDOW_MS (a first sync/backfill can't storm); at most
 // MAX_PER_BATCH individual banners per event, the rest coalesce into one.
+// Freshness and the banner body come from the thread's newest INBOUND
+// message (gmail: newest UNREAD one — mail to yourself arrives unread there),
+// never last_message_at/snippet — those follow your own reply from the phone
+// too, which used to re-arm a banner quoting you to yourself.
 import { Notification, BrowserWindow } from 'electron'
 import type { DbDriver } from '../../core/driver'
 import type { NavView } from '../../shared/ipc-contract'
@@ -26,8 +30,12 @@ const NOTIFIED_CAP = 500
 const MAX_PER_BATCH = 3
 
 export class CommsNotifier {
-  /** threadId → last_message_at already notified; a newer message re-arms */
-  private notified = new Map<string, string>()
+  /** threadId → the message already notified. Re-arms only for a DIFFERENT
+   *  message that is not older: the id alone would re-banner when the gmail
+   *  subject moves backwards (you read the newest on your phone, the older
+   *  unread one becomes the subject); sent_at alone would drop the second of
+   *  two same-second WhatsApp messages arriving in separate batches. */
+  private notified = new Map<string, { id: string; sent_at: string }>()
 
   constructor(
     private db: DbDriver,
@@ -95,22 +103,36 @@ export class CommsNotifier {
     // focused window = the user is already looking at the app
     if (BrowserWindow.getFocusedWindow()) return
     const cutoff = new Date(Date.now() - RECENT_WINDOW_MS).toISOString()
-    const fresh: CommsThreadListItem[] = []
+    const fresh: { thread: CommsThreadListItem; body: string }[] = []
     for (const t of candidates) {
-      if (!t.last_message_at || t.last_message_at < cutoff) continue // backlog, not news
+      // gmail: UNREAD is authoritative and mail-to-self arrives unread, so the
+      // subject is the newest unread message; elsewhere it's the newest one
+      // someone else sent — your own reply from the phone is never news
+      const subject =
+        t.provider === 'gmail'
+          ? repo.latestUnreadMessage(this.db, t.id)
+          : repo.latestInboundMessage(this.db, t.id)
+      if (!subject || subject.sent_at < cutoff) continue // backlog or self-only, not news
+      // skip unless the subject is strictly newer as a (sent_at, id) pair:
+      // equal timestamps fall back to the id (monotonic), so two same-second
+      // gmail mails can't re-banner the older one after you read the newer
       const seen = this.notified.get(t.id)
-      if (seen && seen >= t.last_message_at) continue
+      if (
+        seen &&
+        (subject.sent_at < seen.sent_at || (subject.sent_at === seen.sent_at && subject.id <= seen.id))
+      )
+        continue
       // delete-then-set keeps Map iteration order = least-recently-touched,
       // so the cap evicts genuinely stale entries (true LRU)
       this.notified.delete(t.id)
-      this.notified.set(t.id, t.last_message_at)
+      this.notified.set(t.id, { id: subject.id, sent_at: subject.sent_at })
       if (this.notified.size > NOTIFIED_CAP) {
         const oldest = this.notified.keys().next().value
         if (oldest !== undefined) this.notified.delete(oldest)
       }
-      fresh.push(t)
+      fresh.push({ thread: t, body: subject.body_text.replace(/\s+/g, ' ').trim().slice(0, 120) })
     }
-    for (const t of fresh.slice(0, MAX_PER_BATCH)) this.show(t)
+    for (const f of fresh.slice(0, MAX_PER_BATCH)) this.show(f.thread, f.body)
     // a labeler sweep can classify a batch of recent mail at once — coalesce
     // the overflow instead of firing a banner per thread
     const extra = fresh.length - MAX_PER_BATCH
@@ -120,9 +142,9 @@ export class CommsNotifier {
     }
   }
 
-  private show(t: CommsThreadListItem): void {
+  private show(t: CommsThreadListItem, body: string): void {
     const title = t.person_name || t.title || 'New message'
-    this.notify(title, t.snippet || '(no preview)', t.id)
+    this.notify(title, body || '(no preview)', t.id)
     logLine('info', 'comms', `notified ${t.provider}/${t.kind}: "${title}"`)
   }
 

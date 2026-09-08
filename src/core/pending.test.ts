@@ -191,6 +191,44 @@ describe('overlay', () => {
     expect(items.map((i) => i.key)).toEqual(['thread:a'])
   })
 
+  it('your own reply does not resurface a dismissed thread; a new inbound one does', () => {
+    seedThread('a', { lastMessageAt: '2026-06-30T10:00:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z' WHERE id = 'a'`)
+    overlayRow('thread:a', '2026-06-30T10:00:00Z', { dismissed_at: T0.toISOString() })
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+
+    // you reply from the phone: last_message_at advances, nobody else wrote
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T08:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+
+    // they answer: the fingerprint moves and the thread is back
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-07-01T09:00:00Z', last_message_at = '2026-07-01T09:00:00Z' WHERE id = 'a'`)
+    const { items } = pendingItems(db, T0)
+    expect(items.map((i) => i.key)).toEqual(['thread:a'])
+    expect(items[0].fingerprint).toBe('2026-07-01T09:00:00Z')
+  })
+
+  it('a thread row shows and sorts by what THEY last said, not your reply', () => {
+    // 'a': they wrote at 10:00, you replied at 11:00 — the row must not jump
+    // ahead of 'b' (they wrote at 10:30) nor quote your reply
+    seedThread('a', { lastMessageAt: '2026-06-30T11:00:00Z' })
+    seedThread('b', { lastMessageAt: '2026-06-30T10:30:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z', snippet = 'ok, on my way' WHERE id = 'a'`)
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:30:00Z' WHERE id = 'b'`)
+    db.run(
+      `INSERT INTO comms_messages (id, thread_id, account_id, provider, external_id, sender_name, sender_handle, is_me, sent_at, body_text, is_read, created_at)
+       VALUES ('m1', 'a', ?, 'gmail', 'x1', 'Ana', 'ana@x', 0, '2026-06-30T10:00:00Z', 'where   are you?', 0, '2026-06-30T10:00:00Z'),
+              ('m2', 'a', ?, 'gmail', 'x2', 'me', 'me@x', 1, '2026-06-30T11:00:00Z', 'ok, on my way', 1, '2026-06-30T11:00:00Z')`,
+      accountId,
+      accountId
+    )
+    const items = pendingItems(db, T0).items
+    expect(items.map((i) => i.id)).toEqual(['b', 'a'])
+    const a = items.find((i) => i.id === 'a')!
+    expect(a.subtitle).toBe('where are you?')
+    expect(a.at).toBe('2026-06-30T10:00:00Z')
+  })
+
   it('materializes visible threads even when dismissed rows dominate recency', () => {
     // 60 unread, the 50 newest dismissed: the fetch bound applies to VISIBLE
     // rows, so the 10 older pending threads must all render — never an empty
@@ -265,6 +303,34 @@ describe('triage writes', () => {
     expect(pendingItems(db, T0).items).toHaveLength(0)
     undismissItem(db, 'thread:a', T0)
     expect(pendingItems(db, T0).items).toHaveLength(1)
+  })
+
+  it('dismissItem and markAllSeen stamp the inbound fingerprint once your own reply has moved last_message_at', () => {
+    // the exact state after you answer from the phone: your reply is newest,
+    // someone else's message is what the fingerprint tracks
+    seedThread('a', { lastMessageAt: '2026-07-01T11:00:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items.map((i) => i.fingerprint)).toEqual(['2026-06-30T10:00:00Z'])
+
+    dismissItem(db, 'thread:a', T0)
+    expect(pendingItems(db, T0).items).toHaveLength(0) // the write matched the read
+    // another reply of yours keeps it dismissed; their next message brings it back
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T12:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-07-01T13:00:00Z', last_message_at = '2026-07-01T13:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items.map((i) => i.key)).toEqual(['thread:a'])
+
+    // the seen stamp, on a second thread in the same diverged state
+    seedThread('b', { lastMessageAt: '2026-07-01T11:00:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z' WHERE id = 'b'`)
+    expect(pendingItems(db, T0).unseen).toBe(2)
+    expect(markAllSeen(db, T0).sort()).toEqual(['thread:a', 'thread:b'])
+    expect(pendingItems(db, T0).unseen).toBe(0)
+    expect(markAllSeen(db, T0)).toEqual([]) // steady state: nothing left to stamp
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T12:00:00Z' WHERE id = 'b'`) // your reply
+    expect(pendingItems(db, T0).unseen).toBe(0)
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-07-01T13:00:00Z', last_message_at = '2026-07-01T13:00:00Z' WHERE id = 'b'`)
+    expect(pendingItems(db, T0).unseen).toBe(1)
   })
 
   it('normalizes offset-form ISO snoozes to UTC so string compares stay sound', () => {

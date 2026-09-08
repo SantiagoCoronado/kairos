@@ -307,8 +307,14 @@ export class WhatsAppConnection {
           this.learnPair(c.lidJid, c.pnJid)
         }
         await this.resolveLids((messages ?? []).map((m) => m.key))
-        // history arrives already-read
-        for (const msg of messages ?? []) this.ingest(msg, true)
+        // history arrives already-read, and NEWEST-FIRST per chat (Baileys
+        // keeps msgs[0] as "the most recent"). Ingest oldest-first so ids —
+        // the same-second tiebreak everywhere downstream — mint in
+        // chronological order: reverse, then a stable sort by timestamp
+        // (ties keep the reversed, i.e. chronological, order)
+        const ts = (m: WAMessage): number => Number(m.messageTimestamp ?? 0)
+        const ordered = [...(messages ?? [])].reverse().sort((a, b) => ts(a) - ts(b))
+        for (const msg of ordered) this.ingest(msg, true)
         // lid chats this chunk created before a later chunk taught the phone
         await this.reconcileLidThreads()
         // names and messages come in separate chunks, in either order — retitle
@@ -647,6 +653,13 @@ export class WhatsAppConnection {
       const row = repo.getMessageByExternal(this.db, this.accountId, externalId)
       if (row) repo.addAttachments(this.db, row.id, [{ ...meta, external_ref: externalId }])
     }
+    // Deliberately NOT marking the thread read on a live message of yours:
+    // a reply from the notification shade, Siri or a watch never opens the
+    // chat, and a local flip has no recovery path (chats.update carries only
+    // 0/-1, never the phone's real count). The phone's own read state
+    // arrives through chats.update when you do open the chat, and the
+    // notifier keys on inbound messages, so an unread thread whose newest
+    // message is yours is harmless.
     return added
   }
 

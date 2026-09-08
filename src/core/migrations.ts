@@ -666,6 +666,35 @@ UPDATE calendar_calendars SET sync_token = NULL;
 DROP TABLE IF EXISTS task_key_results;
 DROP TABLE IF EXISTS key_results;
 DROP TABLE IF EXISTS objectives;
+`,
+  // 026 — when someone ELSE last wrote in a thread. last_message_at follows
+  // your own replies too, and everything that means "something new for you"
+  // (notification freshness, the triage watermark, the pending-inbox
+  // dismissal fingerprint) must not. Maintained by upsertMessage / mergeThreads.
+  // The pending-inbox fingerprint moves from last_message_at to this column,
+  // so stored overlay rows that currently MATCH their thread (live dismissals,
+  // snoozes, seen stamps) are rewritten to the new value and keep holding;
+  // rows that no longer match were already stale and stay that way.
+  // Before the backfill, mail this account SENT from a send-as alias becomes
+  // yours (gmail's SENT label is authoritative; ingest applies the same rule
+  // from here on) — otherwise your own alias mail would stamp last_inbound_at.
+  `
+UPDATE comms_messages SET is_me = 1, person_id = NULL
+ WHERE provider = 'gmail' AND is_me = 0
+   AND (CASE WHEN json_valid(raw_json) THEN json_extract(raw_json, '$.labelIds') END) LIKE '%"SENT"%';
+ALTER TABLE comms_threads ADD COLUMN last_inbound_at TEXT;
+UPDATE comms_threads SET last_inbound_at = (
+  SELECT MAX(m.sent_at) FROM comms_messages m WHERE m.thread_id = comms_threads.id AND m.is_me = 0
+);
+UPDATE pending_overlay SET fingerprint = (
+  SELECT COALESCE(t.last_inbound_at, t.last_message_at, '') FROM comms_threads t
+  WHERE 'thread:' || t.id = pending_overlay.item_key
+)
+WHERE item_key LIKE 'thread:%'
+  AND fingerprint = (
+    SELECT COALESCE(t.last_message_at, '') FROM comms_threads t
+    WHERE 'thread:' || t.id = pending_overlay.item_key
+  );
 `
 ]
 

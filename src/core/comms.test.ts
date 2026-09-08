@@ -814,6 +814,214 @@ describe('attachments', () => {
   })
 })
 
+describe('own reply from the phone (whatsapp)', () => {
+  function waDm() {
+    const a = comms.upsertAccount(db, {
+      provider: 'whatsapp', external_id: '5215500000000@s.whatsapp.net', display_name: 'me'
+    }, T0)
+    const t = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: '5215511111111@s.whatsapp.net',
+      kind: 'dm', title: 'Junior'
+    }, T0)
+    const say = (ext: string, mins: number, body: string, me = false): void => {
+      comms.upsertMessage(db, {
+        thread_id: t.id, account_id: a.id, provider: 'whatsapp', external_id: ext,
+        sender_name: me ? 'me' : 'Junior', sender_handle: me ? '5215500000000' : '5215511111111',
+        is_me: me, sent_at: later(mins).toISOString(), body_text: body
+      }, later(mins))
+    }
+    return { a, t, say }
+  }
+
+  it('latestInboundMessage skips your own newer message', () => {
+    const { t, say } = waDm()
+    expect(comms.latestInboundMessage(db, t.id)).toBeUndefined()
+    say('in1', 0, 'where are you?')
+    say('me1', 5, 'on my way', true)
+    const m = comms.latestInboundMessage(db, t.id)!
+    expect(m.body_text).toBe('where are you?')
+    expect(m.sent_at).toBe(later(0).toISOString())
+    expect(m.sender_name).toBe('Junior')
+  })
+
+  it('latestInboundMessage breaks a sent_at tie in ingest order', () => {
+    // WhatsApp timestamps are whole seconds: two quick messages tie exactly
+    const { t, say } = waDm()
+    say('in1', 0, 'first')
+    say('in2', 0, 'second')
+    expect(comms.latestInboundMessage(db, t.id)!.body_text).toBe('second')
+  })
+
+  /** gmail ingest stores the header snapshot the mail-to-self check reads */
+  const toHeader = (to: string): string => JSON.stringify({ headers: { to }, labelIds: ['UNREAD', 'SENT', 'INBOX'] })
+
+  it('latestUnreadMessage counts gmail mail-to-self and forgets it once read', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id)
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'self',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note to self',
+      raw_json: toHeader('Me <me@example.com>')
+    }, later(0))
+    expect(comms.latestInboundMessage(db, t.id)).toBeUndefined()
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note to self')
+    // your own SENT reply is read on arrival — never the subject
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'sent',
+      is_me: true, is_read: true, sent_at: later(1).toISOString(), body_text: 'my reply'
+    }, later(1))
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note to self')
+    comms.markThreadRead(db, t.id, later(2))
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+  })
+
+  it('latestUnreadMessage ignores your own post echoed back by a list into an empty thread', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-group')
+    // a Google Group delivers your post back with INBOX+UNREAD before any reply exists
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'post',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'my post',
+      raw_json: toHeader('devs@googlegroups.com')
+    }, later(0))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+    // a row synced without a header snapshot can't prove it's mail to self either
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'bare',
+      is_me: true, is_read: false, sent_at: later(1).toISOString(), body_text: 'no headers'
+    }, later(1))
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+  })
+
+  it('latestUnreadMessage treats an alias mailing itself as mail-to-self', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-alias')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'alias',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note via alias',
+      raw_json: JSON.stringify({ headers: { from: 'Me <me@alias-domain.com>', to: 'me@alias-domain.com' }, labelIds: ['UNREAD', 'SENT', 'INBOX'] })
+    }, later(0))
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('note via alias')
+  })
+
+  it('latestUnreadMessage needs you to be the SOLE recipient — a list beside you is not mail-to-self', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-reply-all')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'post',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'my post',
+      raw_json: toHeader('devs@googlegroups.com, me@example.com')
+    }, later(0))
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+    const t2 = emailThread(a.id, 'thr-cc')
+    comms.upsertMessage(db, {
+      thread_id: t2.id, account_id: a.id, provider: 'gmail', external_id: 'cc',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'fyi',
+      raw_json: JSON.stringify({ headers: { to: 'me@example.com', cc: 'boss@example.com' }, labelIds: ['UNREAD'] })
+    }, later(0))
+    expect(comms.latestUnreadMessage(db, t2.id)).toBeUndefined()
+  })
+
+  it('last_inbound_at follows only other people, and survives a thread fold', () => {
+    const { a, t, say } = waDm()
+    expect(comms.getThread(db, t.id)!.last_inbound_at).toBeNull()
+    say('in1', 0, 'hi')
+    say('me1', 5, 'hey', true)
+    const th = comms.getThread(db, t.id)!
+    expect(th.last_message_at).toBe(later(5).toISOString())
+    expect(th.last_inbound_at).toBe(later(0).toISOString())
+    // an older inbound arriving late (history chunk) does not move it backwards
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'whatsapp', external_id: 'old',
+      sender_handle: '5215511111111', sender_name: 'Junior', sent_at: later(-10).toISOString(), body_text: 'earlier'
+    }, later(6))
+    expect(comms.getThread(db, t.id)!.last_inbound_at).toBe(later(0).toISOString())
+    // fold: the survivor takes the newest inbound across both
+    const lid = comms.upsertThread(db, {
+      account_id: a.id, provider: 'whatsapp', external_id: '999@lid', kind: 'dm', title: 'Junior'
+    }, T0)
+    comms.upsertMessage(db, {
+      thread_id: lid.id, account_id: a.id, provider: 'whatsapp', external_id: 'lid1',
+      sender_handle: '999', sender_name: 'Junior', sent_at: later(20).toISOString(), body_text: 'via lid'
+    }, later(20))
+    comms.mergeThreads(db, lid.id, t.id, later(21))
+    expect(comms.getThread(db, t.id)!.last_inbound_at).toBe(later(20).toISOString())
+  })
+
+  it('latestUnreadMessage never quotes your own list echo once the thread has inbound mail', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-list')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'them',
+      sent_at: later(0).toISOString(), body_text: 'question for the list'
+    }, later(0))
+    // a Google Group delivers your own post back with INBOX+UNREAD
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'echo',
+      is_me: true, is_read: false, sent_at: later(5).toISOString(), body_text: 'my answer'
+    }, later(5))
+    expect(comms.latestUnreadMessage(db, t.id)!.body_text).toBe('question for the list')
+    // once the inbound is read, the unread echo alone is not news
+    db.run("UPDATE comms_messages SET is_read = 1 WHERE external_id = 'them'")
+    expect(comms.latestUnreadMessage(db, t.id)).toBeUndefined()
+  })
+
+  it('same-second ties resolve in ingest order everywhere', () => {
+    const { t, say } = waDm()
+    say('in1', 0, 'can you call me')
+    say('in2', 0, 'urgent')
+    say('me1', 0, 'calling', true)
+    // subject, mark-unread pick and the thread view all agree on "urgent" as newest inbound
+    expect(comms.latestInboundMessage(db, t.id)!.body_text).toBe('urgent')
+    comms.markThreadRead(db, t.id, later(1))
+    expect(comms.markThreadUnread(db, t.id, later(2))).toBe('in2')
+    expect(comms.listMessages(db, t.id).map((m) => m.external_id)).toEqual(['in1', 'in2', 'me1'])
+  })
+
+  it('markThreadUnread on gmail agrees with the label-history recompute', () => {
+    const a = gmailAccount()
+    const t = emailThread(a.id, 'thr-recount')
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'self',
+      is_me: true, is_read: false, sent_at: later(0).toISOString(), body_text: 'note to self'
+    }, later(0))
+    comms.upsertMessage(db, {
+      thread_id: t.id, account_id: a.id, provider: 'gmail', external_id: 'in',
+      sent_at: later(1).toISOString(), body_text: 'hello'
+    }, later(1))
+    comms.markThreadRead(db, t.id, later(2))
+    db.run("UPDATE comms_messages SET is_read = 0 WHERE external_id = 'self'") // label sync re-flags the self mail
+    expect(comms.markThreadUnread(db, t.id, later(3))).toBe('in')
+    const after = comms.getThread(db, t.id)!.unread_count
+    comms.recomputeThreadState(db, t.id, later(4))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(after)
+    expect(after).toBe(2)
+  })
+
+  it('triage candidates key on the newest inbound, not on your reply', () => {
+    const { t, say } = waDm()
+    const since = later(-60).toISOString()
+    say('in1', 0, 'where are you?')
+    let cands = comms.listWhatsappTriageCandidates(db, since, 10)
+    expect(cands.map((c) => c.id)).toEqual([t.id])
+    expect(cands[0].last_inbound_at).toBe(later(0).toISOString())
+    comms.setThreadNotifyEval(db, t.id, cands[0].last_inbound_at)
+
+    // your reply advances last_message_at past the watermark — still nothing to triage
+    say('me1', 5, 'on my way', true)
+    expect(comms.getThread(db, t.id)!.last_message_at).toBe(later(5).toISOString())
+    expect(comms.listWhatsappTriageCandidates(db, since, 10)).toHaveLength(0)
+
+    // a new inbound message is
+    say('in2', 10, 'hurry')
+    cands = comms.listWhatsappTriageCandidates(db, since, 10)
+    expect(cands.map((c) => c.id)).toEqual([t.id])
+    expect(cands[0].last_inbound_at).toBe(later(10).toISOString())
+    expect(cands[0].sender).toBe('Junior')
+  })
+})
+
 describe('countNewInbound', () => {
   it('counts fresh inbound unread but not backfilled old mail', () => {
     const a = gmailAccount()
@@ -923,6 +1131,10 @@ describe('unread_count for self-sent mail on ingest', () => {
       external_id: 'g1', sent_at: later(0).toISOString(), body_text: 'note to self'
     }, later(0))
     expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
+    // the row mirrors the label too, so the label-history recompute agrees
+    expect(comms.getMessageByExternal(db, a.id, 'g1')!.is_read).toBe(0)
+    comms.recomputeThreadState(db, t.id, later(1))
+    expect(comms.getThread(db, t.id)!.unread_count).toBe(1)
 
     const wa = comms.upsertAccount(db, {
       provider: 'whatsapp', external_id: 'me@s.whatsapp.net', display_name: 'me'
@@ -935,6 +1147,7 @@ describe('unread_count for self-sent mail on ingest', () => {
       external_id: 'w1', sent_at: later(0).toISOString(), body_text: 'own outbound'
     }, later(0))
     expect(comms.getThread(db, wt.id)!.unread_count).toBe(0)
+    expect(comms.getMessageByExternal(db, wa.id, 'w1')!.is_read).toBe(1)
   })
 })
 

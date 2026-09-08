@@ -1,4 +1,10 @@
-import { ulid } from 'ulid'
+import { monotonicFactory } from 'ulid'
+
+/** Monotonic within this process: two ids minted in the same millisecond
+ *  still sort in creation order, so `ORDER BY sent_at DESC, id DESC` is a
+ *  real tiebreaker for messages whose provider timestamps tie (WhatsApp's
+ *  are whole seconds). */
+const ulid = monotonicFactory()
 
 export function newId(): string {
   return ulid()

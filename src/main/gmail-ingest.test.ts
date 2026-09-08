@@ -58,6 +58,23 @@ describe('ingestGmailMessage draft guard', () => {
     expect(comms.listMessages(db, thread.id).map((m) => m.body_text)).toEqual(['Hola a todos,'])
   })
 
+  it('treats mail carrying SENT as yours even from a send-as alias', () => {
+    const alias = message({
+      id: 'msg-alias',
+      payload: {
+        headers: [{ name: 'From', value: 'Me <alias@otherdomain.com>' }, { name: 'Subject', value: 'x' }],
+        mimeType: 'text/plain',
+        body: { data: Buffer.from('from my alias').toString('base64url') }
+      }
+    })
+    expect(ingestGmailMessage(db, account, alias)).toBe(true)
+    expect(comms.getMessageByExternal(db, account.id, 'msg-alias')!.is_me).toBe(1)
+    // the same From without SENT is somebody else
+    const other = message({ id: 'msg-other', threadId: 'thr-2', labelIds: ['INBOX', 'UNREAD'], payload: alias.payload })
+    expect(ingestGmailMessage(db, account, other)).toBe(true)
+    expect(comms.getMessageByExternal(db, account.id, 'msg-other')!.is_me).toBe(0)
+  })
+
   it('skips a draft, and does not even create its thread', () => {
     expect(ingestGmailMessage(db, account, message({ labelIds: ['DRAFT'] }))).toBe(false)
     expect(comms.listMessages(db, 'thr-1')).toEqual([])

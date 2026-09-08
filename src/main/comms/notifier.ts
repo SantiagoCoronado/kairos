@@ -113,8 +113,15 @@ export class CommsNotifier {
           ? repo.latestUnreadMessage(this.db, t.id)
           : repo.latestInboundMessage(this.db, t.id)
       if (!subject || subject.sent_at < cutoff) continue // backlog or self-only, not news
+      // skip unless the subject is strictly newer as a (sent_at, id) pair:
+      // equal timestamps fall back to the id (monotonic), so two same-second
+      // gmail mails can't re-banner the older one after you read the newer
       const seen = this.notified.get(t.id)
-      if (seen && (seen.id === subject.id || subject.sent_at < seen.sent_at)) continue
+      if (
+        seen &&
+        (subject.sent_at < seen.sent_at || (subject.sent_at === seen.sent_at && subject.id <= seen.id))
+      )
+        continue
       // delete-then-set keeps Map iteration order = least-recently-touched,
       // so the cap evicts genuinely stale entries (true LRU)
       this.notified.delete(t.id)

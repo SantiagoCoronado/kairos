@@ -284,6 +284,34 @@ describe('triage writes', () => {
     expect(pendingItems(db, T0).items).toHaveLength(1)
   })
 
+  it('dismissItem and markAllSeen stamp the inbound fingerprint once your own reply has moved last_message_at', () => {
+    // the exact state after you answer from the phone: your reply is newest,
+    // someone else's message is what the fingerprint tracks
+    seedThread('a', { lastMessageAt: '2026-07-01T11:00:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items.map((i) => i.fingerprint)).toEqual(['2026-06-30T10:00:00Z'])
+
+    dismissItem(db, 'thread:a', T0)
+    expect(pendingItems(db, T0).items).toHaveLength(0) // the write matched the read
+    // another reply of yours keeps it dismissed; their next message brings it back
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T12:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items).toHaveLength(0)
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-07-01T13:00:00Z', last_message_at = '2026-07-01T13:00:00Z' WHERE id = 'a'`)
+    expect(pendingItems(db, T0).items.map((i) => i.key)).toEqual(['thread:a'])
+
+    // the seen stamp, on a second thread in the same diverged state
+    seedThread('b', { lastMessageAt: '2026-07-01T11:00:00Z' })
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-06-30T10:00:00Z' WHERE id = 'b'`)
+    expect(pendingItems(db, T0).unseen).toBe(2)
+    expect(markAllSeen(db, T0).sort()).toEqual(['thread:a', 'thread:b'])
+    expect(pendingItems(db, T0).unseen).toBe(0)
+    expect(markAllSeen(db, T0)).toEqual([]) // steady state: nothing left to stamp
+    db.run(`UPDATE comms_threads SET last_message_at = '2026-07-01T12:00:00Z' WHERE id = 'b'`) // your reply
+    expect(pendingItems(db, T0).unseen).toBe(0)
+    db.run(`UPDATE comms_threads SET last_inbound_at = '2026-07-01T13:00:00Z', last_message_at = '2026-07-01T13:00:00Z' WHERE id = 'b'`)
+    expect(pendingItems(db, T0).unseen).toBe(1)
+  })
+
   it('normalizes offset-form ISO snoozes to UTC so string compares stay sound', () => {
     // 9pm Denver: a valid offset-form timestamp one hour in the future would
     // sort BEFORE nowIso() if stored verbatim — a silent no-op snooze

@@ -182,7 +182,10 @@ const UNREAD_THREAD = `sync_enabled = 1 AND is_archived = 0 AND unread_count > 0
 /** The thread fingerprint: when someone ELSE last wrote. Your own reply from
  *  the phone advances last_message_at but is not news, so it must not
  *  resurface a dismissed thread or make a seen one unseen. Falls back to
- *  last_message_at for threads that never had inbound mail (mail to self). */
+ *  last_message_at for threads that never had inbound mail (mail to self).
+ *  Read (THREAD_VISIBLE, THREAD_SEEN, threadItems) and write
+ *  (currentFingerprint, markAllSeen) sides MUST use this one expression;
+ *  migration 026 rewrote stored rows when it changed. */
 const THREAD_FP = `COALESCE(t.last_inbound_at, t.last_message_at, '')`
 
 /** THE copy of the thread overlay-visibility predicate: hidden while snoozed,
@@ -452,9 +455,11 @@ export function unseenRunCount(db: DbDriver, now: Date = new Date()): number {
 /** Current fingerprint of a still-pending item; undefined once resolved. */
 function currentFingerprint(db: DbDriver, key: string, now: Date): string | undefined {
   if (key.startsWith('thread:')) {
+    // THE same expression the read side compares against — a stamp under any
+    // other value can never match, and the item becomes un-dismissable
     const row = db.get<{ fp: string }>(
-      `SELECT COALESCE(last_message_at, '') AS fp FROM comms_threads
-       WHERE id = ? AND ${UNREAD_THREAD}`,
+      `SELECT ${THREAD_FP} AS fp FROM comms_threads t
+       WHERE t.id = ? AND ${UNREAD_THREAD}`,
       key.slice('thread:'.length)
     )
     return row?.fp
@@ -552,7 +557,7 @@ export function markAllSeen(
   }
   if (!onlyKind || onlyKind === 'thread') {
     const threads = db.all<{ id: string; fp: string }>(
-      `SELECT id, COALESCE(last_message_at, '') AS fp FROM comms_threads t
+      `SELECT id, ${THREAD_FP} AS fp FROM comms_threads t
        WHERE ${UNREAD_THREAD} AND ${THREAD_VISIBLE} AND NOT ${THREAD_SEEN}`,
       ts
     )

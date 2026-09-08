@@ -671,11 +671,24 @@ DROP TABLE IF EXISTS objectives;
   // your own replies too, and everything that means "something new for you"
   // (notification freshness, the triage watermark, the pending-inbox
   // dismissal fingerprint) must not. Maintained by upsertMessage / mergeThreads.
+  // The pending-inbox fingerprint moves from last_message_at to this column,
+  // so stored overlay rows that currently MATCH their thread (live dismissals,
+  // snoozes, seen stamps) are rewritten to the new value and keep holding;
+  // rows that no longer match were already stale and stay that way.
   `
 ALTER TABLE comms_threads ADD COLUMN last_inbound_at TEXT;
 UPDATE comms_threads SET last_inbound_at = (
   SELECT MAX(m.sent_at) FROM comms_messages m WHERE m.thread_id = comms_threads.id AND m.is_me = 0
 );
+UPDATE pending_overlay SET fingerprint = (
+  SELECT COALESCE(t.last_inbound_at, t.last_message_at, '') FROM comms_threads t
+  WHERE 'thread:' || t.id = pending_overlay.item_key
+)
+WHERE item_key LIKE 'thread:%'
+  AND fingerprint = (
+    SELECT COALESCE(t.last_message_at, '') FROM comms_threads t
+    WHERE 'thread:' || t.id = pending_overlay.item_key
+  );
 `
 ]
 
